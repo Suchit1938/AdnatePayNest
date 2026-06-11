@@ -1,0 +1,152 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", "Inter", system-ui, -apple-system, sans-serif;
+  --color-bank-sidebar: #0057b8;
+  --color-bank-sidebar-hover: #004a9e;
+  --color-bank-surface: #f0f8ff;
+  --color-bank-card-border: #e0eef9;
+  --color-bank-accent: #00aeef;
+  --color-bank-accent-hover: #0095d1;
+  --color-bank-eyebrow: #0057b8;
+  --color-bank-ink: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-bank-surface);
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@layer components {
+  .page-title {
+    @apply text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl;
+  }
+
+  .page-subtitle {
+    @apply mt-2 max-w-3xl text-base leading-relaxed text-slate-600;
+  }
+
+  .eyebrow {
+    @apply text-xs font-bold uppercase tracking-[0.14em] text-bank-eyebrow;
+  }
+
+  .card {
+    @apply rounded-xl border border-bank-card-border bg-white shadow-sm;
+  }
+
+  .card-padded {
+    @apply rounded-xl border border-bank-card-border bg-white p-6 shadow-sm;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-bank-accent px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-bank-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bank-accent active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-bank-card-border bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-bank-accent/40 hover:bg-bank-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bank-accent;
+  }
+
+  .btn-danger-soft {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-red-100 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-100;
+  }
+
+  .input-field {
+    @apply mt-2 w-full rounded-lg border border-bank-card-border bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-bank-accent focus:ring-4 focus:ring-bank-accent/15 disabled:cursor-not-allowed disabled:bg-bank-surface disabled:text-slate-500;
+  }
+
+  .label-field {
+    @apply block text-sm font-semibold text-slate-600;
+  }
+
+  .tab-pill-active {
+    @apply rounded-lg px-5 py-2.5 text-sm font-semibold bg-bank-accent text-white shadow-sm transition hover:bg-bank-accent-hover;
+  }
+
+  .tab-pill-inactive {
+    @apply rounded-lg border border-bank-card-border bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-bank-surface;
+  }
+
+  .table-shell {
+    @apply overflow-hidden rounded-xl border border-bank-card-border bg-white shadow-sm;
+  }
+
+  .table-head {
+    @apply bg-bank-surface text-xs font-bold uppercase tracking-wider text-slate-500;
+  }
+
+  .table-row {
+    @apply border-t border-bank-card-border transition hover:bg-bank-surface/80;
+  }
+
+  .alert-success {
+    @apply rounded-lg border border-emerald-200/80 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800;
+  }
+
+  .alert-error {
+    @apply rounded-lg border border-red-200/80 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800;
+  }
+
+  .alert-info {
+    @apply rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3 text-sm font-semibold text-bank-eyebrow;
+  }
+
+  .badge-pill {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold;
+  }
+
+  .stat-chip {
+    @apply rounded-xl border border-bank-card-border bg-white px-5 py-4 shadow-sm;
+  }
+
+  .page-content {
+    @apply space-y-8;
+  }
+
+  .stat-grid {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .stat-grid-4 {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4;
+  }
+
+  .metric-tile {
+    @apply rounded-lg border p-5;
+  }
+
+  .metric-grid {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2;
+  }
+
+  .metric-grid-3 {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .empty-state {
+    @apply rounded-lg border border-dashed border-bank-card-border bg-bank-surface px-6 py-10 text-center text-sm font-medium text-slate-500;
+  }
+
+  .activity-item {
+    @apply flex items-start gap-3 rounded-lg border border-bank-card-border bg-bank-surface p-4 transition hover:border-bank-accent/30 hover:bg-white;
+  }
+
+  .section-split {
+    @apply grid grid-cols-1 gap-6 lg:grid-cols-3;
+  }
+
+  .section-split-main {
+    @apply lg:col-span-2;
+  }
+}

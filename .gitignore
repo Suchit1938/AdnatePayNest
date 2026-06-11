@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Build output
+dist/
+build/
+.next/
+out/
+client/dist/
+client/build/
+server/dist/
+server/build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+client/.env
+client/.env.local
+client/.env.*.local
+server/.env
+server/.env.local
+server/.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Cache
+.cache/
+.parcel-cache/
+.vite/
+vite.config.ts.timestamp-*
+vite.config.js.timestamp-*
+
+# Testing and coverage
+coverage/
+client/coverage/
+server/coverage/
+
+# TypeScript
+*.tsbuildinfo
