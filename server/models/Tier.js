@@ -39,27 +39,12 @@ const tierSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
-    payoffDays: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
     penaltyAmount: {
       type: Number,
       default: 0,
       min: 0,
     },
-    reviewCycle: {
-      type: String,
-      default: 'Monthly',
-      trim: true,
-    },
     lateFeeRate: {
-      type: String,
-      default: '',
-      trim: true,
-    },
-    settlementWindow: {
       type: String,
       default: '',
       trim: true,

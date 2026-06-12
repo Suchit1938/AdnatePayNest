@@ -1,21 +1,17 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle,
   BadgeIndianRupee,
-  CalendarClock,
-  CreditCard,
   Edit3,
   Plus,
   ShieldCheck,
   Trash2,
-  TrendingUp,
   X,
 } from "lucide-react";
 
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import TablePagination from "../../components/ui/TablePagination";
-import { useToast } from "../../components/ui/ToastContext";
+import { useToast } from "../../components/ui/useToast";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import api from "../../api/axios";
@@ -29,14 +25,14 @@ const defaultTierForm = {
   monthlyLimit: "",
   maxODLimit: "",
   minBalance: "",
-  payoffDays: "",
   penaltyAmount: "",
-  reviewCycle: "Monthly",
-  lateFeeRate: "",
-  settlementWindow: "",
+  interestRate: "",
   eligibility: "",
   reviewNotes: "",
 };
+
+const GRACE_PERIOD_DAYS = 3;
+const REVIEW_CYCLE = "Monthly";
 
 const slugifyTierName = (value) =>
   String(value || "")
@@ -49,10 +45,7 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
   const errors = {};
   const requiredTextFields = [
     "label",
-    "lateFeeRate",
-    "settlementWindow",
-    "eligibility",
-    "reviewNotes",
+    "interestRate",
   ];
   const numericFields = [
     "perTxnLimit",
@@ -60,7 +53,6 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
     "monthlyLimit",
     "maxODLimit",
     "minBalance",
-    "payoffDays",
     "penaltyAmount",
   ];
 
@@ -70,10 +62,6 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
     }
   });
 
-  if (!form.reviewCycle) {
-    errors.reviewCycle = "Choose a review cycle.";
-  }
-
   numericFields.forEach((field) => {
     const value = Number(form[field]);
 
@@ -81,10 +69,6 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
       errors[field] = "Enter a valid amount.";
     }
   });
-
-  if (Number(form.payoffDays) <= 0) {
-    errors.payoffDays = "Payoff days must be greater than 0.";
-  }
 
   if (
     form.perTxnLimit !== "" &&
@@ -151,12 +135,9 @@ function Classifications() {
       monthlyLimit: tier.monthlyLimit,
       maxODLimit: tier.maxODLimit,
       penaltyAmount: tier.penaltyAmount,
-      payoffDays: tier.payoffDays,
       minBalance: tier.minBalance,
-      lateFeeRate: tier.lateFeeRate,
-      reviewCycle: tier.reviewCycle,
+      interestRate: tier.interestRate || tier.lateFeeRate,
       eligibility: tier.eligibility,
-      settlementWindow: tier.settlementWindow,
       reviewNotes: tier.reviewNotes,
     });
   };
@@ -232,24 +213,23 @@ function Classifications() {
       return;
     }
 
-    await api.patch(`/tiers/${editingTier.key}`, editForm);
+    const { data: updateData } = await api.patch(`/tiers/${editingTier.key}`, editForm);
     const { data } = await api.get("/tiers");
     setClassificationRows(data.tiers);
-    toast.success(`${editingTier.label} tier updated.`);
-    setMessage(`${editingTier.label} tier updated. Assigned customer OD limits were refreshed.`);
+    const email = updateData.email;
+    const emailMessage =
+      email && email.totalRecipients > 0
+        ? ` Email sent to ${email.sent}/${email.totalRecipients} assigned customer(s).`
+        : "";
+    const toastMessage = `${editingTier.label} tier updated.${emailMessage}`;
+
+    toast[email?.failed ? "warning" : "success"](toastMessage);
+    setMessage(`${editingTier.label} tier updated. Assigned customer overdraft limits were refreshed.${emailMessage}`);
     closeEditModal();
   };
 
-  const formatAssignedCustomerMessage = (tier, assignedCustomers = []) => {
-    const customerNames = assignedCustomers
-      .map((customer) => customer.name || customer.email || customer.customerId)
-      .filter(Boolean)
-      .join(", ");
-
-    return customerNames
-      ? `Cannot delete ${tier.label}. Assigned customers: ${customerNames}.`
-      : `Cannot delete ${tier.label}. ${tier.customerCount} customer(s) are assigned to this classification.`;
-  };
+  const formatAssignedCustomerMessage = (tier) =>
+    `Cannot delete ${tier.label}. ${tier.customerCount} customer(s) are assigned to this classification. Reassign them to another tier before deleting.`;
 
   const deleteClassification = async (tier) => {
     if (tier.customerCount > 0) {
@@ -265,10 +245,7 @@ function Classifications() {
           responseData?.assignedCustomerCount || tier.customerCount;
         const errorMessage =
           assignedCustomerCount > 0
-            ? formatAssignedCustomerMessage(
-                { ...tier, customerCount: assignedCustomerCount },
-                responseData?.assignedCustomers
-              )
+            ? formatAssignedCustomerMessage({ ...tier, customerCount: assignedCustomerCount })
             : responseData?.message || `Could not delete ${tier.label} classification.`;
         toast.error(errorMessage);
         setMessage(errorMessage);
@@ -294,10 +271,7 @@ function Classifications() {
         responseData?.assignedCustomerCount || tier.customerCount;
       const errorMessage =
         assignedCustomerCount > 0
-          ? formatAssignedCustomerMessage(
-              { ...tier, customerCount: assignedCustomerCount },
-              responseData?.assignedCustomers
-            )
+          ? formatAssignedCustomerMessage({ ...tier, customerCount: assignedCustomerCount })
           :
           responseData?.message ||
           `Could not delete ${tier.label} classification.`;
@@ -312,7 +286,7 @@ function Classifications() {
         <PageHeader
           eyebrow="Admin / Tier Policies"
           title="Tier Policy Management"
-          subtitle="Maintain customer tier rules, overdraft limits, payoff windows, and assigned exposure."
+          subtitle="Maintain customer tier rules, overdraft limits, interest rates, penalties, and assigned exposure."
         >
           <button
             type="button"
@@ -372,19 +346,19 @@ function Classifications() {
                   <p className="mt-1">{formatCurrency(tier.penaltyAmount)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Payoff</p>
-                  <p className="mt-1">{tier.payoffDays} days</p>
+                  <p className="font-semibold">Daily Limit</p>
+                  <p className="mt-1">{formatCurrency(tier.dailyLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Review</p>
-                  <p className="mt-1">{tier.reviewCycle}</p>
+                  <p className="font-semibold">Minimum Balance</p>
+                  <p className="mt-1">{formatCurrency(tier.minBalance)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
                   <p className="font-semibold">Customers</p>
                   <p className="mt-1">{tier.customerCount}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">OD Blocked</p>
+                  <p className="font-semibold">Overdraft Blocked</p>
                   <p className="mt-1">{tier.odBlockedAccounts}</p>
                 </div>
               </div>
@@ -402,18 +376,20 @@ function Classifications() {
               </p>
             </div>
           </div>
+          <div className="border-b border-slate-100 bg-blue-50 px-6 py-4 text-sm font-semibold text-blue-800">
+            Global overdraft policy: minimum 1-day interest, clear before month-end,{" "}
+            {GRACE_PERIOD_DAYS}-day grace window, {REVIEW_CYCLE.toLowerCase()} review.
+          </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-left">
+            <table className="w-full min-w-[760px] text-left">
               <thead className="table-head">
                 <tr>
                   <th className="px-6 py-4">Tier</th>
                   <th className="px-6 py-4">Transaction Limit</th>
                   <th className="px-6 py-4">Overdraft</th>
-                  <th className="px-6 py-4">Penalty</th>
-                  <th className="px-6 py-4">Payoff</th>
+                  <th className="px-6 py-4">Interest & Penalty</th>
                   <th className="px-6 py-4">Minimum Balance</th>
-                  <th className="px-6 py-4">Review</th>
                   <th className="px-6 py-4">Action</th>
                 </tr>
               </thead>
@@ -436,34 +412,32 @@ function Classifications() {
                       <p className="font-semibold">
                         {formatCurrency(tier.penaltyAmount)}
                       </p>
-                      <p className="text-sm text-slate-500">{tier.lateFeeRate}</p>
+                      <p className="text-sm text-slate-500">
+                        Interest: {tier.interestRate || tier.lateFeeRate}
+                      </p>
                     </td>
-                    <td className="px-6 py-4">{tier.payoffDays} days</td>
                     <td className="px-6 py-4">
                       {formatCurrency(tier.minBalance)}
                     </td>
                     <td className="px-6 py-4">
-                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
-                        {tier.reviewCycle}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex gap-2">
                         <button
                           type="button"
                           onClick={() => openEditModal(tier)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                          aria-label={`Edit ${tier.label} tier`}
+                          title={`Edit ${tier.label} tier`}
                         >
                           <Edit3 size={15} />
-                          Edit
                         </button>
                         <button
                           type="button"
                           onClick={() => deleteClassification(tier)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-red-100 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-100 text-red-600 hover:bg-red-50"
+                          aria-label={`Delete ${tier.label} tier`}
+                          title={`Delete ${tier.label} tier`}
                         >
                           <Trash2 size={15} />
-                          Delete
                         </button>
                       </div>
                     </td>
@@ -473,36 +447,6 @@ function Classifications() {
             </table>
             <TablePagination {...classificationPagination} />
           </div>
-        </section>
-
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          {classificationRows.map((tier) => (
-            <div
-              key={`${tier.key}-rules`}
-              className="card-padded"
-            >
-              <div className="flex items-center gap-3">
-                {tier.key === "gold" ? (
-                  <TrendingUp className="text-blue-600" size={22} />
-                ) : tier.key === "platinum" ? (
-                  <CreditCard className="text-blue-600" size={22} />
-                ) : (
-                  <CalendarClock className="text-blue-600" size={22} />
-                )}
-                <h3 className="text-lg font-bold">{tier.label} Rules</h3>
-              </div>
-              <p className="mt-3 text-sm text-slate-500">{tier.reviewNotes}</p>
-              <div className="mt-4 rounded-lg bg-slate-50 p-4">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle size={18} className="mt-0.5 text-amber-600" />
-                  <p className="text-sm text-slate-600">
-                    Settlement window: {tier.settlementWindow}. Penalty applies
-                    when overdraft is not cleared inside the payoff period.
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
         </section>
       </PageContent>
 
@@ -633,23 +577,6 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Payoff Days
-                </span>
-                <input
-                  required
-                  min="1"
-                  type="number"
-                  value={createForm.payoffDays}
-                  onChange={(event) =>
-                    updateCreateForm("payoffDays", event.target.value)
-                  }
-                  className="input-field"
-                />
-                <FieldError message={createErrors.payoffDays} />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
                   Minimum Balance
                 </span>
                 <input
@@ -665,63 +592,32 @@ function Classifications() {
                 <FieldError message={createErrors.minBalance} />
               </label>
 
-              <label className="block">
+              <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Late Fee Rate
+                  Interest Rate
                 </span>
                 <input
                   required
-                  value={createForm.lateFeeRate}
+                  value={createForm.interestRate}
                   onChange={(event) =>
-                    updateCreateForm("lateFeeRate", event.target.value)
+                    updateCreateForm("interestRate", event.target.value)
                   }
                   className="input-field"
-                  placeholder="2.0% monthly"
+                  placeholder="1.5% monthly"
                 />
-                <FieldError message={createErrors.lateFeeRate} />
+                <FieldError message={createErrors.interestRate} />
               </label>
 
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
-                  Review Cycle
-                </span>
-                <select
-                  value={createForm.reviewCycle}
-                  onChange={(event) =>
-                    updateCreateForm("reviewCycle", event.target.value)
-                  }
-                  className="input-field"
-                >
-                  <option>Monthly</option>
-                  <option>Quarterly</option>
-                  <option>Half-Yearly</option>
-                  <option>Yearly</option>
-                </select>
-                <FieldError message={createErrors.reviewCycle} />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
-                  Settlement Window
-                </span>
-                <input
-                  required
-                  value={createForm.settlementWindow}
-                  onChange={(event) =>
-                    updateCreateForm("settlementWindow", event.target.value)
-                  }
-                  className="input-field"
-                  placeholder="T+1 working day"
-                />
-                <FieldError message={createErrors.settlementWindow} />
-              </label>
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm font-semibold text-blue-800 md:col-span-2">
+                Fixed overdraft policy: minimum 1-day interest, clear before month-end,{" "}
+                {GRACE_PERIOD_DAYS}-day grace window, {REVIEW_CYCLE.toLowerCase()} review.
+              </div>
 
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
                   Eligibility
                 </span>
                 <textarea
-                  required
                   rows={3}
                   value={createForm.eligibility}
                   onChange={(event) =>
@@ -737,7 +633,6 @@ function Classifications() {
                   Review Notes
                 </span>
                 <textarea
-                  required
                   rows={3}
                   value={createForm.reviewNotes}
                   onChange={(event) =>
@@ -889,23 +784,6 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Payoff Days
-                </span>
-                <input
-                  required
-                  min="0"
-                  type="number"
-                  value={editForm.payoffDays}
-                  onChange={(event) =>
-                    updateEditForm("payoffDays", event.target.value)
-                  }
-                  className="input-field"
-                />
-                <FieldError message={editErrors.payoffDays} />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
                   Minimum Balance
                 </span>
                 <input
@@ -921,63 +799,32 @@ function Classifications() {
                 <FieldError message={editErrors.minBalance} />
               </label>
 
-              <label className="block">
+              <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Late Fee Rate
+                  Interest Rate
                 </span>
                 <input
                   required
-                  value={editForm.lateFeeRate}
+                  value={editForm.interestRate}
                   onChange={(event) =>
-                    updateEditForm("lateFeeRate", event.target.value)
+                    updateEditForm("interestRate", event.target.value)
                   }
                   className="input-field"
-                  placeholder="2.0% monthly"
+                  placeholder="1.5% monthly"
                 />
-                <FieldError message={editErrors.lateFeeRate} />
+                <FieldError message={editErrors.interestRate} />
               </label>
 
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
-                  Review Cycle
-                </span>
-                <select
-                  value={editForm.reviewCycle}
-                  onChange={(event) =>
-                    updateEditForm("reviewCycle", event.target.value)
-                  }
-                  className="input-field"
-                >
-                  <option>Monthly</option>
-                  <option>Quarterly</option>
-                  <option>Half-Yearly</option>
-                  <option>Yearly</option>
-                </select>
-                <FieldError message={editErrors.reviewCycle} />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
-                  Settlement Window
-                </span>
-                <input
-                  required
-                  value={editForm.settlementWindow}
-                  onChange={(event) =>
-                    updateEditForm("settlementWindow", event.target.value)
-                  }
-                  className="input-field"
-                  placeholder="T+1 working day"
-                />
-                <FieldError message={editErrors.settlementWindow} />
-              </label>
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm font-semibold text-blue-800 md:col-span-2">
+                Fixed overdraft policy: minimum 1-day interest, clear before month-end,{" "}
+                {GRACE_PERIOD_DAYS}-day grace window, {REVIEW_CYCLE.toLowerCase()} review.
+              </div>
 
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
                   Eligibility
                 </span>
                 <textarea
-                  required
                   rows={3}
                   value={editForm.eligibility}
                   onChange={(event) =>
@@ -993,7 +840,6 @@ function Classifications() {
                   Review Notes
                 </span>
                 <textarea
-                  required
                   rows={3}
                   value={editForm.reviewNotes}
                   onChange={(event) =>

@@ -13,11 +13,8 @@ const tiers = [
     monthlyLimit: 500000,
     maxODLimit: 50000,
     minBalance: 10000,
-    payoffDays: 15,
     penaltyAmount: 1000,
-    reviewCycle: 'Monthly',
-    lateFeeRate: '3.0% monthly',
-    settlementWindow: 'T+3 working days',
+    lateFeeRate: '1.5% monthly',
     eligibility: 'Default tier for newly onboarded or low-risk customers',
     reviewNotes: 'Entry tier with conservative overdraft and transaction exposure.',
   },
@@ -29,11 +26,8 @@ const tiers = [
     monthlyLimit: 1500000,
     maxODLimit: 150000,
     minBalance: 100000,
-    payoffDays: 45,
     penaltyAmount: 2500,
-    reviewCycle: 'Quarterly',
-    lateFeeRate: '2.0% monthly',
-    settlementWindow: 'T+1 working day',
+    lateFeeRate: '1.5% monthly',
     eligibility: 'High-value customers with strong repayment history',
     reviewNotes: 'Priority review for overdraft renewal and higher transaction caps.',
   },
@@ -45,11 +39,8 @@ const tiers = [
     monthlyLimit: 1000000,
     maxODLimit: 100000,
     minBalance: 50000,
-    payoffDays: 30,
     penaltyAmount: 2000,
-    reviewCycle: 'Quarterly',
-    lateFeeRate: '2.5% monthly',
-    settlementWindow: 'T+2 working days',
+    lateFeeRate: '1.5% monthly',
     eligibility: 'Established customers with regular account activity',
     reviewNotes: 'Balanced tier for active salary and current account holders.',
   },
@@ -69,7 +60,14 @@ const seedTiers = async () => {
   for (const tier of tiers) {
     await Tier.updateOne(
       { name: tier.name },
-      { $setOnInsert: tier },
+      {
+        $setOnInsert: tier,
+        $unset: {
+          payoffDays: '',
+          reviewCycle: '',
+          settlementWindow: '',
+        },
+      },
       { upsert: true }
     );
   }

@@ -23,10 +23,9 @@ import { getCustomerAccounts } from "../../utils/overdraft";
 import { getTransactionStatusLabel } from "../../utils/ui";
 
 const Accounts = () => {
-  const { user, setSessionUser } = useAuth();
-  const [accountUser, setAccountUser] = useState(null);
+  const { user } = useAuth();
   const [transactions, setTransactions] = useState([]);
-  const activeUser = accountUser || user;
+  const activeUser = user;
   const sourceAccounts = getCustomerAccounts(activeUser);
 
   const customerAccounts = sourceAccounts.map((sourceAccount) => ({
@@ -55,24 +54,11 @@ const Accounts = () => {
   );
 
   useEffect(() => {
-    Promise.allSettled([
-      api.get("/auth/me"),
-      api.get("/transfers/transactions"),
-    ]).then(([profileResult, transactionsResult]) => {
-      if (profileResult.status === "fulfilled") {
-        const nextUser = profileResult.value.data.user;
-
-        setAccountUser(nextUser);
-        setSessionUser(nextUser);
-      }
-
-      setTransactions(
-        transactionsResult.status === "fulfilled"
-          ? transactionsResult.value.data.transactions || []
-          : []
-      );
-    });
-  }, [setSessionUser]);
+    api
+      .get("/transfers/transactions")
+      .then(({ data }) => setTransactions(data.transactions || []))
+      .catch(() => setTransactions([]));
+  }, []);
 
   const accountNumbers = customerAccounts.map((item) => item.number).filter(Boolean);
   const visibleAccountNumber = account?.number;

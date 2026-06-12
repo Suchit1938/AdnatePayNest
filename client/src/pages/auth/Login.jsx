@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Lock, LogIn, Mail } from "lucide-react";
 
-import { useToast } from "../../components/ui/ToastContext";
+import { useToast } from "../../components/ui/useToast";
 import { useAuth } from "../../context/useAuth";
 
 function Login() {

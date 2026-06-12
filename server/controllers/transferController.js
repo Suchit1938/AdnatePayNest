@@ -6,6 +6,7 @@ const Tier = require('../models/Tier');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts } = require('../utils/customerAccounts');
+const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const serializeTransaction = (transaction) => ({
@@ -21,6 +22,27 @@ const serializeTransaction = (transaction) => ({
   remarks: transaction.remarks,
   createdAt: transaction.createdAt,
 });
+
+const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
+const maskAccount = (value) => {
+  const account = String(value || '');
+  if (account.length <= 4) return account;
+  return `XXXX${account.slice(-4)}`;
+};
+
+const sendTransferEmail = async ({ to, subject, lines }) => {
+  if (!to) return null;
+
+  const text = [...lines, '', 'Regards,', 'Adnate PayNest'].join('\n');
+  const htmlLines = lines.map((line) => `<p>${line}</p>`).join('');
+
+  return sendEmail({
+    to,
+    subject,
+    text,
+    html: `${htmlLines}<p>Regards,<br />Adnate PayNest</p>`,
+  });
+};
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 const normalizeAccountNumber = (value) => String(value || '').trim();
@@ -97,6 +119,7 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
     transferLimit: bankAccount.transferLimit || 0,
     overdraftLimit: firstDefined(bankAccount.odLimit, user.account?.overdraftLimit, 0),
     overdraftUsed: firstDefined(bankAccount.odUsed, 0),
+    odStartedAt: bankAccount.odStartedAt || null,
     odCountThisMonth: bankAccount.odCountThisMonth || 0,
     odBlocked: bankAccount.odBlocked || false,
   };
@@ -153,6 +176,10 @@ const createTransfer = async (req, res) => {
 
     if (!sender || !receiver || receiver.role !== 'customer') {
       throw new Error('Beneficiary not found');
+    }
+
+    if (receiver.status !== 'active') {
+      throw new Error('Beneficiary is inactive and cannot receive new transfers');
     }
 
     await Promise.all([
@@ -323,6 +350,28 @@ const createTransfer = async (req, res) => {
       await syncCustomerAccounts(sender, { session });
       await session.commitTransaction();
 
+      await Promise.all([
+        sendTransferEmail({
+          to: assignedManager.email,
+          subject: `Approval required for ${formatMoney(transferAmount)} transfer`,
+          lines: [
+            `Hello ${assignedManager.name},`,
+            `${sender.name}'s transfer of ${formatMoney(transferAmount)} requires approval.`,
+            `Approval ID: ${approval[0].requestId}`,
+            `Reason: ${approvalReasons.join(' and ')}`,
+          ],
+        }),
+        sendTransferEmail({
+          to: sender.email,
+          subject: 'Transfer pending approval',
+          lines: [
+            `Hello ${sender.name},`,
+            `Your transfer of ${formatMoney(transferAmount)} to ${receiver.name} is pending manager approval.`,
+            `Approval ID: ${approval[0].requestId}`,
+          ],
+        }),
+      ]);
+
       return res.status(202).json({
         message: 'Transfer is pending manager approval',
         approval: {
@@ -365,6 +414,10 @@ const createTransfer = async (req, res) => {
     });
 
     if (overdraftNeeded > 0) {
+      const odStartedAt = senderBankAccount.odStartedAt || new Date();
+      senderBankAccounts.forEach((account) => {
+        account.odStartedAt = account.odStartedAt || odStartedAt;
+      });
       senderBankAccount.odCountThisMonth = toWholeRupees(senderBankAccount.odCountThisMonth) + 1;
       senderBankAccount.odCountMonthKey = getCurrentMonthKey();
       senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= 3;
@@ -452,6 +505,41 @@ const createTransfer = async (req, res) => {
     await syncCustomerAccounts(sender, { session });
 
     await session.commitTransaction();
+
+    await Promise.all([
+      sendTransferEmail({
+        to: sender.email,
+        subject: 'Transfer completed',
+        lines: [
+          `Hello ${sender.name},`,
+          `Your transfer of ${formatMoney(transferAmount)} to ${receiver.name} was completed successfully.`,
+          `Transaction ID: ${transaction[0].transactionId}`,
+          `From account: ${maskAccount(senderBankAccount.accountNumber)}`,
+          `To account: ${maskAccount(receiverBankAccount.accountNumber)}`,
+        ],
+      }),
+      sendTransferEmail({
+        to: receiver.email,
+        subject: 'Amount credited to your account',
+        lines: [
+          `Hello ${receiver.name},`,
+          `${formatMoney(transferAmount)} was credited to your account from ${sender.name}.`,
+          `Transaction ID: ${transaction[0].transactionId}`,
+          `Credited account: ${maskAccount(receiverBankAccount.accountNumber)}`,
+        ],
+      }),
+      overdraftNeeded > 0 && senderBankAccount.odCountThisMonth >= 3
+        ? sendTransferEmail({
+          to: sender.email,
+          subject: 'Overdraft usage limit reached',
+          lines: [
+            `Hello ${sender.name},`,
+            `Your monthly overdraft usage count has reached ${senderBankAccount.odCountThisMonth}.`,
+            'Overdraft usage is now blocked until next month.',
+          ],
+        })
+        : null,
+    ].filter(Boolean));
 
     res.status(201).json({
       message: 'Transfer completed',
@@ -578,6 +666,18 @@ const createOwnAccountTransfer = async (req, res) => {
     await syncCustomerAccounts(customer, { session });
 
     await session.commitTransaction();
+
+    await sendTransferEmail({
+      to: customer.email,
+      subject: 'Own account transfer completed',
+      lines: [
+        `Hello ${customer.name},`,
+        `Your own account transfer of ${formatMoney(transferAmount)} was completed successfully.`,
+        `Transaction ID: ${transaction[0].transactionId}`,
+        `From account: ${maskAccount(senderBankAccount.accountNumber)}`,
+        `To account: ${maskAccount(receiverBankAccount.accountNumber)}`,
+      ],
+    });
 
     res.status(201).json({
       message: 'Own account transfer completed',

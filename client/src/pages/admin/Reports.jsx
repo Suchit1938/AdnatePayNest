@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowLeftRight,
+  BadgeIndianRupee,
   Clock3,
   CreditCard,
   Download,
@@ -16,6 +17,7 @@ import ChartTooltip from "../../components/ui/ChartTooltip";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import TablePagination from "../../components/ui/TablePagination";
+import { useToast } from "../../components/ui/useToast";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { formatCurrency } from "../../utils/format";
@@ -35,11 +37,36 @@ const formatCompactCurrency = (value) =>
 const percentOf = (value, total) =>
   total > 0 ? Math.round((toNumber(value) / total) * 100) : 0;
 
-const formatHours = (hours) => {
-  if (!Number.isFinite(hours) || hours <= 0) return "0h";
-  if (hours < 1) return `${Math.round(hours * 60)}m`;
-  return `${hours.toFixed(1)}h`;
+const exportSequenceFallback = new Map();
+
+const getNextExportSequence = (exportName, fileType) => {
+  const key = `adnate-report-export:${exportName}:${fileType}`;
+
+  try {
+    const currentValue = Number(window.localStorage.getItem(key) || 0);
+    const nextValue = currentValue + 1;
+
+    window.localStorage.setItem(key, String(nextValue));
+    return String(nextValue).padStart(3, "0");
+  } catch {
+    const nextValue = (exportSequenceFallback.get(key) || 0) + 1;
+
+    exportSequenceFallback.set(key, nextValue);
+    return String(nextValue).padStart(3, "0");
+  }
 };
+
+const formatReportDate = (value) => {
+  if (!value) return "Not available";
+
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(value));
+};
+
+const formatStatus = (value) => getTransactionStatusLabel(value || "unknown");
 
 const buildCsv = (rows) => {
   if (!rows.length) return "";
@@ -51,9 +78,9 @@ const buildCsv = (rows) => {
   };
 
   return [
-    headers.join(","),
+    headers.map((header) => escapeCell(header)).join(","),
     ...rows.map((row) => headers.map((header) => escapeCell(row[header])).join(",")),
-  ].join("\n");
+  ].join("\r\n");
 };
 
 const downloadFile = (filename, content, type) => {
@@ -69,7 +96,7 @@ const downloadFile = (filename, content, type) => {
 
 const downloadCsv = (filename, rows) => {
   const csv = buildCsv(rows);
-  downloadFile(filename, csv, "text/csv;charset=utf-8;");
+  downloadFile(filename, `\uFEFF${csv}`, "text/csv;charset=utf-8;");
 };
 
 const ChartEmptyState = ({ message }) => (
@@ -78,48 +105,73 @@ const ChartEmptyState = ({ message }) => (
   </div>
 );
 
-const SectionHeader = ({ icon: Icon, title, subtitle, exportLabel, exportName, exportRows, className = "mb-5" }) => (
-  <div className={`${className} flex flex-wrap items-start justify-between gap-4`}>
-    <div className="flex min-w-0 items-start gap-3">
-      <div className="shrink-0 rounded-lg bg-blue-50 p-2.5 text-blue-700">
-        <Icon size={20} />
+const SectionHeader = ({ icon: Icon, title, subtitle, exportLabel, exportName, exportRows, className = "mb-5" }) => {
+  const toast = useToast();
+
+  const handleCsvDownload = () => {
+    try {
+      const sequence = getNextExportSequence(exportName, "csv");
+
+      downloadCsv(`${exportName}-${sequence}.csv`, exportRows);
+      toast.success(`${exportLabel || title} CSV downloaded.`);
+    } catch {
+      toast.error("Unable to download CSV. Please try again.");
+    }
+  };
+
+  const handlePdfDownload = () => {
+    try {
+      const sequence = getNextExportSequence(exportName, "pdf");
+
+      downloadPdf(
+        `${exportName}-${sequence}.pdf`,
+        exportLabel || title,
+        exportRows,
+        { subtitle: `Generated on ${formatReportDate(new Date())}` }
+      );
+      toast.success(`${exportLabel || title} PDF downloaded.`);
+    } catch {
+      toast.error("Unable to download PDF. Please try again.");
+    }
+  };
+
+  return (
+    <div className={`${className} flex flex-wrap items-start justify-between gap-4`}>
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="shrink-0 rounded-lg bg-blue-50 p-2.5 text-blue-700">
+          <Icon size={20} />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">{subtitle}</p>
+        </div>
       </div>
-      <div className="min-w-0">
-        <h2 className="text-lg font-bold text-slate-950">{title}</h2>
-        <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">{subtitle}</p>
-      </div>
+      {exportRows && (
+        <div className="flex shrink-0 overflow-hidden rounded-xl border border-bank-card-border bg-white shadow-sm">
+          <button
+            type="button"
+            onClick={handleCsvDownload}
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-bank-surface"
+          >
+            <Download size={16} />
+            CSV
+          </button>
+          <button
+            type="button"
+            onClick={handlePdfDownload}
+            className="inline-flex items-center gap-2 border-l border-bank-card-border px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-bank-surface"
+          >
+            <Download size={16} />
+            PDF
+          </button>
+          <span className="hidden border-l border-bank-card-border px-3 py-2 text-sm font-semibold text-slate-500 sm:inline">
+            {exportLabel || "Export"}
+          </span>
+        </div>
+      )}
     </div>
-    {exportRows && (
-      <div className="flex shrink-0 overflow-hidden rounded-xl border border-bank-card-border bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => downloadCsv(`${exportName}.csv`, exportRows)}
-          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-bank-surface"
-        >
-          <Download size={16} />
-          CSV
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            downloadPdf(
-              `${exportName}.pdf`,
-              exportName.replaceAll("-", " "),
-              exportRows,
-              { subtitle: exportLabel || "Export" }
-            )
-          }
-          className="border-l border-bank-card-border px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-bank-surface"
-        >
-          PDF
-        </button>
-        <span className="hidden border-l border-bank-card-border px-3 py-2 text-sm font-semibold text-slate-500 sm:inline">
-          {exportLabel || "Export"}
-        </span>
-      </div>
-    )}
-  </div>
-);
+  );
+};
 
 const EmptyTableRow = ({ colSpan, message }) => (
   <tr>
@@ -309,6 +361,8 @@ const DonutChart = ({ rows }) => {
 const getCustomerAccounts = (customer) =>
   customer.accounts?.length ? customer.accounts : [customer.account].filter(Boolean);
 
+const normalizeIdentifier = (value) => String(value || "").trim().toLowerCase();
+
 const AdminReports = () => {
   const [users, setUsers] = useState({ customers: [] });
   const [tiers, setTiers] = useState([]);
@@ -370,9 +424,51 @@ const AdminReports = () => {
       { label: "Own Account", value: ownTransfers.length, color: "#14b8a6" },
     ];
 
+    const transactionUsageByCustomer = transactions.reduce((map, transaction) => {
+      const amount = toNumber(transaction.amount);
+      const accountKeys = [
+        transaction.fromAccountNumber,
+        transaction.senderAccount,
+        transaction.accountNumber,
+      ]
+        .map(normalizeIdentifier)
+        .filter(Boolean);
+      const nameKey = normalizeIdentifier(transaction.sender);
+
+      users.customers.forEach((customer) => {
+        const accounts = getCustomerAccounts(customer);
+        const customerKeys = [
+          customer.customerId,
+          customer.name,
+          customer.email,
+          customer.account?.accountNumber,
+          ...accounts.map((account) => account.accountNumber),
+        ]
+          .map(normalizeIdentifier)
+          .filter(Boolean);
+        const isCustomerTransaction =
+          customerKeys.some((key) => accountKeys.includes(key)) ||
+          (nameKey && customerKeys.includes(nameKey));
+
+        if (!isCustomerTransaction) return;
+
+        const current = map.get(customer.customerId) || { count: 0, amount: 0 };
+        map.set(customer.customerId, {
+          count: current.count + 1,
+          amount: current.amount + amount,
+        });
+      });
+
+      return map;
+    }, new Map());
+
     const customerRows = users.customers.map((customer) => {
       const accounts = getCustomerAccounts(customer);
       const balance = accounts.reduce((sum, account) => sum + toNumber(account.balance), 0);
+      const transactionUsage = transactionUsageByCustomer.get(customer.customerId) || {
+        count: 0,
+        amount: 0,
+      };
       const overdraftUsed = Math.max(
         toNumber(customer.account?.overdraftUsed),
         ...accounts.map((account) => toNumber(account.overdraftUsed))
@@ -381,28 +477,64 @@ const AdminReports = () => {
         toNumber(customer.account?.overdraftLimit),
         ...accounts.map((account) => toNumber(account.overdraftLimit))
       );
+      const odUsesThisMonth = Math.max(
+        toNumber(customer.account?.odCountThisMonth),
+        ...accounts.map((account) => toNumber(account.odCountThisMonth))
+      );
+      const odBlockedThisMonth =
+        customer.account?.odBlocked || accounts.some((account) => account.odBlocked);
+      const hasOutstandingExposure =
+        balance > 0 || overdraftUsed > 0 || odBlockedThisMonth || odUsesThisMonth > 0;
+      const isActiveCustomer = customer.status === "active";
 
       return {
         ...customer,
+        isActiveCustomer,
+        hasOutstandingExposure,
         accountCount: accounts.length,
         balance,
         overdraftUsed,
         overdraftLimit,
+        odUsesThisMonth,
+        odBlockedThisMonth,
+        hasReachedMonthlyOdLimit: odUsesThisMonth >= 3 || odBlockedThisMonth,
+        transactionCount: transactionUsage.count,
+        transactionAmount: transactionUsage.amount,
         odUsage: percentOf(overdraftUsed, overdraftLimit),
       };
     });
+    const operationalCustomerRows = customerRows.filter(
+      (customer) => customer.isActiveCustomer || customer.hasOutstandingExposure
+    );
+    const activeCustomerRows = customerRows.filter((customer) => customer.isActiveCustomer);
     const nearOdLimitRows = customerRows
-      .filter((customer) => customer.overdraftLimit > 0)
-      .sort((a, b) => b.odUsage - a.odUsage);
+      .filter(
+        (customer) =>
+          customer.overdraftLimit > 0 &&
+          (customer.isActiveCustomer || customer.hasOutstandingExposure) &&
+          (customer.hasReachedMonthlyOdLimit || customer.odUsesThisMonth >= 2 || customer.odUsage >= 70)
+      )
+      .sort(
+        (a, b) =>
+          Number(b.hasReachedMonthlyOdLimit) - Number(a.hasReachedMonthlyOdLimit) ||
+          b.odUsesThisMonth - a.odUsesThisMonth ||
+          b.overdraftUsed - a.overdraftUsed ||
+          b.odUsage - a.odUsage ||
+          b.transactionAmount - a.transactionAmount ||
+          b.transactionCount - a.transactionCount
+      );
     const odAttemptsUsed = customerRows.filter(
       (customer) =>
+        (customer.isActiveCustomer || customer.hasOutstandingExposure) &&
         getCustomerAccounts(customer).some((account) => toNumber(account.odCountThisMonth) >= 3)
     ).length;
     const odBlocked = customerRows.filter(
-      (customer) => getCustomerAccounts(customer).some((account) => account.odBlocked)
+      (customer) =>
+        (customer.isActiveCustomer || customer.hasOutstandingExposure) &&
+        getCustomerAccounts(customer).some((account) => account.odBlocked)
     ).length;
-    const odByTierRows = tiers.map((tier, index) => {
-      const tierCustomers = customerRows.filter(
+    const odByTierRows = tiers.map((tier) => {
+      const tierCustomers = operationalCustomerRows.filter(
         (customer) => customer.classification === tier.key
       );
       const used = tierCustomers.reduce((sum, customer) => sum + customer.overdraftUsed, 0);
@@ -416,23 +548,14 @@ const AdminReports = () => {
       };
     });
 
-    const resolvedApprovals = approvals.filter((approval) =>
-      ["approved", "rejected"].includes(approval.status)
-    );
-    const avgResolutionHours =
-      resolvedApprovals.reduce((sum, approval) => {
-        const start = new Date(approval.requestedOn || approval.createdAt).getTime();
-        const end = new Date(approval.reviewedAt || approval.updatedAt || approval.requestedOn).getTime();
-        return sum + Math.max(0, (end - start) / 36e5);
-      }, 0) / Math.max(resolvedApprovals.length, 1);
     const approvalStatusRows = [
       { label: "Pending", value: approvals.filter((item) => item.status === "pending").length, color: "#f59e0b" },
       { label: "Approved", value: approvals.filter((item) => item.status === "approved").length, color: "#10b981" },
       { label: "Rejected", value: approvals.filter((item) => item.status === "rejected").length, color: "#ef4444" },
     ];
-    const tierDistributionRows = tiers.map((tier, index) => ({
+    const tierDistributionRows = tiers.map((tier) => ({
       label: tier.label,
-      value: customerRows.filter((customer) => customer.classification === tier.key).length,
+      value: activeCustomerRows.filter((customer) => customer.classification === tier.key).length,
       color: getTierTone(tier.key).dot,
     }));
     return {
@@ -445,43 +568,73 @@ const AdminReports = () => {
       odAttemptsUsed,
       odBlocked,
       odByTierRows,
-      avgResolutionHours,
       approvalStatusRows,
       tierDistributionRows,
     };
   }, [approvals, tiers, transactions, users]);
 
-  const highValueCsvRows = reportData.highValueTransfers.map((transaction) => ({
-    id: transaction.id,
-    sender: transaction.sender,
-    receiver: transaction.receiver,
-    fromAccount: transaction.fromAccountNumber,
-    toAccount: transaction.toAccountNumber,
-    amount: transaction.amount,
-    status: transaction.status,
-    date: transaction.date,
+  const transferRegisterRows = reportData.highValueTransfers.map((transaction) => ({
+    "Transfer ID": transaction.id || "Not available",
+    "Sender": transaction.sender || "Not available",
+    "Receiver": transaction.receiver || "Not available",
+    "From Account": transaction.fromAccountNumber || "Not available",
+    "To Account": transaction.toAccountNumber || "Not available",
+    "Amount": formatCurrency(transaction.amount || 0),
+    "Status": formatStatus(transaction.status),
+    "Transfer Date": formatReportDate(transaction.date || transaction.createdAt),
   }));
   const odCsvRows = reportData.nearOdLimitRows.map((customer) => ({
-    customerId: customer.customerId,
-    name: customer.name,
-    tier: customer.classification,
-    overdraftUsed: customer.overdraftUsed,
-    overdraftLimit: customer.overdraftLimit,
-    usagePercent: customer.odUsage,
+    "Customer ID": customer.customerId,
+    "Customer Name": customer.name,
+    "Tier": customer.classification,
+    "Overdraft Used": formatCurrency(customer.overdraftUsed),
+    "Overdraft Limit": formatCurrency(customer.overdraftLimit),
+    "Limit Used": `${customer.odUsage}%`,
+    "Monthly Overdraft Uses": `${customer.odUsesThisMonth}/3`,
+    "Monthly Overdraft Status": customer.hasReachedMonthlyOdLimit ? "3/3 used - blocked this month" : `${customer.odUsesThisMonth}/3 used`,
+    "Transfer Count": customer.transactionCount,
+    "Transfer Value": formatCurrency(customer.transactionAmount),
+    "Customer Status": customer.status,
+    "Report Scope": customer.isActiveCustomer
+      ? "Active"
+      : "Inactive - outstanding exposure",
   }));
   const approvalCsvRows = reportData.approvalStatusRows.map((status) => ({
-    status: status.label,
-    approvals: status.value,
+    "Approval Status": status.label,
+    "Approval Count": status.value,
   }));
   const customerCsvRows = reportData.customerRows.map((customer) => ({
-    customerId: customer.customerId,
-    name: customer.name,
-    email: customer.email,
-    tier: customer.classification,
-    accountCount: customer.accountCount,
-    balance: customer.balance,
-    overdraftUsed: customer.overdraftUsed,
-    status: customer.status,
+    "Customer ID": customer.customerId,
+    "Customer Name": customer.name,
+    "Email": customer.email,
+    "Tier": customer.classification,
+    "Account Count": customer.accountCount,
+    "Total Balance": formatCurrency(customer.balance),
+    "Overdraft Used": formatCurrency(customer.overdraftUsed),
+    "Monthly Overdraft Uses": `${customer.odUsesThisMonth}/3`,
+    "Transfer Count": customer.transactionCount,
+    "Transfer Value": formatCurrency(customer.transactionAmount),
+    "Status": customer.status,
+    "Report Scope": customer.isActiveCustomer
+      ? "Active"
+      : customer.hasOutstandingExposure
+        ? "Inactive - outstanding exposure"
+        : "Inactive - history only",
+  }));
+  const classificationCsvRows = tiers.map((tier) => ({
+    "Classification": tier.label,
+    "Key": tier.key,
+    "Assigned Customers": tier.customerCount,
+    "Per Transfer Limit": formatCurrency(tier.perTxnLimit),
+    "Daily Limit": formatCurrency(tier.dailyLimit),
+    "Monthly Limit": formatCurrency(tier.monthlyLimit),
+    "Overdraft Limit": formatCurrency(tier.maxODLimit),
+    "Minimum Balance": formatCurrency(tier.minBalance),
+    "Penalty Amount": formatCurrency(tier.penaltyAmount),
+    "Interest Rate": tier.interestRate || tier.lateFeeRate,
+    "Overdraft Blocked Accounts": tier.odBlockedAccounts,
+    "Monthly Overdraft Attempt Limit": 3,
+    "Settlement Rule": "Clear before month-end",
   }));
   const highValuePagination = usePaginatedRows(reportData.highValueTransfers);
   const nearOdPagination = usePaginatedRows(reportData.nearOdLimitRows);
@@ -501,6 +654,7 @@ const AdminReports = () => {
             ["Overdraft", "#overdraft"],
             ["Approvals", "#approvals"],
             ["Customers", "#customers"],
+            ["Classifications", "#classifications"],
           ].map(([label, href]) => (
             <a
               key={label}
@@ -512,7 +666,7 @@ const AdminReports = () => {
           ))}
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <StatsCard
             title="Transfer Value"
             value={formatCompactCurrency(reportData.totalTransferValue)}
@@ -521,19 +675,12 @@ const AdminReports = () => {
             iconTone="bg-blue-50 text-blue-600"
           />
           <StatsCard
-            title="OD Watchlist"
+            title="Overdraft Watchlist"
             value={reportData.nearOdLimitRows.length}
             icon={Wallet}
             accent="bg-amber-500"
             iconTone="bg-amber-50 text-amber-600"
             footer={{ text: `${reportData.odBlocked} blocked accounts` }}
-          />
-          <StatsCard
-            title="Avg Approval Time"
-            value={formatHours(reportData.avgResolutionHours)}
-            icon={Clock3}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
           />
         </div>
 
@@ -542,10 +689,7 @@ const AdminReports = () => {
             <SectionHeader
               icon={ArrowLeftRight}
               title="Transaction Volume Chart"
-              subtitle="Transfer volume, beneficiary exposure, and high-value transactions."
-              exportLabel="Export Transactions"
-              exportName="transaction-report"
-              exportRows={highValueCsvRows}
+              subtitle="Daily transfer count for the last 7 recorded transaction dates."
             />
             <ColumnChart rows={reportData.transferVolumeRows} valueFormatter={(value) => `${value}`} />
           </div>
@@ -554,7 +698,7 @@ const AdminReports = () => {
             <SectionHeader
               icon={ShieldCheck}
               title="Transfer Split"
-              subtitle="Beneficiary ratio matters because OD applies to beneficiary transfers."
+              subtitle="Beneficiary ratio matters because overdraft applies to beneficiary transfers."
             />
             <DonutChart rows={reportData.splitRows} />
           </div>
@@ -564,11 +708,11 @@ const AdminReports = () => {
           <div className="border-b border-bank-card-border p-5 sm:p-6">
             <SectionHeader
               icon={AlertTriangle}
-              title="High-Value Transfer Table"
-              subtitle="Large transfers tied directly to approval and risk review."
-              exportLabel="Export Transfers"
-              exportName="high-value-transfers"
-              exportRows={highValueCsvRows}
+              title="Transfer Review Register"
+              subtitle="All transfer records sorted by amount for audit, approval, and risk review."
+              exportLabel="Export Transfer Register"
+              exportName="transfer-review-register"
+              exportRows={transferRegisterRows}
               className="mb-0"
             />
           </div>
@@ -599,7 +743,7 @@ const AdminReports = () => {
                   </tr>
                 ))}
                 {reportData.highValueTransfers.length === 0 && (
-                  <EmptyTableRow colSpan={5} message="No high-value transfers available yet." />
+                  <EmptyTableRow colSpan={5} message="No transfer records available yet." />
                 )}
               </tbody>
             </table>
@@ -611,9 +755,9 @@ const AdminReports = () => {
           <div className="card-padded min-h-[370px]">
             <SectionHeader
               icon={Wallet}
-              title="OD Reports"
-              subtitle="Tier-based OD usage with 3-attempt monitoring."
-              exportLabel="Export OD"
+              title="Overdraft Reports"
+              subtitle="Tier-based overdraft usage with 3-attempt monitoring."
+              exportLabel="Export Overdraft"
               exportName="od-report"
               exportRows={odCsvRows}
             />
@@ -625,7 +769,7 @@ const AdminReports = () => {
               }
             />
             <div className="mt-5 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-              {reportData.odAttemptsUsed} customers have reached the 3-attempt OD threshold this month.
+              {reportData.odAttemptsUsed} customers have used all 3 monthly overdraft attempts and should be handled first.
             </div>
           </div>
 
@@ -633,42 +777,81 @@ const AdminReports = () => {
             <div className="border-b border-bank-card-border p-5 sm:p-6">
               <SectionHeader
                 icon={AlertTriangle}
-                title="Customers Near OD Limit"
-                subtitle="Early warning list for managers before accounts become risky."
-                exportLabel="Export OD List"
+                title="Customers Near Overdraft Limit"
+                subtitle="3/3 monthly overdraft users appear first, followed by customers with 2 uses or high overdraft exposure."
+                exportLabel="Export Overdraft List"
                 exportName="customers-near-od-limit"
                 exportRows={odCsvRows}
                 className="mb-0"
               />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] text-left">
+              <table className="w-full min-w-[920px] text-left">
                 <thead className="table-head">
                   <tr>
                     <th className="px-6 py-4">Customer</th>
                     <th className="px-6 py-4">Tier</th>
-                    <th className="px-6 py-4">OD Used</th>
-                    <th className="px-6 py-4">Usage</th>
+                    <th className="px-6 py-4">Monthly Overdraft Uses</th>
+                    <th className="px-6 py-4">Overdraft Exposure</th>
+                    <th className="px-6 py-4">Transfer Activity</th>
+                    <th className="px-6 py-4">Limit Use</th>
                   </tr>
                 </thead>
                 <tbody>
                   {nearOdPagination.pageRows.map((customer) => (
-                    <tr key={customer.customerId} className="table-row">
+                    <tr
+                      key={customer.customerId}
+                      className={`table-row ${customer.hasReachedMonthlyOdLimit ? "bg-red-50/60" : ""}`}
+                    >
                       <td className="px-6 py-4">
                         <p className="font-semibold text-slate-900">{customer.name}</p>
                         <p className="text-sm text-slate-500">{customer.customerId}</p>
+                        {!customer.isActiveCustomer && (
+                          <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 ring-1 ring-slate-200">
+                            Inactive - outstanding exposure
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${getTierTone(customer.classification).badge}`}>
                           {customer.classification}
                         </span>
                       </td>
-                      <td className="px-6 py-4">{formatCurrency(customer.overdraftUsed)}</td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${
+                            customer.hasReachedMonthlyOdLimit
+                              ? "bg-red-100 text-red-700 ring-1 ring-red-200"
+                              : customer.odUsesThisMonth >= 2
+                                ? "bg-amber-100 text-amber-700 ring-1 ring-amber-200"
+                                : "bg-slate-100 text-slate-600 ring-1 ring-slate-200"
+                          }`}
+                        >
+                          {customer.odUsesThisMonth}/3 used
+                        </span>
+                        {customer.hasReachedMonthlyOdLimit && (
+                          <p className="mt-2 text-xs font-bold text-red-700">
+                            Monthly overdraft blocked
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-900">{formatCurrency(customer.overdraftUsed)}</p>
+                        <p className="text-xs font-semibold text-slate-500">
+                          of {formatCurrency(customer.overdraftLimit)}
+                        </p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-900">{customer.transactionCount} transfers</p>
+                        <p className="text-xs font-semibold text-slate-500">
+                          {formatCurrency(customer.transactionAmount)}
+                        </p>
+                      </td>
                       <td className="px-6 py-4 font-bold">{customer.odUsage}%</td>
                     </tr>
                   ))}
                   {reportData.nearOdLimitRows.length === 0 && (
-                    <EmptyTableRow colSpan={4} message="No customers are near their OD limit." />
+                    <EmptyTableRow colSpan={6} message="No customers are above the overdraft watch threshold." />
                   )}
                 </tbody>
               </table>
@@ -702,6 +885,111 @@ const AdminReports = () => {
               exportRows={customerCsvRows}
             />
             <DonutChart rows={reportData.tierDistributionRows} />
+          </div>
+        </section>
+
+        <section id="classifications" className="scroll-mt-8">
+          <div className="table-shell">
+            <div className="border-b border-bank-card-border p-5 sm:p-6">
+              <SectionHeader
+                icon={BadgeIndianRupee}
+                title="Classification Policy Report"
+                subtitle="Active tier rules for customer limits, overdraft access, and charges."
+                exportLabel="Export Classifications"
+                exportName="classification-policy-report"
+                exportRows={classificationCsvRows}
+                className="mb-0"
+              />
+            </div>
+            <div className="p-5 sm:p-6">
+              {tiers.length === 0 ? (
+                <div className="empty-state">No classification policies available yet.</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {tiers.map((tier) => (
+                    <article
+                      key={tier.key}
+                      className="rounded-xl border border-bank-card-border bg-white p-5 shadow-sm"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${getTierTone(tier.key).badge}`}>
+                            {tier.label}
+                          </span>
+                          <p className="mt-2 text-sm font-semibold text-slate-500">
+                            {tier.customerCount} assigned customer{tier.customerCount === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                            Overdraft Limit
+                          </p>
+                          <p className="mt-1 text-xl font-bold text-slate-950">
+                            {formatCurrency(tier.maxODLimit)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div className="rounded-lg bg-bank-surface px-4 py-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
+                            Per Transfer
+                          </p>
+                          <p className="mt-1 font-bold text-slate-950">
+                            {formatCurrency(tier.perTxnLimit)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-bank-surface px-4 py-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
+                            Daily
+                          </p>
+                          <p className="mt-1 font-bold text-slate-950">
+                            {formatCurrency(tier.dailyLimit)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-bank-surface px-4 py-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
+                            Monthly
+                          </p>
+                          <p className="mt-1 font-bold text-slate-950">
+                            {formatCurrency(tier.monthlyLimit)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="rounded-lg border border-slate-100 px-4 py-3">
+                          <p className="text-sm font-bold text-slate-700">Balance control</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Minimum balance {formatCurrency(tier.minBalance)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-100 px-4 py-3">
+                          <p className="text-sm font-bold text-slate-700">Overdraft charges</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {tier.interestRate || tier.lateFeeRate} interest, {formatCurrency(tier.penaltyAmount)} penalty
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold">
+                        <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 ring-1 ring-blue-100">
+                          3 overdraft uses monthly
+                        </span>
+                        <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700 ring-1 ring-amber-100">
+                          Clear before month-end
+                        </span>
+                        {tier.odBlockedAccounts > 0 && (
+                          <span className="rounded-full bg-red-50 px-3 py-1 text-red-700 ring-1 ring-red-100">
+                            {tier.odBlockedAccounts} blocked
+                          </span>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </section>
       </PageContent>

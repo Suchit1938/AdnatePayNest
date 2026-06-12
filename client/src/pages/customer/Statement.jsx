@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Download, FileDown, FileText } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Download, FileText } from "lucide-react";
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
 import EmptyState from "../../components/ui/EmptyState";
@@ -7,6 +7,7 @@ import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import SectionCard from "../../components/ui/SectionCard";
 import TablePagination from "../../components/ui/TablePagination";
+import { useToast } from "../../components/ui/useToast";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { formatCurrency } from "../../data/mockData";
@@ -16,6 +17,7 @@ import { getTransactionStatusLabel } from "../../utils/ui";
 
 const Statement = () => {
   const { user } = useAuth();
+  const toast = useToast();
   const [filter, setFilter] = useState("All");
   const [statementEntries, setStatementEntries] = useState([]);
 
@@ -64,32 +66,42 @@ const Statement = () => {
   const statementPagination = usePaginatedRows(filteredStatements);
 
   const downloadCsv = () => {
-    const headers = ["Date", "Details", "Type", "Amount", "Status"];
-    const escapeCell = (value) => {
-      const text = String(value ?? "");
-      return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-    };
-    const csv = [
-      headers.join(","),
-      ...statementRows.map((row) =>
-        headers.map((header) => escapeCell(row[header])).join(",")
-      ),
-    ].join("\n");
-    const file = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(file);
-    const link = document.createElement("a");
+    try {
+      const headers = ["Date", "Details", "Type", "Amount", "Status"];
+      const escapeCell = (value) => {
+        const text = String(value ?? "");
+        return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+      };
+      const csv = [
+        headers.join(","),
+        ...statementRows.map((row) =>
+          headers.map((header) => escapeCell(row[header])).join(",")
+        ),
+      ].join("\n");
+      const file = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
 
-    link.href = url;
-    link.download = `statement-${filter.toLowerCase()}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+      link.href = url;
+      link.download = `statement-${filter.toLowerCase()}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Statement CSV downloaded.");
+    } catch {
+      toast.error("Unable to download statement CSV. Please try again.");
+    }
   };
 
   const downloadPdf = () => {
-    downloadPdfFile(`statement-${filter.toLowerCase()}.pdf`, "Account Statement", statementRows, {
-      headers: ["Date", "Details", "Type", "Status", "Amount"],
-      subtitle: `Filter: ${filter}`,
-    });
+    try {
+      downloadPdfFile(`statement-${filter.toLowerCase()}.pdf`, "Account Statement", statementRows, {
+        headers: ["Date", "Details", "Type", "Status", "Amount"],
+        subtitle: `Filter: ${filter}`,
+      });
+      toast.success("Statement PDF downloaded.");
+    } catch {
+      toast.error("Unable to download statement PDF. Please try again.");
+    }
   };
 
   return (
@@ -110,7 +122,7 @@ const Statement = () => {
               onClick={downloadPdf}
               className="inline-flex items-center gap-2 border-l border-bank-card-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-bank-surface"
             >
-              <FileDown size={16} />
+              <Download size={16} />
               PDF
             </button>
           </div>

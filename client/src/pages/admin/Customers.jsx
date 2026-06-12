@@ -15,11 +15,10 @@ import {
 } from "lucide-react";
 
 import api from "../../api/axios";
-import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import TablePagination from "../../components/ui/TablePagination";
-import { useToast } from "../../components/ui/ToastContext";
+import { useToast } from "../../components/ui/useToast";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { formatCurrency, maskAccountNumber } from "../../utils/format";
@@ -37,7 +36,6 @@ const initialUserForm = {
   phone: "",
   dob: "",
   address: "",
-  password: "",
   role: "customer",
   status: "active",
   classification: "",
@@ -49,7 +47,7 @@ const initialUserForm = {
   bankAccountNo: "",
   bankIfsc: DEFAULT_BANK_IFSC,
   bankName: DEFAULT_BANK_NAME,
-  accountStatus: "",
+  accountStatus: "active",
   employeeId: "",
   assignedRegion: DEFAULT_ASSIGNED_REGION,
   branchId: DEFAULT_BANK_IFSC,
@@ -94,6 +92,14 @@ const isAdult = (dob) => {
   return age >= 18;
 };
 
+const getAutoPassword = (fullName, phone) => {
+  const firstName = String(fullName || "").trim().split(/\s+/)[0] || "";
+  const namePart = firstName.replace(/[^a-z]/gi, "").slice(0, 5).toUpperCase();
+  const phonePart = String(phone || "").replace(/\D/g, "").slice(-5);
+
+  return namePart && phonePart.length === 5 ? `${namePart}@${phonePart}` : "";
+};
+
 const validateField = (field, value) => {
   const trimmedValue = String(value || "").trim();
 
@@ -114,10 +120,6 @@ const validateField = (field, value) => {
       return validationPatterns.phone.test(trimmedValue)
         ? ""
         : "Enter a valid 10 digit Indian mobile number.";
-    case "password":
-      return trimmedValue.length >= 6
-        ? ""
-        : "Password must be at least 6 characters.";
     case "panNumber":
       return validationPatterns.panNumber.test(trimmedValue.toUpperCase())
         ? ""
@@ -156,7 +158,6 @@ const activeValidationFieldsByRole = {
     "fullName",
     "email",
     "phone",
-    "password",
     "panNumber",
     "aadhaarNumber",
     "bankIfsc",
@@ -167,7 +168,8 @@ const activeValidationFieldsByRole = {
     "fullName",
     "email",
     "phone",
-    "password",
+    "panNumber",
+    "aadhaarNumber",
   ],
 };
 
@@ -384,23 +386,21 @@ const Customers = ({ managementMode = "users" }) => {
   };
 
   useEffect(() => {
-    api.get("/users").then(({ data }) => {
-      setCustomerRows(
-        data.customers.map(toCustomerRow)
-      );
-      setManagerRows(
-        data.managers.map(toManagerRow)
-      );
-    });
-    api.get("/tiers").then(({ data }) => {
-      setTierRows(data.tiers);
+    Promise.allSettled([
+      api.get("/users"),
+      api.get("/tiers"),
+    ]).then(([usersResult, tiersResult]) => {
+      if (usersResult.status === "fulfilled") {
+        const { data } = usersResult.value;
+        setCustomerRows(data.customers.map(toCustomerRow));
+        setManagerRows(data.managers.map(toManagerRow));
+      }
+
+      if (tiersResult.status === "fulfilled") {
+        setTierRows(tiersResult.value.data.tiers);
+      }
     });
   }, []);
-
-  const totalUsers = customerRows.length + managerRows.length;
-  const activeUsers =
-    customerRows.filter((customer) => customer.status === "active").length +
-    managerRows.filter((manager) => manager.status === "active").length;
 
   const filteredCustomers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -438,6 +438,7 @@ const Customers = ({ managementMode = "users" }) => {
   const managerPagination = usePaginatedRows(filteredManagers);
 
   const hasActiveCustomerFilters = Boolean(search) || Boolean(tierFilter);
+  const hasActiveManagerFilters = Boolean(search);
 
   const applyCustomerFilters = () => {
     setSearch(searchDraft.trim());
@@ -496,7 +497,6 @@ const Customers = ({ managementMode = "users" }) => {
     const requiredFields = [
       ["fullName", "Full Name"],
       ["email", "Email"],
-      ["password", "Password"],
       ...(isCustomer
         ? [
           ["phone", "Phone"],
@@ -504,15 +504,17 @@ const Customers = ({ managementMode = "users" }) => {
           ["aadhaarNumber", "Aadhaar Number"],
           ["classification", "Tier"],
           ["accountType", "Account Type"],
-          ["dob", "DOB"],
+          ["dob", "Date of birth"],
           ["address", "Address"],
-          ["walletBalance", "Wallet Balance"],
+          ["walletBalance", "Opening Balance"],
           ["bankIfsc", "IFSC"],
           ["bankName", "Bank Name"],
-          ["accountStatus", "Account Status"],
         ]
         : [
           ["phone", "Phone"],
+          ["panNumber", "PAN Number"],
+          ["aadhaarNumber", "Aadhaar Number"],
+          ["address", "Address"],
           ["assignedRegion", "Assigned Region"],
           ["branchId", "IFSC Code"],
           ["branchName", "Branch Name"],
@@ -523,6 +525,7 @@ const Customers = ({ managementMode = "users" }) => {
     const normalizedPan = userForm.panNumber.trim().toUpperCase();
     const normalizedAadhaar = userForm.aadhaarNumber.trim();
     const normalizedIfsc = userForm.bankIfsc.trim().toUpperCase();
+    const generatedPassword = getAutoPassword(userForm.fullName, normalizedPhone);
 
     if (!validationPatterns.name.test(userForm.fullName.trim())) {
       showFormToast("Full name must contain only letters and spaces.", "warning");
@@ -539,17 +542,17 @@ const Customers = ({ managementMode = "users" }) => {
       return;
     }
 
+    if (!validationPatterns.panNumber.test(normalizedPan)) {
+      showFormToast("PAN number must be in valid format, like ABCDE1234F.", "warning");
+      return;
+    }
+
+    if (!validationPatterns.aadhaarNumber.test(normalizedAadhaar)) {
+      showFormToast("Aadhaar number must be 12 digits.", "warning");
+      return;
+    }
+
     if (isCustomer) {
-      if (!validationPatterns.panNumber.test(normalizedPan)) {
-        showFormToast("PAN number must be in valid format, like ABCDE1234F.", "warning");
-        return;
-      }
-
-      if (!validationPatterns.aadhaarNumber.test(normalizedAadhaar)) {
-        showFormToast("Aadhaar number must be 12 digits.", "warning");
-        return;
-      }
-
       if (!validationPatterns.ifsc.test(normalizedIfsc)) {
         showFormToast("IFSC must be in valid format, like HDFC0001234.", "warning");
         return;
@@ -580,8 +583,11 @@ const Customers = ({ managementMode = "users" }) => {
       return;
     }
 
-    if (userForm.password.length < 6) {
-      showFormToast("Password must be at least 6 characters.", "warning");
+    if (!generatedPassword) {
+      showFormToast(
+        "Enter a valid first name and 10 digit mobile number to generate the password.",
+        "warning"
+      );
       return;
     }
 
@@ -606,9 +612,9 @@ const Customers = ({ managementMode = "users" }) => {
       fullName: userForm.fullName,
       email: normalizedEmail,
       phone: normalizedPhone,
-      passwordHash: userForm.password,
+      passwordHash: generatedPassword,
       role: userForm.role,
-      status: userForm.status,
+      status: "active",
       ...(isCustomer
         ? {
           classification: selectedTier,
@@ -629,6 +635,9 @@ const Customers = ({ managementMode = "users" }) => {
           },
         }
         : {
+          panNumber: userForm.panNumber,
+          aadhaarNumber: normalizedAadhaar,
+          address: userForm.address,
           employeeId: nextEmployeeIdPreview,
           assignedRegion: DEFAULT_ASSIGNED_REGION,
           branchId: DEFAULT_BANK_IFSC,
@@ -648,9 +657,9 @@ const Customers = ({ managementMode = "users" }) => {
         name: userForm.fullName,
         email: normalizedEmail,
         phone: normalizedPhone,
-        password: userForm.password,
+        password: generatedPassword,
         role: userForm.role,
-        status: userForm.status,
+        status: "active",
         classification: selectedTier,
         accountType: userForm.accountType,
         panNumber: userForm.panNumber,
@@ -680,7 +689,7 @@ const Customers = ({ managementMode = "users" }) => {
     } catch (error) {
       showFormToast(
         error.response?.data?.message ||
-        "User was not created in MongoDB. Please try again.",
+        "User was not created. Please try again.",
         "error"
       );
       return;
@@ -709,7 +718,7 @@ const Customers = ({ managementMode = "users" }) => {
     setFieldErrors({});
     if (isCustomer && emailDelivery?.sent === false) {
       showFormToast(
-        `User created in MongoDB, but email was not sent. ${emailDelivery.message || ""}`.trim(),
+        `User created, but the welcome email was not sent. ${emailDelivery.message || ""}`.trim(),
         "warning"
       );
       return;
@@ -717,8 +726,8 @@ const Customers = ({ managementMode = "users" }) => {
 
     showFormToast(
       isCustomer && emailDelivery?.sent
-        ? "User created in MongoDB. Welcome email sent."
-        : "User created in MongoDB.",
+        ? "User created. Welcome email sent."
+        : "User created.",
       "success"
     );
   };
@@ -1082,6 +1091,10 @@ const Customers = ({ managementMode = "users" }) => {
   };
 
   const isCustomerRole = userForm.role === "customer";
+  const generatedPasswordPreview = useMemo(
+    () => getAutoPassword(userForm.fullName, userForm.phone),
+    [userForm.fullName, userForm.phone]
+  );
   const activeValidationFields =
     activeValidationFieldsByRole[userForm.role] || activeValidationFieldsByRole.customer;
   const hasValidationErrors = activeValidationFields.some((field) => fieldErrors[field]);
@@ -1095,42 +1108,7 @@ const Customers = ({ managementMode = "users" }) => {
           subtitle={pageCopy.subtitle}
         />
 
-        {showCreateForm && (
-        <div className="stat-grid">
-          <StatsCard
-            title="Total Users"
-            value={totalUsers}
-            icon={Users}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-            footer={{
-              text: `${customerRows.length} customers / ${managerRows.length} managers`,
-            }}
-          />
-          <StatsCard
-            title="Active Users"
-            value={activeUsers}
-            icon={BadgeCheck}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            badge={{
-              text:
-                activeUsers === totalUsers
-                  ? "All users active"
-                  : `${totalUsers - activeUsers} inactive`,
-              tone: activeUsers === totalUsers ? "success" : "warning",
-            }}
-          />
-        </div>
-        )}
-
-        <section
-          className={
-            showCreateForm
-              ? "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(360px,0.95fr)_minmax(0,1.55fr)]"
-              : "space-y-6"
-          }
-        >
+        <section className="space-y-6">
           {showCreateForm && (
           <form
             noValidate
@@ -1160,7 +1138,20 @@ const Customers = ({ managementMode = "users" }) => {
                 <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
                   Identity
                 </h3>
-                <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <Field label="Role" required>
+                    <select
+                      required
+                      value={userForm.role}
+                      onChange={(event) =>
+                        updateUserForm("role", event.target.value)
+                      }
+                      className={inputClass}
+                    >
+                      <option value="customer">Customer</option>
+                      <option value="manager">Manager</option>
+                    </select>
+                  </Field>
                   <Field label="Full Name" required>
                     <input
                       required
@@ -1172,45 +1163,6 @@ const Customers = ({ managementMode = "users" }) => {
                       placeholder="Enter full name"
                     />
                     <FieldError message={fieldErrors.fullName} />
-                  </Field>
-                  <Field label="Email" required>
-                    <input
-                      required
-                      type="email"
-                      value={userForm.email}
-                      onChange={(event) =>
-                        updateUserForm("email", event.target.value)
-                      }
-                      className={inputClass}
-                      placeholder="user@email.com"
-                    />
-                    <FieldError message={fieldErrors.email} />
-                  </Field>
-                  <Field label="PAN Number" required={isCustomerRole}>
-                    <input
-                      required={isCustomerRole}
-                      value={userForm.panNumber}
-                      onChange={(event) =>
-                        updateUserForm("panNumber", event.target.value.toUpperCase())
-                      }
-                      className={inputClass}
-                      placeholder="ABCDE1234F"
-                    />
-                    <FieldError message={fieldErrors.panNumber} />
-                  </Field>
-                  <Field label="Aadhaar Number" required={isCustomerRole}>
-                    <input
-                      required={isCustomerRole}
-                      inputMode="numeric"
-                      maxLength="12"
-                      value={userForm.aadhaarNumber}
-                      onChange={(event) =>
-                        updateUserForm("aadhaarNumber", event.target.value.replace(/\D/g, ""))
-                      }
-                      className={inputClass}
-                      placeholder="12 digit Aadhaar"
-                    />
-                    <FieldError message={fieldErrors.aadhaarNumber} />
                   </Field>
                   <Field label="Phone" required>
                     <input
@@ -1225,65 +1177,173 @@ const Customers = ({ managementMode = "users" }) => {
                     />
                     <FieldError message={fieldErrors.phone} />
                   </Field>
-                  <Field label="Password" required>
+                  <Field label="Email" required>
                     <input
                       required
-                      minLength="6"
-                      type="password"
-                      value={userForm.password}
+                      type="email"
+                      value={userForm.email}
                       onChange={(event) =>
-                        updateUserForm("password", event.target.value)
+                        updateUserForm("email", event.target.value)
                       }
                       className={inputClass}
-                      placeholder="Minimum 6 characters"
+                      placeholder="user@email.com"
                     />
-                    <FieldError message={fieldErrors.password} />
+                    <FieldError message={fieldErrors.email} />
+                  </Field>
+                  {isCustomerRole && (
+                    <Field label="Date of Birth" required>
+                      <input
+                        required
+                        type="date"
+                        value={userForm.dob}
+                        onChange={(event) =>
+                          updateUserForm("dob", event.target.value)
+                        }
+                        className={inputClass}
+                      />
+                      <FieldError message={fieldErrors.dob} />
+                    </Field>
+                  )}
+                  <Field label="Auto Password">
+                    <input
+                      readOnly
+                      value={generatedPasswordPreview}
+                      className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
+                      placeholder="Generated after name and phone"
+                    />
                   </Field>
                 </div>
               </div>
 
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
-                  Role & Access
+                  {isCustomerRole ? "KYC" : "KYC & Assignment"}
                 </h3>
-                <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field label="Role" required>
-                    <select
-                      required
-                      value={userForm.role}
-                      onChange={(event) =>
-                        updateUserForm("role", event.target.value)
-                      }
-                      className={inputClass}
-                    >
-                      <option value="customer">Customer</option>
-                      <option value="manager">Manager</option>
-                    </select>
-                  </Field>
-                  <Field label="Status" required>
-                    <select
-                      required
-                      value={userForm.status}
-                      onChange={(event) =>
-                        updateUserForm("status", event.target.value)
-                      }
-                      className={inputClass}
-                    >
-                      <option value="active">Active</option>
-                      <option value="inactive">Inactive</option>
-                      {/* <option value="suspended">Suspended</option> */}
-                    </select>
-                  </Field>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
-                  {isCustomerRole ? "Customer KYC" : "Manager Assignment"}
-                </h3>
-                <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-3">
                   {isCustomerRole ? (
                     <>
+                      <Field label="PAN Number" required={isCustomerRole}>
+                        <input
+                          required={isCustomerRole}
+                          value={userForm.panNumber}
+                          onChange={(event) =>
+                            updateUserForm("panNumber", event.target.value.toUpperCase())
+                          }
+                          className={inputClass}
+                          placeholder="ABCDE1234F"
+                        />
+                        <FieldError message={fieldErrors.panNumber} />
+                      </Field>
+                      <Field label="Aadhaar Number" required={isCustomerRole}>
+                        <input
+                          required={isCustomerRole}
+                          inputMode="numeric"
+                          maxLength="12"
+                          value={userForm.aadhaarNumber}
+                          onChange={(event) =>
+                            updateUserForm("aadhaarNumber", event.target.value.replace(/\D/g, ""))
+                          }
+                          className={inputClass}
+                          placeholder="12 digit Aadhaar"
+                        />
+                        <FieldError message={fieldErrors.aadhaarNumber} />
+                      </Field>
+                      <div className="lg:col-span-3">
+                        <Field label="Address" required>
+                          <input
+                            required
+                            value={userForm.address}
+                            onChange={(event) =>
+                              updateUserForm("address", event.target.value)
+                            }
+                            className={inputClass}
+                            placeholder="Enter address"
+                          />
+                        </Field>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Field label="PAN Number" required>
+                        <input
+                          required
+                          value={userForm.panNumber}
+                          onChange={(event) =>
+                            updateUserForm("panNumber", event.target.value.toUpperCase())
+                          }
+                          className={inputClass}
+                          placeholder="ABCDE1234F"
+                        />
+                        <FieldError message={fieldErrors.panNumber} />
+                      </Field>
+                      <Field label="Aadhaar Number" required>
+                        <input
+                          required
+                          inputMode="numeric"
+                          maxLength="12"
+                          value={userForm.aadhaarNumber}
+                          onChange={(event) =>
+                            updateUserForm("aadhaarNumber", event.target.value.replace(/\D/g, ""))
+                          }
+                          className={inputClass}
+                          placeholder="12 digit Aadhaar"
+                        />
+                        <FieldError message={fieldErrors.aadhaarNumber} />
+                      </Field>
+                      <Field label="Employee ID">
+                        <input
+                          readOnly
+                          value={nextEmployeeIdPreview}
+                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
+                          placeholder="Auto generated"
+                        />
+                      </Field>
+                      <Field label="Assigned Region">
+                        <input
+                          readOnly
+                          value={DEFAULT_ASSIGNED_REGION}
+                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
+                        />
+                      </Field>
+                      <Field label="IFSC Code">
+                        <input
+                          readOnly
+                          value={DEFAULT_BANK_IFSC}
+                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
+                        />
+                      </Field>
+                      <Field label="Branch Name">
+                        <input
+                          readOnly
+                          value={DEFAULT_BRANCH_NAME}
+                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
+                        />
+                      </Field>
+                      <div className="lg:col-span-3">
+                        <Field label="Address" required>
+                          <input
+                            required
+                            value={userForm.address}
+                            onChange={(event) =>
+                              updateUserForm("address", event.target.value)
+                            }
+                            className={inputClass}
+                            placeholder="Enter address"
+                          />
+                        </Field>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {isCustomerRole && (
+                <>
+                  <div>
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
+                      Bank Account Setup
+                    </h3>
+                    <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-3">
                       <Field label="Account Type" required>
                         <select
                           required
@@ -1324,77 +1384,7 @@ const Customers = ({ managementMode = "users" }) => {
                           ))}
                         </select>
                       </Field>
-
-                      <Field label="DOB" required>
-                        <input
-                          required
-                          type="date"
-                          value={userForm.dob}
-                          onChange={(event) =>
-                            updateUserForm("dob", event.target.value)
-                          }
-                          className={inputClass}
-                        />
-                        <FieldError message={fieldErrors.dob} />
-                      </Field>
-                      <div className="sm:col-span-2">
-                        <Field label="Address" required>
-                          <input
-                            required
-                            value={userForm.address}
-                            onChange={(event) =>
-                              updateUserForm("address", event.target.value)
-                            }
-                            className={inputClass}
-                            placeholder="Enter address"
-                          />
-                        </Field>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <Field label="Employee ID">
-                        <input
-                          readOnly
-                          value={nextEmployeeIdPreview}
-                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
-                          placeholder="Auto generated"
-                        />
-                      </Field>
-                      <Field label="Assigned Region">
-                        <input
-                          readOnly
-                          value={DEFAULT_ASSIGNED_REGION}
-                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
-                        />
-                      </Field>
-                      <Field label="IFSC Code">
-                        <input
-                          readOnly
-                          value={DEFAULT_BANK_IFSC}
-                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
-                        />
-                      </Field>
-                      <Field label="Branch Name">
-                        <input
-                          readOnly
-                          value={DEFAULT_BRANCH_NAME}
-                          className={`${inputClass} cursor-not-allowed border-slate-200 bg-slate-100 font-semibold text-slate-500 shadow-none`}
-                        />
-                      </Field>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {isCustomerRole && (
-                <>
-                  <div>
-                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
-                      Financial
-                    </h3>
-                    <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <Field label="Wallet Balance" required>
+                      <Field label="Opening Balance" required>
                         <input
                           required
                           min="0"
@@ -1408,15 +1398,7 @@ const Customers = ({ managementMode = "users" }) => {
                         />
                         <FieldError message={fieldErrors.walletBalance} />
                       </Field>
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
-                      Bank Account Details
-                    </h3>
-                    <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <Field label="Account No.">
+                      <Field label="Account Number">
                         <input
                           readOnly
                           value={nextAccountNumberPreview}
@@ -1436,32 +1418,19 @@ const Customers = ({ managementMode = "users" }) => {
                         />
                         <FieldError message={fieldErrors.bankIfsc} />
                       </Field>
-                      <Field label="Bank Name" required>
-                        <input
-                          required
-                          value={userForm.bankName}
-                          onChange={(event) =>
-                            updateUserForm("bankName", event.target.value)
-                          }
-                          className={inputClass}
-                          placeholder="Enter bank name"
-                        />
-                      </Field>
-                      <Field label="Account Status" required>
-                        <select
-                          required
-                          value={userForm.accountStatus}
-                          onChange={(event) =>
-                            updateUserForm("accountStatus", event.target.value)
-                          }
-                          className={inputClass}
-                        >
-                          <option value="">Select status</option>
-                          <option value="active">Active</option>
-                          <option value="inactive">Inactive</option>
-                          <option value="blocked">Blocked</option>
-                        </select>
-                      </Field>
+                      <div className="lg:col-span-3">
+                        <Field label="Bank Name" required>
+                          <input
+                            required
+                            value={userForm.bankName}
+                            onChange={(event) =>
+                              updateUserForm("bankName", event.target.value)
+                            }
+                            className={inputClass}
+                            placeholder="Enter bank name"
+                          />
+                        </Field>
+                      </div>
                     </div>
                   </div>
                 </>
@@ -1638,7 +1607,7 @@ const Customers = ({ managementMode = "users" }) => {
                               className="inline-flex items-center gap-2 rounded-lg border border-blue-100 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
                             >
                               <Plus size={15} />
-                              New Account
+                              Add Account
                             </button>
                             <button
                               type="button"
@@ -1690,16 +1659,59 @@ const Customers = ({ managementMode = "users" }) => {
 
             {showManagers && (
             <div className="table-shell">
-              <div className="flex items-center justify-between border-b border-slate-100 p-6">
+              <div className="border-b border-slate-100 p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-          <h2 className="text-xl font-bold">Manager Directory</h2>
+                  <h2 className="text-xl font-bold">Manager Directory</h2>
                   <p className="text-sm text-slate-500">
                     Single-branch assignment is fixed; login status remains editable.
                   </p>
                 </div>
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600">
-                  {managerRows.length} managers
-                </span>
+                <div className="flex w-full flex-wrap items-end gap-2 lg:w-auto">
+                  <label className="min-w-0 flex-1 sm:w-80 sm:flex-none">
+                    <span className="text-sm font-semibold text-slate-600">
+                      Name / Email / Employee ID
+                    </span>
+                    <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                      <Search size={18} className="shrink-0 text-slate-400" />
+                      <input
+                        value={searchDraft}
+                        onChange={(event) => setSearchDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            applyCustomerFilters();
+                          }
+                        }}
+                        className="w-full outline-none"
+                        placeholder="Search managers"
+                      />
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={applyCustomerFilters}
+                    className="btn-primary px-4 py-2"
+                  >
+                    <Search size={16} />
+                    Search
+                  </button>
+                </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-500">
+                    Showing {filteredManagers.length} of {managerRows.length} managers
+                  </p>
+                  {hasActiveManagerFilters && (
+                    <button
+                      type="button"
+                      onClick={resetCustomerFilters}
+                      className="btn-secondary px-4 py-2"
+                    >
+                      Reset Search
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="overflow-x-auto">
@@ -1782,6 +1794,16 @@ const Customers = ({ managementMode = "users" }) => {
                         </td>
                       </tr>
                     ))}
+                    {filteredManagers.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={5}
+                          className="px-6 py-8 text-center text-sm font-semibold text-slate-500"
+                        >
+                          No managers match the selected search.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
                 <TablePagination {...managerPagination} />
@@ -1837,7 +1859,7 @@ const Customers = ({ managementMode = "users" }) => {
                   <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
                     <CreditCard size={18} className="text-emerald-600" />
                     <p className="mt-3 text-xs font-bold uppercase text-slate-500">
-                      OD Limit
+                      Overdraft Limit
                     </p>
                     <p className="mt-1 text-lg font-bold text-slate-950">
                       {formatCurrency(accountDetailsReview.summary.overdraftLimit)}
@@ -1846,7 +1868,7 @@ const Customers = ({ managementMode = "users" }) => {
                   <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
                     <AlertTriangle size={18} className="text-amber-600" />
                     <p className="mt-3 text-xs font-bold uppercase text-slate-500">
-                      OD Used
+                      Overdraft Used
                     </p>
                     <p className="mt-1 text-lg font-bold text-slate-950">
                       {formatCurrency(accountDetailsReview.summary.overdraftUsed)}
@@ -1908,7 +1930,7 @@ const Customers = ({ managementMode = "users" }) => {
                         </div>
                         <div className="rounded-lg bg-bank-surface p-3">
                           <p className="text-xs font-bold uppercase text-slate-500">
-                            OD Limit
+                            Overdraft Limit
                           </p>
                           <p className="mt-1 font-bold text-slate-950">
                             {formatCurrency(account.overdraftLimit || 0)}
@@ -1916,7 +1938,7 @@ const Customers = ({ managementMode = "users" }) => {
                         </div>
                         <div className="rounded-lg bg-bank-surface p-3">
                           <p className="text-xs font-bold uppercase text-slate-500">
-                            OD Used
+                            Overdraft Used
                           </p>
                           <p className="mt-1 font-bold text-slate-950">
                             {formatCurrency(account.overdraftUsed || 0)}
@@ -1924,7 +1946,7 @@ const Customers = ({ managementMode = "users" }) => {
                         </div>
                         <div className="rounded-lg bg-bank-surface p-3">
                           <p className="text-xs font-bold uppercase text-slate-500">
-                            Available OD
+                            Available Overdraft
                           </p>
                           <p className="mt-1 font-bold text-slate-950">
                             {formatCurrency(
@@ -1946,9 +1968,9 @@ const Customers = ({ managementMode = "users" }) => {
         )}
 
         {disableReview && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-            <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
-              <div className="border-b border-slate-100 px-6 py-5">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:items-center">
+            <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="shrink-0 border-b border-slate-100 px-6 py-5">
                 <div className="flex items-start gap-4">
                   <div
                     className={`rounded-xl p-3 ${
@@ -1981,7 +2003,7 @@ const Customers = ({ managementMode = "users" }) => {
                 </div>
               </div>
 
-              <div className="space-y-5 px-6 py-5">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
                 <div className="rounded-xl border border-bank-card-border bg-bank-surface px-4 py-3">
                   <p className="font-bold text-slate-950">{disableReview.customer.name}</p>
                   <p className="mt-1 text-sm text-slate-600">
@@ -2004,7 +2026,7 @@ const Customers = ({ managementMode = "users" }) => {
                       <div className="rounded-xl border border-bank-card-border bg-white p-4">
                         <AlertTriangle size={18} className="text-amber-600" />
                         <p className="mt-3 text-xs font-bold uppercase text-slate-500">
-                          OD Used
+                          Overdraft Used
                         </p>
                         <p className="mt-1 text-lg font-bold text-slate-950">
                           {formatCurrency(disableReview.summary.overdraftUsed)}
@@ -2013,7 +2035,7 @@ const Customers = ({ managementMode = "users" }) => {
                       <div className="rounded-xl border border-bank-card-border bg-white p-4">
                         <CreditCard size={18} className="text-emerald-600" />
                         <p className="mt-3 text-xs font-bold uppercase text-slate-500">
-                          Available OD
+                          Available Overdraft
                         </p>
                         <p className="mt-1 text-lg font-bold text-slate-950">
                           {formatCurrency(disableReview.summary.availableOverdraft)}
@@ -2049,7 +2071,7 @@ const Customers = ({ managementMode = "users" }) => {
                               {formatCurrency(account.balance || 0)}
                             </p>
                             <p className="text-xs text-slate-500">
-                              OD used {formatCurrency(account.overdraftUsed || 0)}
+                              Overdraft used {formatCurrency(account.overdraftUsed || 0)}
                             </p>
                           </div>
                         </div>
@@ -2059,31 +2081,33 @@ const Customers = ({ managementMode = "users" }) => {
                 )}
               </div>
 
-              <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 bg-slate-50 px-6 py-4">
-                <button
-                  type="button"
-                  onClick={() => setDisableReview(null)}
-                  disabled={disableReview.isSaving}
-                  className="btn-secondary px-4 py-2"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={continueDisableReview}
-                  disabled={disableReview.isSaving}
-                  className={
-                    disableReview.step === "financial-warning"
-                      ? "btn-danger-soft bg-red-600 text-white hover:bg-red-700"
-                      : "btn-primary bg-red-600 hover:bg-red-700"
-                  }
-                >
-                  {disableReview.isSaving
-                    ? "Disabling..."
-                    : disableReview.step === "financial-warning"
-                      ? "Disable Anyway"
-                      : "Continue"}
-                </button>
+              <div className="shrink-0 border-t border-slate-100 bg-slate-50 px-6 py-4">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setDisableReview(null)}
+                    disabled={disableReview.isSaving}
+                    className="btn-secondary justify-center px-4 py-2"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={continueDisableReview}
+                    disabled={disableReview.isSaving}
+                    className={`justify-center ${
+                      disableReview.step === "financial-warning"
+                        ? "btn-danger-soft bg-red-600 text-white hover:bg-red-700"
+                        : "btn-primary bg-red-600 hover:bg-red-700"
+                    }`}
+                  >
+                    {disableReview.isSaving
+                      ? "Disabling..."
+                      : disableReview.step === "financial-warning"
+                        ? "Disable Anyway"
+                        : "Continue"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2212,7 +2236,7 @@ const Customers = ({ managementMode = "users" }) => {
                   </Field>
 
                   <div className="sm:col-span-2 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
-                    Transfer, withdrawal, and OD limits will be applied from the customer's current classification.
+                    Transfer, withdrawal, and overdraft limits will be applied from the customer's current classification.
                   </div>
                 </div>
               </div>
@@ -2250,7 +2274,7 @@ const Customers = ({ managementMode = "users" }) => {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-bold uppercase text-blue-600">
-                    Customer profile review
+                    {editForm.type === "customer" ? "Customer profile review" : "Manager access review"}
                   </p>
                   <h2 className="mt-1 text-2xl font-bold text-slate-950">
                     Edit {editForm.name}
@@ -2306,7 +2330,7 @@ const Customers = ({ managementMode = "users" }) => {
                         />
                         <FieldError message={editErrors.email} />
                       </Field>
-                      <Field label="DOB">
+                      <Field label="Date of Birth">
                         <input
                           type="date"
                           value={editForm.dob}

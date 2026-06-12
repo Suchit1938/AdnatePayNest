@@ -5,7 +5,7 @@ import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import SectionCard from "../../components/ui/SectionCard";
-import { useToast } from "../../components/ui/ToastContext";
+import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { BANK_NAME, formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { useAuth } from "../../context/useAuth";
@@ -13,13 +13,12 @@ import { useAuth } from "../../context/useAuth";
 const TransferFunds = () => {
   const toast = useToast();
   const { setSessionUser, user } = useAuth();
-  const [profileUser, setProfileUser] = useState(user);
   const userAccounts = useMemo(
     () =>
-      profileUser?.accounts?.length
-        ? profileUser.accounts
-        : [profileUser?.account].filter(Boolean),
-    [profileUser]
+      user?.accounts?.length
+        ? user.accounts
+        : [user?.account].filter(Boolean),
+    [user]
   );
   const [beneficiaries, setBeneficiaries] = useState([]);
   const [transferMode, setTransferMode] = useState("beneficiary");
@@ -41,84 +40,61 @@ const TransferFunds = () => {
   const firstAccountNumber = userAccounts[0]?.accountNumber || "";
 
   useEffect(() => {
-    api.get("/auth/me")
-      .then(({ data }) => {
-        setProfileUser(data.user);
-        setSessionUser(data.user);
-      })
-      .catch(() => {});
-  }, [setSessionUser]);
-
-  useEffect(() => {
     api.get("/users/beneficiaries").then(({ data }) => {
-      const savedBeneficiaries = data.beneficiaries || [];
-      setBeneficiaries(savedBeneficiaries);
-      setFormData((current) => {
-        const currentBeneficiary = savedBeneficiaries.find(
-          (beneficiary) => String(beneficiary.id) === current.beneficiaryId
-        );
-        const nextBeneficiary = currentBeneficiary || savedBeneficiaries[0];
-        const nextBeneficiaryAccounts = nextBeneficiary?.accounts?.length
-          ? nextBeneficiary.accounts
-          : [{ accountNumber: nextBeneficiary?.account }].filter(
-              (account) => account.accountNumber
-            );
-        const fromAccountStillAvailable = userAccounts.some(
-          (account) => account.accountNumber === current.fromAccountNumber
-        );
-        const toAccountStillAvailable = nextBeneficiaryAccounts.some(
-          (account) => account.accountNumber === current.toAccountNumber
-        );
-
-        return {
-          ...current,
-          beneficiaryId: String(nextBeneficiary?.id ?? ""),
-          fromAccountNumber: fromAccountStillAvailable
-            ? current.fromAccountNumber
-            : firstAccountNumber,
-          toAccountNumber: toAccountStillAvailable
-            ? current.toAccountNumber
-            : nextBeneficiaryAccounts[0]?.accountNumber || "",
-        };
-      });
-      setOwnFormData((current) => ({
-        ...current,
-        fromAccountNumber:
-          current.fromAccountNumber &&
-          userAccounts.some((account) => account.accountNumber === current.fromAccountNumber)
-            ? current.fromAccountNumber
-            : firstAccountNumber,
-        toAccountNumber:
-          current.toAccountNumber &&
-          userAccounts.some((account) => account.accountNumber === current.toAccountNumber)
-            ? current.toAccountNumber
-            :
-          userAccounts.find((account) => account.accountNumber !== userAccounts[0]?.accountNumber)
-            ?.accountNumber ||
-          "",
-      }));
+      setBeneficiaries(data.beneficiaries || []);
     });
-  }, [firstAccountNumber, userAccounts]);
+  }, []);
 
-  const selectedBeneficiary = beneficiaries.find(
-    (beneficiary) => String(beneficiary.id) === formData.beneficiaryId
-  );
-  const selectedFromAccount = userAccounts.find(
-    (account) => account.accountNumber === formData.fromAccountNumber
-  );
-  const selectedOwnFromAccount = userAccounts.find(
-    (account) => account.accountNumber === ownFormData.fromAccountNumber
-  );
-  const selectedOwnToAccount = userAccounts.find(
-    (account) => account.accountNumber === ownFormData.toAccountNumber
-  );
-  const selectedTransferLimit = Number(selectedFromAccount?.transferLimit || 0);
-  const ownTransferAmount = Number(ownFormData.amount || 0);
-  const beneficiaryAccounts = selectedBeneficiary?.accounts?.length
+  const selectedBeneficiary =
+    beneficiaries.find(
+      (beneficiary) => String(beneficiary.id) === formData.beneficiaryId
+    ) || beneficiaries[0];
+  const selectedBeneficiaryAccounts = selectedBeneficiary?.accounts?.length
     ? selectedBeneficiary.accounts
     : [{ accountNumber: selectedBeneficiary?.account, accountType: selectedBeneficiary?.accountType }].filter(
         (account) => account.accountNumber
       );
+  const effectiveFormData = {
+    ...formData,
+    beneficiaryId: String(selectedBeneficiary?.id ?? ""),
+    fromAccountNumber: userAccounts.some(
+      (account) => account.accountNumber === formData.fromAccountNumber
+    )
+      ? formData.fromAccountNumber
+      : firstAccountNumber,
+    toAccountNumber: selectedBeneficiaryAccounts.some(
+      (account) => account.accountNumber === formData.toAccountNumber
+    )
+      ? formData.toAccountNumber
+      : selectedBeneficiaryAccounts[0]?.accountNumber || "",
+  };
+  const effectiveOwnFormData = {
+    ...ownFormData,
+    fromAccountNumber: userAccounts.some(
+      (account) => account.accountNumber === ownFormData.fromAccountNumber
+    )
+      ? ownFormData.fromAccountNumber
+      : firstAccountNumber,
+    toAccountNumber: userAccounts.some(
+      (account) => account.accountNumber === ownFormData.toAccountNumber
+    )
+      ? ownFormData.toAccountNumber
+      : userAccounts.find(
+          (account) => account.accountNumber !== firstAccountNumber
+        )?.accountNumber || "",
+  };
+  const selectedFromAccount = userAccounts.find(
+    (account) => account.accountNumber === effectiveFormData.fromAccountNumber
+  );
+  const selectedOwnFromAccount = userAccounts.find(
+    (account) => account.accountNumber === effectiveOwnFormData.fromAccountNumber
+  );
+  const selectedOwnToAccount = userAccounts.find(
+    (account) => account.accountNumber === effectiveOwnFormData.toAccountNumber
+  );
+  const selectedTransferLimit = Number(selectedFromAccount?.transferLimit || 0);
+  const ownTransferAmount = Number(ownFormData.amount || 0);
+  const beneficiaryAccounts = selectedBeneficiaryAccounts;
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -172,8 +148,8 @@ const TransferFunds = () => {
 
     if (
       !selectedBeneficiary ||
-      !formData.fromAccountNumber ||
-      !formData.toAccountNumber ||
+      !effectiveFormData.fromAccountNumber ||
+      !effectiveFormData.toAccountNumber ||
       !formData.amount
     ) {
       toast.warning("Select a beneficiary, source account, destination account, and amount.");
@@ -181,7 +157,7 @@ const TransferFunds = () => {
     }
 
     try {
-      const { data } = await api.post("/transfers", formData);
+      const { data } = await api.post("/transfers", effectiveFormData);
       const isPendingApproval = data.transaction?.status === "pending" || data.approval;
 
       const successMessage = isPendingApproval
@@ -191,13 +167,12 @@ const TransferFunds = () => {
       toast[isPendingApproval ? "info" : "success"](successMessage);
       if (!isPendingApproval) {
         const nextUser = {
-          ...profileUser,
+          ...user,
           account: data.account,
           accounts: data.accounts,
-          totalTransfers: (profileUser?.totalTransfers || 0) + 1,
+          totalTransfers: (user?.totalTransfers || 0) + 1,
         };
 
-        setProfileUser(nextUser);
         setSessionUser(nextUser);
       }
       setFormData((current) => ({ ...current, amount: "", remarks: "" }));
@@ -221,8 +196,8 @@ const TransferFunds = () => {
     }
 
     if (
-      !ownFormData.fromAccountNumber ||
-      !ownFormData.toAccountNumber ||
+      !effectiveOwnFormData.fromAccountNumber ||
+      !effectiveOwnFormData.toAccountNumber ||
       !ownFormData.amount
     ) {
       const errorMessage = "Select both accounts and enter an amount.";
@@ -231,7 +206,7 @@ const TransferFunds = () => {
       return;
     }
 
-    if (ownFormData.fromAccountNumber === ownFormData.toAccountNumber) {
+    if (effectiveOwnFormData.fromAccountNumber === effectiveOwnFormData.toAccountNumber) {
       const errorMessage = "From and to accounts cannot be the same.";
       setError(errorMessage);
       toast.warning(errorMessage);
@@ -253,19 +228,18 @@ const TransferFunds = () => {
     }
 
     try {
-      const { data } = await api.post("/transfers/own-account", ownFormData);
+      const { data } = await api.post("/transfers/own-account", effectiveOwnFormData);
 
       const successMessage = `${formatCurrency(ownFormData.amount)} moved from ${selectedOwnFromAccount?.accountType || "account"} to ${selectedOwnToAccount?.accountType || "account"}.`;
       setMessage(successMessage);
       toast.success(successMessage);
       const nextUser = {
-        ...profileUser,
+        ...user,
         account: data.account,
         accounts: data.accounts,
-        totalTransfers: (profileUser?.totalTransfers || 0) + 1,
+        totalTransfers: (user?.totalTransfers || 0) + 1,
       };
 
-      setProfileUser(nextUser);
       setSessionUser(nextUser);
       setOwnFormData((current) => ({ ...current, amount: "", remarks: "" }));
     } catch (transferError) {
@@ -371,7 +345,7 @@ const TransferFunds = () => {
           From Account
           <select
             name="fromAccountNumber"
-            value={formData.fromAccountNumber}
+            value={effectiveFormData.fromAccountNumber}
             onChange={handleChange}
             className="input-field"
           >
@@ -396,7 +370,7 @@ const TransferFunds = () => {
           Beneficiary
           <select
             name="beneficiaryId"
-            value={formData.beneficiaryId}
+            value={effectiveFormData.beneficiaryId}
             onChange={handleChange}
             className="input-field"
             disabled={beneficiaries.length === 0}
@@ -416,7 +390,7 @@ const TransferFunds = () => {
           Beneficiary Account
           <select
             name="toAccountNumber"
-            value={formData.toAccountNumber}
+            value={effectiveFormData.toAccountNumber}
             onChange={handleChange}
             className="input-field"
             disabled={beneficiaryAccounts.length === 0}
@@ -476,7 +450,7 @@ const TransferFunds = () => {
                 From Account
                 <select
                   name="fromAccountNumber"
-                  value={ownFormData.fromAccountNumber}
+                  value={effectiveOwnFormData.fromAccountNumber}
                   onChange={handleOwnChange}
                   className="input-field"
                   disabled={userAccounts.length < 2}
@@ -494,13 +468,13 @@ const TransferFunds = () => {
                 To Account
                 <select
                   name="toAccountNumber"
-                  value={ownFormData.toAccountNumber}
+                  value={effectiveOwnFormData.toAccountNumber}
                   onChange={handleOwnChange}
                   className="input-field"
                   disabled={userAccounts.length < 2}
                 >
                   {userAccounts
-                    .filter((account) => account.accountNumber !== ownFormData.fromAccountNumber)
+                    .filter((account) => account.accountNumber !== effectiveOwnFormData.fromAccountNumber)
                     .map((account) => (
                       <option key={account.accountNumber} value={account.accountNumber}>
                         {account.accountType} - {maskAccountNumber(account.accountNumber)} -{" "}

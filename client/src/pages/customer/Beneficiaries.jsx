@@ -4,7 +4,7 @@ import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
-import { useToast } from "../../components/ui/ToastContext";
+import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { BANK_NAME, maskAccountNumber } from "../../data/mockData";
 
@@ -26,7 +26,7 @@ const Beneficiaries = () => {
         setMessage("Unable to load beneficiaries.");
         toast.error("Unable to load beneficiaries.");
       });
-  }, []);
+  }, [toast]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;

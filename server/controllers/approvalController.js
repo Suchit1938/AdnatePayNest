@@ -5,9 +5,36 @@ const BankAccount = require('../models/BankAccount');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser } = require('../utils/customerAccounts');
+const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
+const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
+const sendApprovalDecisionEmail = async ({ customer, approval, transaction, status, rejectionReason, managerName }) => {
+  if (!customer?.email) return null;
+
+  const approved = status === 'approved';
+  const subject = approved ? 'Transfer approved and completed' : 'Transfer rejected';
+  const decisionLine = approved
+    ? `Your transfer of ${formatMoney(transaction.amount)} has been approved and completed.`
+    : `Your transfer of ${formatMoney(transaction.amount)} was rejected.`;
+  const reasonLine = !approved && rejectionReason ? `Reason: ${rejectionReason}` : '';
+  const lines = [
+    `Hello ${customer.name},`,
+    decisionLine,
+    `Approval ID: ${approval.requestId}`,
+    `Transaction ID: ${transaction.transactionId}`,
+    `Reviewed by: ${managerName}`,
+    reasonLine,
+  ].filter(Boolean);
+
+  return sendEmail({
+    to: customer.email,
+    subject,
+    text: [...lines, '', 'Regards,', 'Adnate PayNest'].join('\n'),
+    html: `${lines.map((line) => `<p>${line}</p>`).join('')}<p>Regards,<br />Adnate PayNest</p>`,
+  });
+};
 const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
 const firstDefined = (...values) =>
   values.find((value) => value !== undefined && value !== null);
@@ -71,6 +98,7 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
     transferLimit: bankAccount.transferLimit || 0,
     overdraftLimit: firstDefined(bankAccount.odLimit, user.account?.overdraftLimit, 0),
     overdraftUsed: firstDefined(bankAccount.odUsed, 0),
+    odStartedAt: bankAccount.odStartedAt || null,
     odCountThisMonth: bankAccount.odCountThisMonth || 0,
     odBlocked: bankAccount.odBlocked || false,
   };
@@ -117,6 +145,10 @@ const executePendingTransaction = async (transaction, session) => {
 
   if (!sender || !receiver || receiver.role !== 'customer') {
     throw new Error('Transfer participants could not be found');
+  }
+
+  if (receiver.status !== 'active') {
+    throw new Error('Beneficiary is inactive and cannot receive new transfers');
   }
 
   await Promise.all([
@@ -181,16 +213,20 @@ const executePendingTransaction = async (transaction, session) => {
 
   senderBankAccount.walletBalance = Math.max(0, currentBalance - transferAmount);
   senderBankAccount.availableBalance = senderBankAccount.walletBalance;
-  senderBankAccount.odLimit = overdraftLimit;
-  senderBankAccount.odUsed = nextOverdraftUsed;
-  senderBankAccounts.forEach((account) => {
-    account.odUsed = nextOverdraftUsed;
-  });
+    senderBankAccount.odLimit = overdraftLimit;
+    senderBankAccount.odUsed = nextOverdraftUsed;
+    senderBankAccounts.forEach((account) => {
+      account.odUsed = nextOverdraftUsed;
+    });
 
-  if (overdraftNeeded > 0) {
-    senderBankAccount.odCountThisMonth = toWholeRupees(senderBankAccount.odCountThisMonth) + 1;
-    senderBankAccount.odCountMonthKey = getCurrentMonthKey();
-    senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= 3;
+    if (overdraftNeeded > 0) {
+      const odStartedAt = senderBankAccount.odStartedAt || new Date();
+      senderBankAccounts.forEach((account) => {
+        account.odStartedAt = account.odStartedAt || odStartedAt;
+      });
+      senderBankAccount.odCountThisMonth = toWholeRupees(senderBankAccount.odCountThisMonth) + 1;
+      senderBankAccount.odCountMonthKey = getCurrentMonthKey();
+      senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= 3;
   }
 
   receiverBankAccount.walletBalance =
@@ -316,14 +352,13 @@ const updateApproval = async (req, res) => {
       throw new Error('Pending transaction not found for this approval');
     }
 
-    let customer = null;
+    let customer = await User.findById(approval.customer).session(session);
 
     if (status === 'approved') {
       await executePendingTransaction(transaction, session);
     } else {
       transaction.status = 'failed';
       await transaction.save({ session });
-      customer = await User.findById(approval.customer).session(session);
       if (customer) {
         customer.pendingRequests = Math.max(0, toWholeRupees(customer.pendingRequests) - 1);
         await customer.save({ session });
@@ -381,6 +416,15 @@ const updateApproval = async (req, res) => {
     await approval.save({ session });
 
     await session.commitTransaction();
+
+    await sendApprovalDecisionEmail({
+      customer,
+      approval,
+      transaction,
+      status,
+      rejectionReason,
+      managerName: req.user.name,
+    });
 
     const responseApproval = await Approval.findById(approval._id)
       .populate('customer', 'name account')

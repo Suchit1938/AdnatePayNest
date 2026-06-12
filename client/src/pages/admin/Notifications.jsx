@@ -3,8 +3,8 @@ import {
   Bell,
   CheckCircle2,
   Clock3,
+  Filter,
   ShieldCheck,
-  UserPlus,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -28,7 +28,7 @@ const iconByAction = {
   "approval.created": AlertTriangle,
   "approval.approved": ShieldCheck,
   "approval.rejected": AlertTriangle,
-  "customer.created": UserPlus,
+  "customer.created": Bell,
   "overdraft.third_attempt": Clock3,
 };
 
@@ -47,8 +47,17 @@ const actionLabels = {
   "overdraft.third_attempt": "Overdraft",
 };
 
+const priorityLabels = {
+  danger: "Critical",
+  warning: "Warning",
+  success: "Completed",
+  info: "Information",
+};
+
 const AdminNotifications = () => {
   const [notifications, setNotifications] = useState([]);
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilterDraft, setTypeFilterDraft] = useState("all");
 
   useEffect(() => {
     api
@@ -68,13 +77,27 @@ const AdminNotifications = () => {
       managerDecisions: notifications.filter((notification) =>
         ["approval.approved", "approval.rejected"].includes(notification.action)
       ).length,
-      newCustomers: notifications.filter(
-        (notification) => notification.action === "customer.created"
+      odAlerts: notifications.filter(
+        (notification) => notification.action === "overdraft.third_attempt"
       ).length,
     }),
     [notifications]
   );
-  const notificationPagination = usePaginatedRows(notifications);
+  const typeFilterOptions = useMemo(
+    () => [...new Set(notifications.map((notification) => notification.type).filter(Boolean))],
+    [notifications]
+  );
+  const filteredNotifications = useMemo(
+    () =>
+      notifications.filter((notification) => {
+        if (typeFilter !== "all" && notification.type !== typeFilter) return false;
+
+        return true;
+      }),
+    [notifications, typeFilter]
+  );
+  const notificationPagination = usePaginatedRows(filteredNotifications);
+  const applyEventFilter = () => setTypeFilter(typeFilterDraft);
 
   return (
     <DashboardLayout>
@@ -82,23 +105,30 @@ const AdminNotifications = () => {
         <PageHeader
           eyebrow="Admin / Notifications"
           title="Notifications"
-          subtitle="Track OD escalations, manager decisions, and customer registration events."
+          subtitle="Track overdraft escalations, approval requests, and manager decisions."
         />
 
         <div className="stat-grid-4">
           <StatsCard
-            title="Total Alerts"
+            title="System Events"
             value={summary.total}
             icon={Bell}
             accent="bg-blue-500"
             iconTone="bg-blue-50 text-blue-600"
           />
           <StatsCard
-            title="Escalations"
+            title="Action Required"
             value={summary.escalations}
             icon={AlertTriangle}
             accent="bg-amber-500"
             iconTone="bg-amber-50 text-amber-600"
+          />
+          <StatsCard
+            title="Overdraft Risk Alerts"
+            value={summary.odAlerts}
+            icon={Clock3}
+            accent="bg-red-500"
+            iconTone="bg-red-50 text-red-600"
           />
           <StatsCard
             title="Manager Decisions"
@@ -106,13 +136,6 @@ const AdminNotifications = () => {
             icon={ShieldCheck}
             accent="bg-emerald-500"
             iconTone="bg-emerald-50 text-emerald-600"
-          />
-          <StatsCard
-            title="New Customers"
-            value={summary.newCustomers}
-            icon={UserPlus}
-            accent="bg-violet-500"
-            iconTone="bg-violet-50 text-violet-600"
           />
         </div>
 
@@ -123,17 +146,45 @@ const AdminNotifications = () => {
                 <Bell size={22} />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Admin Alert Stream</h2>
+                <h2 className="text-xl font-bold text-slate-950">Admin Event Stream</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Recent notification events from transfer approvals, overdraft monitoring, and user onboarding.
+                  Recent notification events from transfer approvals, overdraft monitoring, and manager actions.
                 </p>
               </div>
             </div>
           </div>
 
           <div className="p-5 sm:p-6">
+            <div className="mb-5 flex flex-wrap items-end gap-3">
+              <label className="w-full sm:w-72">
+                <span className="text-sm font-semibold text-slate-700">Priority</span>
+                <select
+                  value={typeFilterDraft}
+                  onChange={(event) => setTypeFilterDraft(event.target.value)}
+                  className="input-field mt-2 bg-white"
+                >
+                  <option value="all">All priorities</option>
+                  {typeFilterOptions.map((type) => (
+                    <option key={type} value={type}>
+                      {priorityLabels[type] || type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={applyEventFilter}
+                className="btn-primary px-4 py-2"
+              >
+                <Filter size={16} />
+                Apply Filter
+              </button>
+            </div>
+
             {notifications.length === 0 ? (
-              <EmptyState message="No admin notifications yet. OD escalations, manager decisions, and new customer registrations will appear here." />
+              <EmptyState message="No admin notifications yet. Overdraft escalations, approval requests, and manager decisions will appear here." />
+            ) : filteredNotifications.length === 0 ? (
+              <EmptyState message="No system events match the selected filters." />
             ) : (
               <div className="space-y-4">
                 {notificationPagination.pageRows.map((notification) => {

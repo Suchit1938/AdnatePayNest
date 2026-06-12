@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 export const TABLE_PAGE_SIZE = 7;
 
@@ -6,25 +6,27 @@ const usePaginatedRows = (rows = [], pageSize = TABLE_PAGE_SIZE) => {
   const [page, setPage] = useState(1);
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-
-  useEffect(() => {
-    setPage(1);
-  }, [pageSize, totalItems]);
-
-  useEffect(() => {
-    setPage((currentPage) => Math.min(currentPage, totalPages));
-  }, [totalPages]);
+  const safePage = Math.min(page, totalPages);
 
   const pageRows = useMemo(() => {
-    const start = (page - 1) * pageSize;
+    const start = (safePage - 1) * pageSize;
     return rows.slice(start, start + pageSize);
-  }, [page, pageSize, rows]);
+  }, [pageSize, rows, safePage]);
+
+  const setSafePage = (nextPage) => {
+    setPage((currentPage) => {
+      const resolvedPage =
+        typeof nextPage === "function" ? nextPage(currentPage) : nextPage;
+
+      return Math.min(Math.max(1, resolvedPage), totalPages);
+    });
+  };
 
   return {
-    page,
+    page: safePage,
     pageRows,
     pageSize,
-    setPage,
+    setPage: setSafePage,
     totalItems,
     totalPages,
   };

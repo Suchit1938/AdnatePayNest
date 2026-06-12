@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import api from "../api/axios";
 import { AuthContext } from "./AuthContextValue";
@@ -28,26 +28,31 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem("adnate-token");
   }, [token]);
 
-  const login = async (email, password) => {
+  const login = useCallback(async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
 
     setToken(data.token);
     setUser(data.user);
 
     return data.user;
-  };
+  }, []);
 
-  const setSessionUser = (nextUser) => {
+  const setSessionUser = useCallback((nextUser) => {
     setUser(nextUser);
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setUser(null);
     setToken(null);
-  };
+  }, []);
+
+  const authValue = useMemo(
+    () => ({ user, token, login, logout, setSessionUser }),
+    [user, token, login, logout, setSessionUser]
+  );
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, setSessionUser }}>
+    <AuthContext.Provider value={authValue}>
       {children}
     </AuthContext.Provider>
   );

@@ -5,7 +5,7 @@ import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import SectionCard from "../../components/ui/SectionCard";
-import { useToast } from "../../components/ui/ToastContext";
+import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { useAuth } from "../../context/useAuth";
 import { BANK_NAME } from "../../utils/format";

@@ -45,6 +45,10 @@ const accountSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    odStartedAt: {
+      type: Date,
+      default: null,
+    },
     odCountThisMonth: {
       type: Number,
       default: 0,

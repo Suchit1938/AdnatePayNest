@@ -91,7 +91,7 @@ const activityActionLabels = {
   "customer.created": "registered as a customer",
   "transfer.completed": "completed a beneficiary transfer",
   "transfer.own_account.completed": "completed an own-account transfer",
-  "overdraft.third_attempt": "hit the third overdraft use this month",
+  "overdraft.third_attempt": "reached the monthly overdraft attempt limit",
 };
 
 const extractCustomerFromMessage = (message) => {
@@ -338,10 +338,6 @@ function AdminDashboard() {
     );
   }, 0);
   const totalCustomers = dashboardUsers.customers.length;
-  const totalManagers = dashboardUsers.managers.length;
-  const pendingManagerApprovals = dashboardUsers.managers.filter(
-    (manager) => manager.status !== "active"
-  ).length;
   const transactionsToday = transactions.filter((transaction) =>
     isToday(transaction.date)
   );
@@ -361,12 +357,12 @@ function AdminDashboard() {
       .filter((transaction) => transaction.status === row.sourceValue)
       .reduce((sum, transaction) => sum + toNumber(transaction.amount), 0),
   }));
-  const tierCustomerRows = tiers.map((tier, index) => ({
+  const tierCustomerRows = tiers.map((tier) => ({
     label: tier.label,
     value: tier.customerCount,
     color: getTierTone(tier.key).dot,
   }));
-  const overdraftByTierRows = tiers.map((tier, index) => {
+  const overdraftByTierRows = tiers.map((tier) => {
     const tierCustomers = dashboardUsers.customers.filter(
       (customer) => customer.classification === tier.key
     );
@@ -423,24 +419,6 @@ function AdminDashboard() {
 
         <div className="stat-grid">
           <StatsCard
-            title="Total Managers"
-            value={totalManagers}
-            icon={Users}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-            badge={
-              pendingManagerApprovals > 0
-                ? {
-                    text: `${pendingManagerApprovals} pending approval${pendingManagerApprovals === 1 ? "" : "s"}`,
-                    tone: "warning",
-                  }
-                : {
-                    text: "All managers active",
-                    tone: "success",
-                  }
-            }
-          />
-          <StatsCard
             title="Total Customers"
             value={totalCustomers}
             icon={BadgeCheck}
@@ -484,7 +462,7 @@ function AdminDashboard() {
               icon: Clock3,
               text:
                 pendingApprovals.length > 0
-                  ? "Requires action"
+                  ? "Needs review"
                   : "Queue clear",
             }}
           />
@@ -501,7 +479,7 @@ function AdminDashboard() {
             </div>
             <HorizontalBarChart
               rows={transactionStatusRows}
-              valueFormatter={(value) => `${value} txn`}
+              valueFormatter={(value) => `${value} transfers`}
               detailFormatter={(row) => `${formatCompactCurrency(row.amount)} total value`}
             />
           </div>
@@ -622,7 +600,6 @@ function AdminDashboard() {
           </div>
           <TablePagination {...recentLogPagination} />
         </section>
-
       </PageContent>
     </DashboardLayout>
   );

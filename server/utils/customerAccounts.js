@@ -57,6 +57,7 @@ const buildAccountSnapshot = (user, bankAccount) => {
     withdrawalLimit: toWholeRupees(bankAccount.withdrawalLimit),
     overdraftLimit: toWholeRupees(firstDefined(bankAccount.odLimit, existingAccount.overdraftLimit)),
     overdraftUsed: toWholeRupees(firstDefined(bankAccount.odUsed, existingAccount.overdraftUsed)),
+    odStartedAt: bankAccount.odStartedAt || existingAccount.odStartedAt || null,
     odCountThisMonth: toWholeRupees(bankAccount.odCountThisMonth),
     odBlocked: bankAccount.odBlocked || false,
     accountStatus: bankAccount.accountStatus,

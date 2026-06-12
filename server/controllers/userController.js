@@ -16,6 +16,8 @@ const { writeSystemLog } = require('../utils/systemLog');
 const DEFAULT_BANK_IFSC = process.env.BANK_IFSC || 'ADNT0281237';
 const DEFAULT_BRANCH_NAME = process.env.BANK_BRANCH_NAME || 'Jaipur';
 const DEFAULT_ASSIGNED_REGION = process.env.BANK_REGION || 'Jaipur';
+const GRACE_PERIOD_DAYS = 3;
+const REVIEW_CYCLE = 'Monthly';
 
 const getCustomers = async (req, res) => {
   const customers = await User.find({ role: 'customer' }).sort({ createdAt: -1 });
@@ -162,6 +164,14 @@ const escapeHtml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+const getAutoPassword = (fullName, phone) => {
+  const firstName = String(fullName || '').trim().split(/\s+/)[0] || '';
+  const namePart = firstName.replace(/[^a-z]/gi, '').slice(0, 5).toUpperCase();
+  const phonePart = String(phone || '').replace(/\D/g, '').slice(-5);
+
+  return namePart && phonePart.length === 5 ? `${namePart}@${phonePart}` : '';
+};
+
 const formatCurrency = (value) =>
   `Rs. ${Number(value || 0).toLocaleString('en-IN', {
     maximumFractionDigits: 0,
@@ -174,26 +184,18 @@ const buildTierDetails = (tier) => {
     ['Daily Transaction Limit', formatCurrency(tier.dailyLimit)],
     ['Monthly Transaction Limit', formatCurrency(tier.monthlyLimit)],
     ['Maximum Overdraft Limit', formatCurrency(tier.maxODLimit)],
+    ['Overdraft Due Rule', 'Clear used overdraft before month-end'],
+    ['Interest Charging Rule', 'Minimum 1 day interest on any overdraft usage'],
+    ['Grace Window', `${GRACE_PERIOD_DAYS} days after month-end`],
+    ['Review Cycle', REVIEW_CYCLE],
   ];
 
-  if (Number(tier.payoffDays || 0) > 0) {
-    details.push(['Overdraft Payoff Period', `${tier.payoffDays} days`]);
-  }
-
   if (Number(tier.penaltyAmount || 0) > 0) {
-    details.push(['Late Payment Penalty', formatCurrency(tier.penaltyAmount)]);
-  }
-
-  if (tier.reviewCycle) {
-    details.push(['Review Cycle', tier.reviewCycle]);
+    details.push(['Penalty After Grace', formatCurrency(tier.penaltyAmount)]);
   }
 
   if (tier.lateFeeRate) {
-    details.push(['Late Fee Rate', tier.lateFeeRate]);
-  }
-
-  if (tier.settlementWindow) {
-    details.push(['Settlement Window', tier.settlementWindow]);
+    details.push(['Overdraft Interest Rate', tier.lateFeeRate]);
   }
 
   if (tier.eligibility) {
@@ -404,7 +406,6 @@ const createUser = async (req, res) => {
     name,
     fullName,
     email,
-    password,
     role = 'customer',
     status = 'active',
     phone,
@@ -433,6 +434,7 @@ const createUser = async (req, res) => {
   const normalizedPan = panNumber?.trim().toUpperCase();
   const normalizedAadhaar = aadhaarNumber?.trim();
   const normalizedIfsc = account?.ifsc?.trim().toUpperCase();
+  const generatedPassword = getAutoPassword(displayName, normalizedPhone);
 
   if (!validationPatterns.name.test(displayName.trim())) {
     return res.status(400).json({
@@ -452,8 +454,10 @@ const createUser = async (req, res) => {
     });
   }
 
-  if (!password || password.length < 6) {
-    return res.status(400).json({ message: 'Password must be at least 6 characters' });
+  if (!generatedPassword) {
+    return res.status(400).json({
+      message: 'A valid first name and 10 digit mobile number are required to generate a password',
+    });
   }
 
   const existingUser = await User.findOne({ email: normalizedEmail });
@@ -476,37 +480,51 @@ const createUser = async (req, res) => {
     }
   }
 
+  if (!panNumber || !aadhaarNumber || !address) {
+    return res.status(400).json({
+      message: 'PAN, Aadhaar, and address are required',
+    });
+  }
+
+  if (!validationPatterns.panNumber.test(normalizedPan)) {
+    return res.status(400).json({
+      message: 'PAN number must be in valid format, like ABCDE1234F',
+    });
+  }
+
+  if (!validationPatterns.aadhaarNumber.test(normalizedAadhaar)) {
+    return res.status(400).json({
+      message: 'Aadhaar number must be 12 digits',
+    });
+  }
+
+  const duplicateKycUser = await User.findOne({
+    $or: [
+      { panNumber: normalizedPan },
+      { aadhaarNumber: normalizedAadhaar },
+    ],
+  });
+
+  if (duplicateKycUser) {
+    return res.status(409).json({
+      message: 'PAN or Aadhaar is already linked to an app user',
+    });
+  }
+
   if (isCustomer) {
     if (
       !phone ||
-      !panNumber ||
-      !aadhaarNumber ||
       !classification ||
       !accountType ||
       !dob ||
-      !address ||
       account?.balance === undefined ||
       account?.balance === null ||
       String(account.balance).trim() === '' ||
       !account?.ifsc ||
-      !account?.bankName ||
-      !account?.accountStatus
+      !account?.bankName
     ) {
       return res.status(400).json({
-        message: 'Phone, PAN, Aadhaar, tier, account type, DOB, address, wallet balance, IFSC, bank name, and account status are required',
-      });
-    }
-
-
-    if (!validationPatterns.panNumber.test(normalizedPan)) {
-      return res.status(400).json({
-        message: 'PAN number must be in valid format, like ABCDE1234F',
-      });
-    }
-
-    if (!validationPatterns.aadhaarNumber.test(normalizedAadhaar)) {
-      return res.status(400).json({
-        message: 'Aadhaar number must be 12 digits',
+        message: 'Phone, PAN, Aadhaar, tier, account type, DOB, address, wallet balance, IFSC, and bank name are required',
       });
     }
 
@@ -528,19 +546,6 @@ const createUser = async (req, res) => {
     if (!tier) {
       return res.status(404).json({
         message: 'Selected customer tier was not found',
-      });
-    }
-
-    const duplicateCustomer = await User.findOne({
-      $or: [
-        { panNumber: panNumber.toUpperCase().trim() },
-        { aadhaarNumber: normalizedAadhaar },
-      ],
-    });
-
-    if (duplicateCustomer) {
-      return res.status(409).json({
-        message: 'PAN or Aadhaar is already linked to an app user',
       });
     }
 
@@ -574,16 +579,16 @@ const createUser = async (req, res) => {
   const user = await User.create({
     name: displayName,
     email: normalizedEmail,
-    password: await bcrypt.hash(password, 10),
+    password: await bcrypt.hash(generatedPassword, 10),
     role,
     status,
     phone: normalizedPhone,
     accountType,
-    panNumber: isCustomer ? normalizedPan : undefined,
-    aadhaarNumber: isCustomer ? normalizedAadhaar : undefined,
+    panNumber: normalizedPan,
+    aadhaarNumber: normalizedAadhaar,
     classification: isCustomer ? classification : undefined,
     dob: isCustomer ? dob : undefined,
-    address: isCustomer ? address : undefined,
+    address,
     isVerified: false,
     lastLogin: null,
     customerId: isCustomer ? generatedCustomerId : undefined,

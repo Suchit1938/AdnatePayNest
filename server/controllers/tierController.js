@@ -1,7 +1,12 @@
 const BankAccount = require('../models/BankAccount');
 const Tier = require('../models/Tier');
 const User = require('../models/User');
+const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
+
+const GRACE_PERIOD_DAYS = 3;
+const REVIEW_CYCLE = 'Monthly';
+const OVERDRAFT_DUE_RULE = 'Due before month-end';
 
 const tierFieldLabels = {
   label: 'Classification name',
@@ -10,11 +15,9 @@ const tierFieldLabels = {
   monthlyLimit: 'Monthly limit',
   maxODLimit: 'Overdraft limit',
   minBalance: 'Minimum balance',
-  payoffDays: 'Payoff days',
   penaltyAmount: 'Penalty amount',
-  reviewCycle: 'Review cycle',
-  lateFeeRate: 'Late fee rate',
-  settlementWindow: 'Settlement window',
+  lateFeeRate: 'Interest rate',
+  interestRate: 'Interest rate',
   eligibility: 'Eligibility',
   reviewNotes: 'Review notes',
 };
@@ -30,7 +33,6 @@ const moneyFields = new Set([
 
 const numberFields = new Set([
   ...moneyFields,
-  'payoffDays',
 ]);
 
 const formatTierValue = (field, value) => {
@@ -38,13 +40,11 @@ const formatTierValue = (field, value) => {
     return `INR ${Number(value || 0).toLocaleString('en-IN')}`;
   }
 
-  if (field === 'payoffDays') {
-    const days = Number(value || 0);
-    return `${days} day${days === 1 ? '' : 's'}`;
-  }
-
   return String(value || '').trim() || 'not set';
 };
+
+const getInterestRateValue = (payload) =>
+  payload.interestRate !== undefined ? payload.interestRate : payload.lateFeeRate;
 
 const getTierPolicyChanges = (existingTier, update) =>
   Object.entries(update)
@@ -70,6 +70,87 @@ const summarizeTierPolicyChanges = (changes) =>
     .map((change) => `${change.label} changed from ${change.from} to ${change.to}`)
     .join('; ');
 
+const escapeHtml = (value) =>
+  String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+const buildTierPolicyEmail = ({ customer, tier, changes, updatedByName }) => {
+  const changeLines = changes
+    .map((change) => `- ${change.label}: ${change.from} -> ${change.to}`)
+    .join('\n');
+  const changeRows = changes
+    .map(
+      (change) => `
+        <tr>
+          <td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;">${escapeHtml(change.label)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(change.from)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;background:#ecfdf5;font-weight:600;">${escapeHtml(change.to)}</td>
+        </tr>`
+    )
+    .join('');
+
+  return {
+    subject: `${tier.label} tier policy updated`,
+    text: `Hello ${customer.name},
+
+Your ${tier.label} tier policy was updated by ${updatedByName}.
+
+Changed details:
+${changeLines}
+
+Regards,
+Adnate PayNest`,
+    html: `
+      <p>Hello ${escapeHtml(customer.name)},</p>
+      <p>Your <strong>${escapeHtml(tier.label)}</strong> tier policy was updated by ${escapeHtml(updatedByName)}.</p>
+      <p>The changed policy details are highlighted below.</p>
+      <table style="border-collapse:collapse;width:100%;max-width:720px;">
+        <thead>
+          <tr>
+            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Policy</th>
+            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Previous</th>
+            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#dcfce7;">Updated</th>
+          </tr>
+        </thead>
+        <tbody>${changeRows}</tbody>
+      </table>
+      <p>Regards,<br />Adnate PayNest</p>
+    `,
+  };
+};
+
+const sendTierPolicyEmails = async ({ customers, tier, changes, updatedByName }) => {
+  const recipients = customers.filter((customer) => customer.email);
+  const results = await Promise.all(
+    recipients.map(async (customer) => {
+      const email = buildTierPolicyEmail({ customer, tier, changes, updatedByName });
+      const delivery = await sendEmail({
+        to: customer.email,
+        subject: email.subject,
+        text: email.text,
+        html: email.html,
+      });
+
+      return {
+        customerId: customer.customerId,
+        email: customer.email,
+        sent: delivery.sent,
+        message: delivery.message,
+      };
+    })
+  );
+
+  return {
+    totalRecipients: recipients.length,
+    sent: results.filter((result) => result.sent).length,
+    failed: results.filter((result) => !result.sent).length,
+  };
+};
+
 const serializeTier = (tier, stats = {}) => ({
   id: tier._id,
   key: tier.name,
@@ -80,11 +161,12 @@ const serializeTier = (tier, stats = {}) => ({
   monthlyLimit: tier.monthlyLimit,
   maxODLimit: tier.maxODLimit,
   minBalance: tier.minBalance,
-  payoffDays: tier.payoffDays,
   penaltyAmount: tier.penaltyAmount,
-  reviewCycle: tier.reviewCycle,
+  interestRate: tier.lateFeeRate,
   lateFeeRate: tier.lateFeeRate,
-  settlementWindow: tier.settlementWindow,
+  gracePeriodDays: GRACE_PERIOD_DAYS,
+  reviewCycle: REVIEW_CYCLE,
+  overdraftDueRule: OVERDRAFT_DUE_RULE,
   eligibility: tier.eligibility,
   reviewNotes: tier.reviewNotes,
   customerCount: stats.customerCount || 0,
@@ -109,16 +191,11 @@ const validateTierPayload = (payload, { partial = false } = {}) => {
     'monthlyLimit',
     'maxODLimit',
     'minBalance',
-    'payoffDays',
     'penaltyAmount',
   ];
   const textFields = [
     'label',
-    'reviewCycle',
-    'lateFeeRate',
-    'settlementWindow',
-    'eligibility',
-    'reviewNotes',
+    'interestRate',
   ];
 
   for (const field of numericFields) {
@@ -144,10 +221,6 @@ const validateTierPayload = (payload, { partial = false } = {}) => {
     Number(payload.dailyLimit) > Number(payload.monthlyLimit)
   ) {
     return 'Daily limit cannot be greater than monthly limit';
-  }
-
-  if (payload.payoffDays !== undefined && Number(payload.payoffDays) <= 0) {
-    return 'Payoff days must be greater than 0';
   }
 
   for (const field of textFields) {
@@ -219,7 +292,7 @@ const buildTierStats = async () => {
 
 const listTiers = async (req, res) => {
   const [tiers, tierStats] = await Promise.all([
-    Tier.find().sort({ maxODLimit: 1 }),
+    Tier.find().sort({ createdAt: -1, _id: -1 }),
     buildTierStats(),
   ]);
 
@@ -233,8 +306,8 @@ const getCustomerPolicy = async (req, res) => {
   const classification = req.user?.classification;
   const tier =
     (classification && (await Tier.findOne({ name: classification }))) ||
-    (await Tier.findOne().sort({ maxODLimit: 1 }));
-  const tiers = await Tier.find().sort({ maxODLimit: 1 });
+    (await Tier.findOne().sort({ createdAt: -1, _id: -1 }));
+  const tiers = await Tier.find().sort({ createdAt: -1, _id: -1 });
 
   if (!tier) {
     return res.status(404).json({ message: 'Tier policy not found' });
@@ -249,6 +322,7 @@ const getCustomerPolicy = async (req, res) => {
 const createTier = async (req, res) => {
   const label = String(req.body.label || req.body.name || '').trim();
   const name = slugifyTierName(req.body.name || label);
+  const interestRate = getInterestRateValue(req.body);
 
   if (!label || !name) {
     return res.status(400).json({ message: 'Classification name is required' });
@@ -265,7 +339,7 @@ const createTier = async (req, res) => {
     return res.status(409).json({ message: 'Classification name already exists' });
   }
 
-  const validationMessage = validateTierPayload({ ...req.body, label });
+  const validationMessage = validateTierPayload({ ...req.body, label, interestRate });
   if (validationMessage) {
     return res.status(400).json({ message: validationMessage });
   }
@@ -278,11 +352,8 @@ const createTier = async (req, res) => {
     monthlyLimit: Number(req.body.monthlyLimit),
     maxODLimit: Number(req.body.maxODLimit),
     minBalance: Number(req.body.minBalance),
-    payoffDays: Number(req.body.payoffDays),
     penaltyAmount: Number(req.body.penaltyAmount),
-    reviewCycle: req.body.reviewCycle,
-    lateFeeRate: req.body.lateFeeRate,
-    settlementWindow: req.body.settlementWindow,
+    lateFeeRate: interestRate,
     eligibility: req.body.eligibility,
     reviewNotes: req.body.reviewNotes,
   });
@@ -322,16 +393,20 @@ const updateTier = async (req, res) => {
     'monthlyLimit',
     'maxODLimit',
     'minBalance',
-    'payoffDays',
     'penaltyAmount',
-    'reviewCycle',
+    'interestRate',
     'lateFeeRate',
-    'settlementWindow',
     'eligibility',
     'reviewNotes',
   ];
   const update = {};
-  const validationMessage = validateTierPayload(req.body, { partial: true });
+  const normalizedBody = {
+    ...req.body,
+    ...(getInterestRateValue(req.body) !== undefined
+      ? { interestRate: getInterestRateValue(req.body) }
+      : {}),
+  };
+  const validationMessage = validateTierPayload(normalizedBody, { partial: true });
 
   if (validationMessage) {
     return res.status(400).json({ message: validationMessage });
@@ -339,17 +414,29 @@ const updateTier = async (req, res) => {
 
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
-      update[field] = ['label', 'reviewCycle', 'lateFeeRate', 'settlementWindow', 'eligibility', 'reviewNotes'].includes(field)
+      const targetField = field === 'interestRate' ? 'lateFeeRate' : field;
+      update[targetField] = ['label', 'lateFeeRate', 'eligibility', 'reviewNotes'].includes(targetField)
         ? req.body[field]
         : Number(req.body[field] || 0);
     }
   }
 
   const policyChanges = getTierPolicyChanges(existingTier, update);
-  const tier = await Tier.findOneAndUpdate({ name }, update, {
-    new: true,
-    runValidators: true,
-  });
+  const tier = await Tier.findOneAndUpdate(
+    { name },
+    {
+      $set: update,
+      $unset: {
+        payoffDays: '',
+        reviewCycle: '',
+        settlementWindow: '',
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+    }
+  );
 
   await User.updateMany(
     { role: 'customer', classification: tier.name },
@@ -366,7 +453,7 @@ const updateTier = async (req, res) => {
   const tierCustomers = await User.find({
     role: 'customer',
     classification: tier.name,
-  }).select('name customerId');
+  }).select('name email customerId');
   const customerIds = tierCustomers
     .map((user) => user.customerId)
     .filter(Boolean);
@@ -417,7 +504,21 @@ const updateTier = async (req, res) => {
     );
   }
 
-  res.json({ tier: serializeTier(tier) });
+  const email =
+    policyChanges.length > 0 && tierCustomers.length > 0
+      ? await sendTierPolicyEmails({
+        customers: tierCustomers,
+        tier,
+        changes: policyChanges,
+        updatedByName: req.user?.name || 'Admin',
+      })
+      : {
+        totalRecipients: 0,
+        sent: 0,
+        failed: 0,
+      };
+
+  res.json({ tier: serializeTier(tier), email, changes: policyChanges });
 };
 
 const deleteTier = async (req, res) => {
@@ -428,12 +529,6 @@ const deleteTier = async (req, res) => {
     return res.status(404).json({ message: 'Tier not found' });
   }
 
-  const assignedCustomers = await User.find({
-    role: 'customer',
-    classification: tier.name,
-  })
-    .select('name email customerId')
-    .limit(5);
   const assignedCustomerCount = await User.countDocuments({
     role: 'customer',
     classification: tier.name,
@@ -443,7 +538,6 @@ const deleteTier = async (req, res) => {
     return res.status(409).json({
       message: `Cannot delete ${tier.label} classification because ${assignedCustomerCount} customer(s) are assigned to it.`,
       assignedCustomerCount,
-      assignedCustomers,
     });
   }
 
