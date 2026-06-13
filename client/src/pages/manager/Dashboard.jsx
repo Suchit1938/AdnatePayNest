@@ -1167,18 +1167,21 @@ function ManagerDashboard() {
           title={section === "dashboard" ? "Branch Operations" : pageTitle}
           subtitle="Monitor approvals, overdraft risk, customer activity, and branch alerts."
         >
-          <div className="stat-chip flex items-center gap-4">
-            <div className="relative">
-              <Bell size={22} className="text-slate-600" />
-              {dashboardData.stats.notificationCount > 0 && (
-                <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-1.5 text-xs font-bold text-white">
-                  {dashboardData.stats.notificationCount}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <UserCircle size={28} className="text-slate-600" />
-              <span className="font-semibold">{user?.name || "Manager"}</span>
+          <div className="stat-chip flex items-center gap-3 px-4 py-3">
+            <button
+              type="button"
+              onClick={() => navigate("/manager/notifications")}
+              className="group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+              aria-label="Open manager alerts"
+              title="Open manager alerts"
+            >
+              <Bell size={20} />
+            </button>
+            <div className="flex min-w-0 items-center gap-2">
+              <UserCircle size={28} className="shrink-0 text-slate-600" />
+              <span className="max-w-44 truncate font-semibold text-slate-950">
+                {user?.name || "Manager"}
+              </span>
             </div>
           </div>
           <button type="button" onClick={handleLogout} className="btn-danger-soft">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bell, CheckCircle2, Flag } from "lucide-react";
+import { Bell, Flag } from "lucide-react";
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
 import EmptyState from "../../components/ui/EmptyState";
@@ -63,14 +63,6 @@ const Notifications = () => {
               text: unreadCount > 0 ? `${unreadCount} open` : "All clear",
               tone: unreadCount > 0 ? "warning" : "success",
             }}
-          />
-          <StatsCard
-            title="Read"
-            value={notifications.length - unreadCount}
-            icon={CheckCircle2}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            badge={{ text: "Up to date", tone: "success" }}
           />
         </div>
 

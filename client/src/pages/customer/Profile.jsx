@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BadgeCheck, Building2, IdCard, Pencil, Phone, Save, User, X } from "lucide-react";
+import {
+  BadgeCheck,
+  Building2,
+  Eye,
+  EyeOff,
+  IdCard,
+  KeyRound,
+  Pencil,
+  Phone,
+  Save,
+  ShieldCheck,
+  User,
+  X,
+} from "lucide-react";
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
@@ -20,6 +33,19 @@ const Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("success");
+  const [passwordStep, setPasswordStep] = useState("details");
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+    otp: "",
+  });
+  const [visiblePasswords, setVisiblePasswords] = useState({
+    current: false,
+    next: false,
+    confirm: false,
+  });
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -79,6 +105,66 @@ const Profile = () => {
   const handleChange = (event) => {
     const { name, value } = event.target;
     setDraftProfile((current) => ({ ...(current || profileFromUser), [name]: value }));
+  };
+
+  const updatePasswordForm = (field, value) => {
+    setPasswordForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const togglePasswordVisibility = (field) => {
+    setVisiblePasswords((current) => ({
+      ...current,
+      [field]: !current[field],
+    }));
+  };
+
+  const sendPasswordOtp = async (event) => {
+    event.preventDefault();
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      toast.warning("New password and confirm password must match.");
+      return;
+    }
+
+    setPasswordLoading(true);
+
+    try {
+      const { data } = await api.post("/auth/password/send-otp", {
+        currentPassword: passwordForm.currentPassword,
+        newPassword: passwordForm.newPassword,
+      });
+
+      toast.success(data.message || "OTP sent to your registered email.");
+      setPasswordStep("otp");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to send OTP.");
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  const verifyPasswordOtp = async (event) => {
+    event.preventDefault();
+    setPasswordLoading(true);
+
+    try {
+      const { data } = await api.post("/auth/password/verify-otp", {
+        otp: passwordForm.otp,
+      });
+
+      toast.success(data.message || "Password changed successfully.");
+      setPasswordForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+        otp: "",
+      });
+      setPasswordStep("details");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to change password.");
+    } finally {
+      setPasswordLoading(false);
+    }
   };
 
   const saveProfile = async (event) => {
@@ -245,6 +331,139 @@ const Profile = () => {
                 Save Changes
               </button>
             )}
+          </form>
+        </SectionCard>
+
+        <SectionCard
+          title="Change Password"
+          subtitle="Verify the password change with an OTP sent to your registered email."
+          className="max-w-5xl"
+        >
+          <form
+            onSubmit={passwordStep === "details" ? sendPasswordOtp : verifyPasswordOtp}
+            className="space-y-5"
+          >
+            <section className="rounded-xl border border-bank-card-border bg-bank-surface/60 p-4">
+              <div className="mb-4 flex items-center gap-2">
+                {passwordStep === "details" ? (
+                  <KeyRound size={18} className="text-bank-eyebrow" />
+                ) : (
+                  <ShieldCheck size={18} className="text-bank-eyebrow" />
+                )}
+                <h2 className="text-base font-bold text-slate-950">
+                  {passwordStep === "details" ? "Password Details" : "OTP Verification"}
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                {passwordStep === "details" ? (
+                  <>
+                    <label className="label-field">
+                      Current Password
+                      <div className="relative">
+                        <input
+                          type={visiblePasswords.current ? "text" : "password"}
+                          value={passwordForm.currentPassword}
+                          onChange={(event) =>
+                            updatePasswordForm("currentPassword", event.target.value)
+                          }
+                          className="input-field !pr-11"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => togglePasswordVisibility("current")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label={visiblePasswords.current ? "Hide current password" : "Show current password"}
+                          title={visiblePasswords.current ? "Hide current password" : "Show current password"}
+                        >
+                          {visiblePasswords.current ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </label>
+                    <label className="label-field">
+                      New Password
+                      <div className="relative">
+                        <input
+                          type={visiblePasswords.next ? "text" : "password"}
+                          value={passwordForm.newPassword}
+                          onChange={(event) =>
+                            updatePasswordForm("newPassword", event.target.value)
+                          }
+                          className="input-field !pr-11"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => togglePasswordVisibility("next")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label={visiblePasswords.next ? "Hide new password" : "Show new password"}
+                          title={visiblePasswords.next ? "Hide new password" : "Show new password"}
+                        >
+                          {visiblePasswords.next ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </label>
+                    <label className="label-field">
+                      Confirm New Password
+                      <div className="relative">
+                        <input
+                          type={visiblePasswords.confirm ? "text" : "password"}
+                          value={passwordForm.confirmPassword}
+                          onChange={(event) =>
+                            updatePasswordForm("confirmPassword", event.target.value)
+                          }
+                          className="input-field !pr-11"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => togglePasswordVisibility("confirm")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label={visiblePasswords.confirm ? "Hide confirm password" : "Show confirm password"}
+                          title={visiblePasswords.confirm ? "Hide confirm password" : "Show confirm password"}
+                        >
+                          {visiblePasswords.confirm ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </label>
+                  </>
+                ) : (
+                  <label className="label-field">
+                    Email OTP
+                    <input
+                      value={passwordForm.otp}
+                      onChange={(event) => updatePasswordForm("otp", event.target.value)}
+                      className="input-field"
+                      maxLength={6}
+                      placeholder="6 digit OTP"
+                      required
+                    />
+                  </label>
+                )}
+              </div>
+            </section>
+
+            <div className="flex flex-wrap gap-3">
+              <button type="submit" className="btn-primary" disabled={passwordLoading}>
+                {passwordStep === "details" ? <KeyRound size={18} /> : <ShieldCheck size={18} />}
+                {passwordLoading
+                  ? "Please wait..."
+                  : passwordStep === "details"
+                    ? "Send OTP"
+                    : "Verify & Change Password"}
+              </button>
+              {passwordStep === "otp" && (
+                <button
+                  type="button"
+                  onClick={() => setPasswordStep("details")}
+                  className="btn-secondary"
+                  disabled={passwordLoading}
+                >
+                  Edit Password Details
+                </button>
+              )}
+            </div>
           </form>
         </SectionCard>
       </PageContent>

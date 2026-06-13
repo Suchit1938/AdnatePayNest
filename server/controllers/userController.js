@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 
 const User = require('../models/User');
 const BankAccount = require('../models/BankAccount');
+const Approval = require('../models/Approval');
 const Tier = require('../models/Tier');
 const { serializeUser } = require('./authController');
 const {
@@ -50,9 +51,23 @@ const getUsers = async (req, res) => {
     createdAt: -1,
   });
   const customers = users.filter((user) => user.role === 'customer');
+  const managers = users.filter((user) => user.role === 'manager');
   const bankAccounts = await BankAccount.find({
     customerId: { $in: customers.map((customer) => customer.customerId).filter(Boolean) },
   }).sort({ createdAt: 1 });
+  const pendingApprovalCounts = await Approval.aggregate([
+    {
+      $match: {
+        status: 'pending',
+        assignedManager: { $in: managers.map((manager) => manager._id) },
+      },
+    },
+    { $group: { _id: '$assignedManager', count: { $sum: 1 } } },
+  ]);
+  const pendingApprovalCountByManager = pendingApprovalCounts.reduce((map, entry) => {
+    map.set(String(entry._id), entry.count);
+    return map;
+  }, new Map());
   const accountByCustomerId = bankAccounts.reduce((map, account) => {
     if (!map.has(account.customerId)) {
       map.set(account.customerId, account);
@@ -72,7 +87,10 @@ const getUsers = async (req, res) => {
 
   res.json({
     customers: customers.map(serializeCustomer),
-    managers: users.filter((user) => user.role === 'manager').map(serializeUser),
+    managers: managers.map((manager) => ({
+      ...serializeUser(manager),
+      pendingApprovals: pendingApprovalCountByManager.get(String(manager._id)) || 0,
+    })),
   });
 };
 
@@ -249,6 +267,8 @@ const serializeSavedBeneficiary = (entry) => {
     customerId: user?.customerId,
     account: entry.accountNumber,
     accountType: entry.accountType,
+    verificationStatus: entry.verificationStatus || 'verified',
+    verifiedAt: entry.verifiedAt,
     accounts: [
       {
         accountNumber: entry.accountNumber,
@@ -256,6 +276,27 @@ const serializeSavedBeneficiary = (entry) => {
       },
     ],
   };
+};
+
+const maskName = (value) => {
+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
+
+  return parts
+    .map((part, index) => {
+      if (part.length <= 2) return part;
+      return index === 0
+        ? `${part.slice(0, 1)}${'*'.repeat(Math.max(2, part.length - 1))}`
+        : `${part.slice(0, 1)}${'*'.repeat(Math.max(2, part.length - 1))}`;
+    })
+    .join(' ');
+};
+
+const maskAccountNumber = (value) => {
+  const accountNumber = String(value || '').trim();
+
+  return accountNumber.length <= 4
+    ? accountNumber
+    : `XXXX${accountNumber.slice(-4)}`;
 };
 
 const hasActiveSnapshotAccount = (user, accountNumber) => {
@@ -312,13 +353,7 @@ const getBeneficiaries = async (req, res) => {
   });
 };
 
-const addBeneficiary = async (req, res) => {
-  const accountNumber = String(req.body.account || req.body.accountNumber || '').trim();
-
-  if (!accountNumber) {
-    return res.status(400).json({ message: 'Beneficiary account number is required' });
-  }
-
+const resolveBeneficiaryAccount = async (accountNumber, currentUser) => {
   let bankAccount = await BankAccount.findOne({
     accountNumber,
     accountStatus: 'active',
@@ -344,11 +379,15 @@ const addBeneficiary = async (req, res) => {
   }
 
   if (!bankAccount) {
-    return res.status(404).json({ message: 'Active beneficiary account not found' });
+    const error = new Error('Active beneficiary account not found');
+    error.statusCode = 404;
+    throw error;
   }
 
-  if (bankAccount.customerId === req.user.customerId) {
-    return res.status(409).json({ message: 'You cannot add your own account as a beneficiary' });
+  if (bankAccount.customerId === currentUser.customerId) {
+    const error = new Error('You cannot add your own account as a beneficiary');
+    error.statusCode = 409;
+    throw error;
   }
 
   const beneficiary = await User.findOne({
@@ -358,9 +397,61 @@ const addBeneficiary = async (req, res) => {
   });
 
   if (!beneficiary) {
-    return res.status(404).json({
-      message: 'This bank account is not linked to an active customer app user',
+    const error = new Error('This bank account is not linked to an active customer app user');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return { bankAccount, beneficiary };
+};
+
+const verifyBeneficiary = async (req, res) => {
+  const accountNumber = String(req.body.account || req.body.accountNumber || '').trim();
+
+  if (!accountNumber) {
+    return res.status(400).json({ message: 'Beneficiary account number is required' });
+  }
+
+  try {
+    const { bankAccount, beneficiary } = await resolveBeneficiaryAccount(accountNumber, req.user);
+
+    res.json({
+      message: 'Beneficiary account verified. Confirm this payee before saving.',
+      beneficiary: {
+        name: maskName(beneficiary.name),
+        customerId: beneficiary.customerId,
+        accountNumber,
+        maskedAccountNumber: maskAccountNumber(accountNumber),
+        accountType: bankAccount.accountType,
+        bankName: bankAccount.bankName || 'Adnate Bank',
+        ifsc: bankAccount.ifsc,
+        verificationStatus: 'verified',
+      },
     });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ message: error.message });
+  }
+};
+
+const addBeneficiary = async (req, res) => {
+  const accountNumber = String(req.body.account || req.body.accountNumber || '').trim();
+  const confirmed = req.body.confirmed === true || req.body.confirmed === 'true';
+
+  if (!accountNumber) {
+    return res.status(400).json({ message: 'Beneficiary account number is required' });
+  }
+
+  if (!confirmed) {
+    return res.status(400).json({ message: 'Confirm verified beneficiary details before saving' });
+  }
+
+  let bankAccount;
+  let beneficiary;
+
+  try {
+    ({ bankAccount, beneficiary } = await resolveBeneficiaryAccount(accountNumber, req.user));
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ message: error.message });
   }
 
   const currentUser = await User.findById(req.user._id);
@@ -374,6 +465,8 @@ const addBeneficiary = async (req, res) => {
       beneficiaryUser: beneficiary._id,
       accountNumber,
       accountType: bankAccount.accountType,
+      verificationStatus: 'verified',
+      verifiedAt: new Date(),
     });
 
     await currentUser.save();
@@ -472,14 +565,6 @@ const createUser = async (req, res) => {
   let generatedAccountNumber;
   let generatedEmployeeId;
 
-  if (role === 'manager') {
-    const existingManager = await User.findOne({ role: 'manager' }).select('_id');
-
-    if (existingManager) {
-      return res.status(409).json({ message: 'Only one manager account is allowed' });
-    }
-  }
-
   if (!panNumber || !aadhaarNumber || !address) {
     return res.status(400).json({
       message: 'PAN, Aadhaar, and address are required',
@@ -575,6 +660,10 @@ const createUser = async (req, res) => {
       overdraftUsed: 0,
     }
     : undefined;
+  const managerReplacement = {
+    replacedManagers: 0,
+    reassignedPendingApprovals: 0,
+  };
 
   const user = await User.create({
     name: displayName,
@@ -602,6 +691,74 @@ const createUser = async (req, res) => {
     account: userAccount,
     accounts: isCustomer ? [userAccount] : [],
   });
+
+  if (!isCustomer) {
+    const previousManagers = await User.find({
+      _id: { $ne: user._id },
+      role: 'manager',
+    }).select('_id name employeeId');
+    const previousManagerIds = previousManagers.map((manager) => manager._id);
+
+    if (previousManagerIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: previousManagerIds } },
+        { $set: { status: 'inactive' } }
+      );
+    }
+
+    const pendingApprovalOwnershipFilters = [
+      { assignedManager: { $exists: false } },
+      { assignedManager: null },
+    ];
+
+    if (previousManagerIds.length > 0) {
+      pendingApprovalOwnershipFilters.unshift({
+        assignedManager: { $in: previousManagerIds },
+      });
+    }
+
+    const approvalUpdate = await Approval.updateMany(
+      {
+        status: 'pending',
+        $or: pendingApprovalOwnershipFilters,
+      },
+      { $set: { assignedManager: user._id } }
+    );
+
+    managerReplacement.replacedManagers = previousManagerIds.length;
+    managerReplacement.reassignedPendingApprovals =
+      approvalUpdate.modifiedCount || approvalUpdate.nModified || 0;
+
+    if (
+      managerReplacement.replacedManagers > 0 ||
+      managerReplacement.reassignedPendingApprovals > 0
+    ) {
+      await writeSystemLog({
+        action: 'manager.replaced',
+        message: `${user.name} replaced ${previousManagers.length} manager(s) for ${user.branchName}`,
+        actor: req.user?._id,
+        actorName: req.user?.name || createdBy || 'Admin',
+        entityType: 'User',
+        entityId: user.employeeId,
+        severity: 'warning',
+        metadata: {
+          newManager: {
+            id: user._id,
+            name: user.name,
+            employeeId: user.employeeId,
+          },
+          replacedManagers: previousManagers.map((manager) => ({
+            id: manager._id,
+            name: manager.name,
+            employeeId: manager.employeeId,
+          })),
+          reassignedPendingApprovals: managerReplacement.reassignedPendingApprovals,
+          branchId: user.branchId,
+          branchName: user.branchName,
+        },
+      });
+    }
+  }
 
   if (isCustomer) {
     await BankAccount.create({
@@ -706,7 +863,11 @@ Our Technology, Your Trust`,
       };
   }
 
-  res.status(201).json({ user: serializeUser(user), email: emailDelivery });
+  res.status(201).json({
+    user: serializeUser(user),
+    email: emailDelivery,
+    managerReplacement: isCustomer ? undefined : managerReplacement,
+  });
 };
 
 const addCustomerAccount = async (req, res) => {

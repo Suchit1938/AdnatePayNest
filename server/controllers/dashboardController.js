@@ -304,6 +304,7 @@ const getManagerDashboard = async (req, res) => {
       availableOd: Math.max(0, totalOdLimit - utilizedOd),
       averageOdUtilization: averageUtilization,
       criticalOdCustomers: criticalOdCustomers.length,
+      recentAlertCount: notificationLogs.length,
       notificationCount: notificationLogs.length,
     },
     profile: {

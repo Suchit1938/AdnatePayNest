@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Lock, LogIn, Mail } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, LogIn, Mail, X } from "lucide-react";
 
+import api from "../../api/axios";
 import { useToast } from "../../components/ui/useToast";
 import { useAuth } from "../../context/useAuth";
 
@@ -13,6 +14,20 @@ function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotStep, setForgotStep] = useState("email");
+  const [forgotForm, setForgotForm] = useState({
+    email: "",
+    otp: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [visiblePasswords, setVisiblePasswords] = useState({
+    login: false,
+    forgotNew: false,
+    forgotConfirm: false,
+  });
   const [recentEmails, setRecentEmails] = useState(() => {
     const storedEmails = localStorage.getItem("adnate-recent-emails");
     try {
@@ -51,6 +66,73 @@ function Login() {
       const errorMessage = error.response?.data?.message || "Invalid Credentials";
       setError(errorMessage);
       toast.error(errorMessage);
+    }
+  };
+
+  const updateForgotForm = (field, value) => {
+    setForgotForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const togglePasswordVisibility = (field) => {
+    setVisiblePasswords((current) => ({
+      ...current,
+      [field]: !current[field],
+    }));
+  };
+
+  const openForgotPassword = () => {
+    setForgotOpen(true);
+    setForgotStep("email");
+    setForgotForm({
+      email,
+      otp: "",
+      newPassword: "",
+      confirmPassword: "",
+    });
+  };
+
+  const sendForgotOtp = async (event) => {
+    event.preventDefault();
+    setForgotLoading(true);
+
+    try {
+      await api.post("/auth/forgot-password/send-otp", {
+        email: forgotForm.email.trim().toLowerCase(),
+      });
+      toast.success("OTP sent to your registered email.");
+      setForgotStep("reset");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to send OTP.");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const resetForgotPassword = async (event) => {
+    event.preventDefault();
+
+    if (forgotForm.newPassword !== forgotForm.confirmPassword) {
+      toast.warning("New password and confirm password must match.");
+      return;
+    }
+
+    setForgotLoading(true);
+
+    try {
+      const { data } = await api.post("/auth/forgot-password/reset", {
+        email: forgotForm.email.trim().toLowerCase(),
+        otp: forgotForm.otp,
+        newPassword: forgotForm.newPassword,
+      });
+
+      toast.success(data.message || "Password reset successfully.");
+      setPassword("");
+      setEmail(forgotForm.email.trim().toLowerCase());
+      setForgotOpen(false);
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to reset password.");
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -117,15 +199,34 @@ function Login() {
                       className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
                     />
                     <input
-                      type="password"
+                      type={visiblePasswords.login ? "text" : "password"}
                       placeholder="Enter Password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       autoComplete="current-password"
-                      className="input-field !pl-11"
+                      className="input-field !pl-11 !pr-11"
                     />
+                    <button
+                      type="button"
+                      onClick={() => togglePasswordVisibility("login")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={visiblePasswords.login ? "Hide password" : "Show password"}
+                      title={visiblePasswords.login ? "Hide password" : "Show password"}
+                    >
+                      {visiblePasswords.login ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
                   </div>
                 </label>
+
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={openForgotPassword}
+                    className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
 
                 {error && <p className="alert-error mt-5">{error}</p>}
 
@@ -146,6 +247,111 @@ function Login() {
           </div>
         </section>
       </div>
+
+      {forgotOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-slate-100 p-5">
+              <div>
+                <p className="text-sm font-bold uppercase text-blue-700">Password recovery</p>
+                <h2 className="mt-1 text-2xl font-bold text-slate-950">Reset password</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setForgotOpen(false)}
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
+                aria-label="Close forgot password"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={forgotStep === "email" ? sendForgotOtp : resetForgotPassword}
+              className="space-y-4 p-5"
+            >
+              <label className="label-field">
+                Registered Email
+                <input
+                  type="email"
+                  value={forgotForm.email}
+                  onChange={(event) => updateForgotForm("email", event.target.value)}
+                  className="input-field"
+                  placeholder="customer@example.com"
+                  required
+                />
+              </label>
+
+              {forgotStep === "reset" && (
+                <>
+                  <label className="label-field">
+                    OTP
+                    <input
+                      value={forgotForm.otp}
+                      onChange={(event) => updateForgotForm("otp", event.target.value)}
+                      className="input-field"
+                      placeholder="6 digit OTP"
+                      maxLength={6}
+                      required
+                    />
+                  </label>
+                  <label className="label-field">
+                    New Password
+                    <div className="relative">
+                      <input
+                        type={visiblePasswords.forgotNew ? "text" : "password"}
+                        value={forgotForm.newPassword}
+                        onChange={(event) => updateForgotForm("newPassword", event.target.value)}
+                        className="input-field !pr-11"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility("forgotNew")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                        aria-label={visiblePasswords.forgotNew ? "Hide new password" : "Show new password"}
+                        title={visiblePasswords.forgotNew ? "Hide new password" : "Show new password"}
+                      >
+                        {visiblePasswords.forgotNew ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </label>
+                  <label className="label-field">
+                    Confirm Password
+                    <div className="relative">
+                      <input
+                        type={visiblePasswords.forgotConfirm ? "text" : "password"}
+                        value={forgotForm.confirmPassword}
+                        onChange={(event) => updateForgotForm("confirmPassword", event.target.value)}
+                        className="input-field !pr-11"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility("forgotConfirm")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                        aria-label={visiblePasswords.forgotConfirm ? "Hide confirm password" : "Show confirm password"}
+                        title={visiblePasswords.forgotConfirm ? "Hide confirm password" : "Show confirm password"}
+                      >
+                        {visiblePasswords.forgotConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </label>
+                </>
+              )}
+
+              <button type="submit" className="btn-primary w-full" disabled={forgotLoading}>
+                <KeyRound size={18} />
+                {forgotLoading
+                  ? "Please wait..."
+                  : forgotStep === "email"
+                    ? "Send OTP"
+                    : "Reset Password"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

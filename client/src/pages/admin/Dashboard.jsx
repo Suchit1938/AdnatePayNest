@@ -387,11 +387,6 @@ function AdminDashboard() {
     { label: "Approved", value: "approved", color: "#10b981" },
     { label: "Rejected", value: "rejected", color: "#ef4444" },
   ]);
-  const approvalRiskRows = buildCountRows(approvals, "risk", [
-    { label: "High", value: "high", color: "#ef4444" },
-    { label: "Medium", value: "medium", color: "#f59e0b" },
-    { label: "Low", value: "low", color: "#10b981" },
-  ]);
   const recentLogPagination = usePaginatedRows(recentLogs);
 
   const handleLogout = () => {
@@ -519,28 +514,11 @@ function AdminDashboard() {
             <div className="mb-6 flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold">Approval Pipeline</h2>
-                <p className="text-sm text-slate-500">Review status with risk mix.</p>
+                <p className="text-sm text-slate-500">Review status by approval outcome.</p>
               </div>
               <AlertTriangle className="shrink-0 text-blue-600" size={24} />
             </div>
             <DonutChart rows={approvalStatusRows} />
-            <div className="mt-6 grid grid-cols-3 gap-3">
-              {approvalRiskRows.map((row) => (
-                <div
-                  key={row.label}
-                  className="rounded-xl border border-bank-card-border bg-bank-surface px-3 py-2"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: row.color }}
-                    />
-                    <p className="truncate text-xs font-bold text-slate-500">{row.label}</p>
-                  </div>
-                  <p className="mt-1 text-lg font-bold text-slate-950">{row.value}</p>
-                </div>
-              ))}
-            </div>
           </div>
         </section>
 

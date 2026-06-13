@@ -2,8 +2,11 @@ const bcrypt = require('bcryptjs');
 
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
-const Approval = require('../models/Approval');
 const seedTiers = require('./seedTiers');
+
+const DEFAULT_BANK_IFSC = process.env.BANK_IFSC || 'ADNT0281237';
+const DEFAULT_BRANCH_NAME = process.env.BANK_BRANCH_NAME || 'Jaipur';
+const DEFAULT_ASSIGNED_REGION = process.env.BANK_REGION || 'Jaipur';
 
 const systemUsers = [
   {
@@ -26,12 +29,13 @@ const systemUsers = [
     password: '123456',
     role: 'manager',
     employeeId: 'MGR9001',
-    branch: 'Mumbai Main Branch',
+    branch: DEFAULT_BRANCH_NAME,
+    branchId: DEFAULT_BANK_IFSC,
+    branchName: DEFAULT_BRANCH_NAME,
+    assignedRegion: DEFAULT_ASSIGNED_REGION,
     managerLevel: 'level-3',
   },
 ];
-
-const primaryManagerEmail = 'manager1@gmail.com';
 
 const legacyDemoCustomerEmails = [
   'rahul@gmail.com',
@@ -59,11 +63,6 @@ const seedDatabase = async () => {
     await User.deleteMany({ _id: { $in: legacyCustomerIds } });
   }
 
-  await User.deleteMany({
-    role: 'manager',
-    email: { $ne: primaryManagerEmail },
-  });
-
   await Promise.all(
     systemUsers.map(async (user) => {
       const password = await bcrypt.hash(user.password, 10);
@@ -83,16 +82,7 @@ const seedDatabase = async () => {
     })
   );
 
-  const primaryManager = await User.findOne({ email: primaryManagerEmail, role: 'manager' });
-
-  if (primaryManager) {
-    await Approval.updateMany(
-      { assignedManager: { $ne: primaryManager._id } },
-      { $set: { assignedManager: primaryManager._id } }
-    );
-  }
-
-  console.log('Seeded MongoDB with admin and one manager only');
+  console.log('Seeded MongoDB with admin and default manager');
 };
 
 module.exports = seedDatabase;

@@ -371,6 +371,7 @@ const Customers = ({ managementMode = "users" }) => {
   const [fieldErrors, setFieldErrors] = useState({});
   const [formMessage, setFormMessage] = useState("");
   const [disableReview, setDisableReview] = useState(null);
+  const [managerReplacementReview, setManagerReplacementReview] = useState(null);
   const [search, setSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [tierFilter, setTierFilter] = useState("");
@@ -487,7 +488,7 @@ const Customers = ({ managementMode = "users" }) => {
     });
   };
 
-  const handleCreateUser = async (event) => {
+  const handleCreateUser = async (event, options = {}) => {
     event.preventDefault();
 
     const normalizedEmail = userForm.email.trim().toLowerCase();
@@ -606,6 +607,22 @@ const Customers = ({ managementMode = "users" }) => {
       return;
     }
 
+    if (!isCustomer && !options.skipManagerReplacementReview) {
+      const affectedManagers = managerRows;
+      const pendingApprovals = affectedManagers.reduce(
+        (total, manager) => total + Number(manager.pendingApprovals || 0),
+        0
+      );
+
+      setManagerReplacementReview({
+        newManagerName: userForm.fullName.trim(),
+        branchName: DEFAULT_BRANCH_NAME,
+        affectedManagers,
+        pendingApprovals,
+      });
+      return;
+    }
+
     const now = new Date().toISOString();
     const walletBalance = Number(userForm.walletBalance || 0);
     const nextUser = {
@@ -686,6 +703,7 @@ const Customers = ({ managementMode = "users" }) => {
 
       createdUser = data.user;
       emailDelivery = data.email;
+      createdUser.managerReplacement = data.managerReplacement;
     } catch (error) {
       showFormToast(
         error.response?.data?.message ||
@@ -709,8 +727,14 @@ const Customers = ({ managementMode = "users" }) => {
       setManagerRows((currentRows) => [
         {
           ...toManagerRow(createdUser),
+          pendingApprovals:
+            createdUser.managerReplacement?.reassignedPendingApprovals || 0,
         },
-        ...currentRows,
+        ...currentRows.map((manager) => ({
+          ...manager,
+          status: "inactive",
+          pendingApprovals: 0,
+        })),
       ]);
     }
 
@@ -727,7 +751,9 @@ const Customers = ({ managementMode = "users" }) => {
     showFormToast(
       isCustomer && emailDelivery?.sent
         ? "User created. Welcome email sent."
-        : "User created.",
+        : !isCustomer && createdUser.managerReplacement?.replacedManagers
+          ? `Manager created. ${createdUser.managerReplacement.replacedManagers} previous manager(s) marked inactive and ${createdUser.managerReplacement.reassignedPendingApprovals} pending approval(s) reassigned.`
+          : "User created.",
       "success"
     );
   };
@@ -2106,6 +2132,132 @@ const Customers = ({ managementMode = "users" }) => {
                       : disableReview.step === "financial-warning"
                         ? "Disable Anyway"
                         : "Continue"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {managerReplacementReview && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:items-center">
+            <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="shrink-0 border-b border-slate-100 px-6 py-5">
+                <div className="flex items-start gap-4">
+                  <div className="rounded-xl bg-amber-50 p-3 text-amber-700">
+                    <ShieldAlert size={24} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-amber-600">
+                      Replace Branch Manager
+                    </p>
+                    <h2 className="mt-1 text-2xl font-bold text-slate-950">
+                      Assign {managerReplacementReview.newManagerName}?
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      This will make the new manager active for {managerReplacementReview.branchName}.
+                      Existing manager access will be disabled, but their profiles and history will stay saved.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+                    <Users size={18} className="text-blue-600" />
+                    <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                      Affected Managers
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-slate-950">
+                      {managerReplacementReview.affectedManagers.length}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+                    <AlertTriangle size={18} className="text-amber-600" />
+                    <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                      Pending Work
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-slate-950">
+                      {managerReplacementReview.pendingApprovals}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+                    <BadgeCheck size={18} className="text-emerald-600" />
+                    <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                      New Status
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-slate-950">
+                      Active
+                    </p>
+                  </div>
+                </div>
+
+                <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 shrink-0 text-amber-700" size={20} />
+                    <div>
+                      <h3 className="font-bold text-amber-950">
+                        Pending approvals will move automatically
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-amber-900">
+                        All pending approvals assigned to existing managers will be transferred
+                        to {managerReplacementReview.newManagerName}. The old manager will be marked inactive,
+                        not deleted.
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                  <h3 className="font-bold text-slate-950">Existing manager access</h3>
+                  <div className="mt-3 space-y-2">
+                    {managerReplacementReview.affectedManagers.length === 0 && (
+                      <p className="text-sm text-slate-500">
+                        No manager is currently assigned to this branch.
+                      </p>
+                    )}
+                    {managerReplacementReview.affectedManagers.map((manager) => (
+                      <div
+                        key={manager.id || manager.employeeId}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-bank-surface px-3 py-2"
+                      >
+                        <div>
+                          <p className="font-semibold text-slate-900">{manager.name}</p>
+                          <p className="text-xs font-semibold text-slate-500">
+                            {manager.employeeId} / {manager.email}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-bold uppercase text-red-700">
+                          Will be inactive
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="shrink-0 border-t border-slate-100 bg-slate-50 px-6 py-4">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setManagerReplacementReview(null)}
+                    className="btn-secondary justify-center px-4 py-2"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManagerReplacementReview(null);
+                      handleCreateUser(
+                        { preventDefault: () => {} },
+                        { skipManagerReplacementReview: true }
+                      );
+                    }}
+                    className="btn-primary justify-center px-4 py-2"
+                  >
+                    Replace Manager
                   </button>
                 </div>
               </div>

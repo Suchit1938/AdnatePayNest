@@ -167,6 +167,15 @@ const userSchema = new mongoose.Schema(
             type: String,
             trim: true,
           },
+          verificationStatus: {
+            type: String,
+            enum: ['verified'],
+            default: 'verified',
+          },
+          verifiedAt: {
+            type: Date,
+            default: Date.now,
+          },
         },
       ],
       default: [],
@@ -174,6 +183,31 @@ const userSchema = new mongoose.Schema(
     permissions: {
       type: [String],
       default: [],
+    },
+    passwordResetOtpHash: {
+      type: String,
+      select: false,
+    },
+    passwordResetOtpExpiresAt: {
+      type: Date,
+      select: false,
+    },
+    passwordResetOtpAttempts: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
+    passwordChangeOtpHash: {
+      type: String,
+      select: false,
+    },
+    passwordChangeOtpExpiresAt: {
+      type: Date,
+      select: false,
+    },
+    pendingPasswordHash: {
+      type: String,
+      select: false,
     },
   },
   { timestamps: true }

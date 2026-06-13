@@ -78,20 +78,64 @@ const escapeHtml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
+const buildFullTierPolicyRows = (tier, changes = []) => {
+  const changeByField = changes.reduce((map, change) => {
+    map.set(change.field, change);
+    return map;
+  }, new Map());
+  const rows = [
+    ['label', 'Classification name', tier.label],
+    ['perTxnLimit', 'Per transaction limit', tier.perTxnLimit],
+    ['dailyLimit', 'Daily limit', tier.dailyLimit],
+    ['monthlyLimit', 'Monthly limit', tier.monthlyLimit],
+    ['maxODLimit', 'Maximum overdraft limit', tier.maxODLimit],
+    ['minBalance', 'Minimum balance requirement', tier.minBalance],
+    ['penaltyAmount', 'Penalty after grace period', tier.penaltyAmount],
+    ['lateFeeRate', 'Overdraft interest rate', tier.lateFeeRate],
+    ['overdraftDueRule', 'Overdraft due rule', OVERDRAFT_DUE_RULE],
+    ['gracePeriodDays', 'Grace period', `${GRACE_PERIOD_DAYS} days after month-end`],
+    ['reviewCycle', 'Review cycle', REVIEW_CYCLE],
+    ['eligibility', 'Eligibility', tier.eligibility],
+    ['reviewNotes', 'Review notes', tier.reviewNotes],
+  ];
+
+  return rows.map(([field, label, value]) => {
+    const change = changeByField.get(field);
+
+    return {
+      field,
+      label,
+      value: ['overdraftDueRule', 'gracePeriodDays', 'reviewCycle'].includes(field)
+        ? value
+        : formatTierValue(field, value),
+      previousValue: change?.from,
+      changed: Boolean(change),
+    };
+  });
+};
+
 const buildTierPolicyEmail = ({ customer, tier, changes, updatedByName }) => {
-  const changeLines = changes
-    .map((change) => `- ${change.label}: ${change.from} -> ${change.to}`)
+  const policyRows = buildFullTierPolicyRows(tier, changes);
+  const policyLines = policyRows
+    .map((row) =>
+      row.changed
+        ? `- ${row.label}: ${row.value} (changed from ${row.previousValue})`
+        : `- ${row.label}: ${row.value}`
+    )
     .join('\n');
-  const changeRows = changes
+  const policyTableRows = policyRows
     .map(
-      (change) => `
-        <tr>
-          <td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;">${escapeHtml(change.label)}</td>
-          <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(change.from)}</td>
-          <td style="padding:8px;border:1px solid #e5e7eb;background:#ecfdf5;font-weight:600;">${escapeHtml(change.to)}</td>
+      (row) => `
+        <tr style="${row.changed ? 'background:#ecfdf5;' : ''}">
+          <td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;">${escapeHtml(row.label)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;${row.changed ? 'font-weight:700;color:#047857;' : ''}">${escapeHtml(row.value)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;color:#64748b;">${row.changed ? `Changed from ${escapeHtml(row.previousValue)}` : 'No change'}</td>
         </tr>`
     )
     .join('');
+  const changedSummary = changes
+    .map((change) => `${change.label}: ${change.from} -> ${change.to}`)
+    .join('\n');
 
   return {
     subject: `${tier.label} tier policy updated`,
@@ -100,23 +144,26 @@ const buildTierPolicyEmail = ({ customer, tier, changes, updatedByName }) => {
 Your ${tier.label} tier policy was updated by ${updatedByName}.
 
 Changed details:
-${changeLines}
+${changedSummary}
+
+Complete current policy:
+${policyLines}
 
 Regards,
 Adnate PayNest`,
     html: `
       <p>Hello ${escapeHtml(customer.name)},</p>
       <p>Your <strong>${escapeHtml(tier.label)}</strong> tier policy was updated by ${escapeHtml(updatedByName)}.</p>
-      <p>The changed policy details are highlighted below.</p>
+      <p>The complete current policy is shown below. Updated items are highlighted.</p>
       <table style="border-collapse:collapse;width:100%;max-width:720px;">
         <thead>
           <tr>
-            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Policy</th>
-            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Previous</th>
-            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#dcfce7;">Updated</th>
+            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Policy detail</th>
+            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Current value</th>
+            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Change status</th>
           </tr>
         </thead>
-        <tbody>${changeRows}</tbody>
+        <tbody>${policyTableRows}</tbody>
       </table>
       <p>Regards,<br />Adnate PayNest</p>
     `,

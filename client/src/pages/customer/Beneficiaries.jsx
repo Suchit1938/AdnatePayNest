@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
-import { UserPlus, Users } from "lucide-react";
 import api from "../../api/axios";
-import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import { useToast } from "../../components/ui/useToast";
@@ -91,28 +89,6 @@ const Beneficiaries = () => {
         />
 
         {message && <div className="alert-info">{message}</div>}
-
-        <div className="stat-grid">
-          <StatsCard
-            title="Saved Payees"
-            value={beneficiaries.length}
-            icon={Users}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-            badge={{
-              text: beneficiaries.length > 0 ? "Ready for transfers" : "None added yet",
-              tone: beneficiaries.length > 0 ? "success" : "warning",
-            }}
-          />
-          <StatsCard
-            title="Quick Add"
-            value="Form"
-            icon={UserPlus}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            footer={{ text: "Add using the panel below" }}
-          />
-        </div>
 
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <form onSubmit={addBeneficiary} className="card-padded">

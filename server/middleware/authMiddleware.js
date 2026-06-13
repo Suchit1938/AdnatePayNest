@@ -18,6 +18,10 @@ const protect = async (req, res, next) => {
       return res.status(401).json({ message: 'Not authorized, user missing' });
     }
 
+    if (user.status !== 'active') {
+      return res.status(403).json({ message: 'User is not active' });
+    }
+
     req.user = user;
     next();
   } catch (error) {

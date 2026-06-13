@@ -105,7 +105,17 @@ const ChartEmptyState = ({ message }) => (
   </div>
 );
 
-const SectionHeader = ({ icon: Icon, title, subtitle, exportLabel, exportName, exportRows, className = "mb-5" }) => {
+const SectionHeader = ({
+  icon: Icon,
+  title,
+  subtitle,
+  exportLabel,
+  exportName,
+  exportRows,
+  exportPdfRows,
+  exportPdfOptions,
+  className = "mb-5",
+}) => {
   const toast = useToast();
 
   const handleCsvDownload = () => {
@@ -126,8 +136,11 @@ const SectionHeader = ({ icon: Icon, title, subtitle, exportLabel, exportName, e
       downloadPdf(
         `${exportName}-${sequence}.pdf`,
         exportLabel || title,
-        exportRows,
-        { subtitle: `Generated on ${formatReportDate(new Date())}` }
+        exportPdfRows || exportRows,
+        {
+          subtitle: `Generated on ${formatReportDate(new Date())}`,
+          ...exportPdfOptions,
+        }
       );
       toast.success(`${exportLabel || title} PDF downloaded.`);
     } catch {
@@ -583,6 +596,47 @@ const AdminReports = () => {
     "Status": formatStatus(transaction.status),
     "Transfer Date": formatReportDate(transaction.date || transaction.createdAt),
   }));
+  const transferStatusSummary = reportData.highValueTransfers.reduce((summary, transaction) => {
+    const status = formatStatus(transaction.status);
+    summary[status] = (summary[status] || 0) + 1;
+    return summary;
+  }, {});
+  const transferPdfRows = [
+    {
+      Date: "",
+      Details: "Report scope",
+      "From Account": "All recorded transfers",
+      "To Account": "",
+      Amount: "",
+    },
+    {
+      Date: "",
+      Details: "Total transfer value",
+      "From Account": `${reportData.highValueTransfers.length} transfers`,
+      "To Account": "",
+      Amount: formatCurrency(reportData.totalTransferValue),
+    },
+    {
+      Date: "",
+      Details: "Status summary",
+      "From Account": Object.entries(transferStatusSummary)
+        .map(([status, count]) => `${status}: ${count}`)
+        .join(" | ") || "No transfers",
+      "To Account": "",
+      Amount: "",
+    },
+    ...reportData.highValueTransfers.map((transaction) => ({
+      Date: formatReportDate(transaction.date || transaction.createdAt),
+      Details: [
+        `Transfer ${transaction.id || "Not available"}`,
+        `${transaction.sender || "Not available"} to ${transaction.receiver || "Not available"}`,
+        `Status: ${formatStatus(transaction.status)}`,
+      ].join(" | "),
+      "From Account": transaction.fromAccountNumber || "Not available",
+      "To Account": transaction.toAccountNumber || "Not available",
+      Amount: formatCurrency(transaction.amount || 0),
+    })),
+  ];
   const odCsvRows = reportData.nearOdLimitRows.map((customer) => ({
     "Customer ID": customer.customerId,
     "Customer Name": customer.name,
@@ -599,6 +653,54 @@ const AdminReports = () => {
       ? "Active"
       : "Inactive - outstanding exposure",
   }));
+  const overdraftReportPdfRows = [
+    {
+      Category: "Watchlist Customers",
+      Details: "Customers near or at overdraft attention threshold",
+      Used: `${reportData.nearOdLimitRows.length}`,
+      Limit: "",
+      Status: "Review",
+    },
+    {
+      Category: "Monthly Attempt Limit",
+      Details: "Customers with all 3 monthly overdraft attempts used",
+      Used: `${reportData.odAttemptsUsed}`,
+      Limit: "3 attempts",
+      Status: reportData.odAttemptsUsed > 0 ? "Action needed" : "Clear",
+    },
+    {
+      Category: "Blocked Accounts",
+      Details: "Accounts blocked after monthly overdraft attempt limit",
+      Used: `${reportData.odBlocked}`,
+      Limit: "",
+      Status: reportData.odBlocked > 0 ? "Blocked" : "Clear",
+    },
+    ...reportData.odByTierRows.map((tier) => ({
+      Category: tier.label,
+      Details: "Tier overdraft usage",
+      Used: formatCurrency(tier.value),
+      Limit: formatCurrency(tier.limit),
+      Status: `${percentOf(tier.value, tier.limit)}% used`,
+    })),
+  ];
+  const nearOdPdfRows = [
+    {
+      Customer: "Report scope",
+      "OD Used": "Customers near limit, 2+ monthly uses, or 3/3 blocked",
+      "OD Limit": "",
+      "Monthly Use": "",
+      Status: "",
+    },
+    ...reportData.nearOdLimitRows.map((customer) => ({
+      Customer: `${customer.name} (${customer.customerId})`,
+      "OD Used": formatCurrency(customer.overdraftUsed),
+      "OD Limit": formatCurrency(customer.overdraftLimit),
+      "Monthly Use": customer.hasReachedMonthlyOdLimit
+        ? `${customer.odUsesThisMonth}/3 blocked`
+        : `${customer.odUsesThisMonth}/3 used`,
+      Status: customer.isActiveCustomer ? "Active" : "Inactive exposure",
+    })),
+  ];
   const approvalCsvRows = reportData.approvalStatusRows.map((status) => ({
     "Approval Status": status.label,
     "Approval Count": status.value,
@@ -636,6 +738,31 @@ const AdminReports = () => {
     "Monthly Overdraft Attempt Limit": 3,
     "Settlement Rule": "Clear before month-end",
   }));
+  const classificationPdfRows = [
+    {
+      Classification: "Report scope",
+      Customers: `${reportData.customerRows.length} customers`,
+      "Transfer Limits": "Per transfer, daily, and monthly policy limits",
+      "OD Limit": "Maximum overdraft access by tier",
+      "Policy Notes": "Monthly overdraft attempts limited to 3",
+    },
+    ...tiers.map((tier) => ({
+      Classification: tier.label,
+      Customers: `${tier.customerCount} assigned`,
+      "Transfer Limits": [
+        `Per transfer ${formatCurrency(tier.perTxnLimit)}`,
+        `Daily ${formatCurrency(tier.dailyLimit)}`,
+        `Monthly ${formatCurrency(tier.monthlyLimit)}`,
+      ].join(" | "),
+      "OD Limit": formatCurrency(tier.maxODLimit),
+      "Policy Notes": [
+        `Minimum balance ${formatCurrency(tier.minBalance)}`,
+        `Penalty ${formatCurrency(tier.penaltyAmount)}`,
+        `Interest ${tier.interestRate || tier.lateFeeRate || "Not set"}`,
+        "Settle before month-end",
+      ].join(" | "),
+    })),
+  ];
   const highValuePagination = usePaginatedRows(reportData.highValueTransfers);
   const nearOdPagination = usePaginatedRows(reportData.nearOdLimitRows);
 
@@ -713,6 +840,11 @@ const AdminReports = () => {
               exportLabel="Export Transfer Register"
               exportName="transfer-review-register"
               exportRows={transferRegisterRows}
+              exportPdfRows={transferPdfRows}
+              exportPdfOptions={{
+                headers: ["Date", "Details", "From Account", "To Account", "Amount"],
+                subtitle: `Transfer Review Register | Generated on ${formatReportDate(new Date())}`,
+              }}
               className="mb-0"
             />
           </div>
@@ -760,6 +892,11 @@ const AdminReports = () => {
               exportLabel="Export Overdraft"
               exportName="od-report"
               exportRows={odCsvRows}
+              exportPdfRows={overdraftReportPdfRows}
+              exportPdfOptions={{
+                headers: ["Category", "Details", "Used", "Limit", "Status"],
+                subtitle: `Overdraft Reports | Generated on ${formatReportDate(new Date())}`,
+              }}
             />
             <HorizontalBarChart
               rows={reportData.odByTierRows}
@@ -782,6 +919,11 @@ const AdminReports = () => {
                 exportLabel="Export Overdraft List"
                 exportName="customers-near-od-limit"
                 exportRows={odCsvRows}
+                exportPdfRows={nearOdPdfRows}
+                exportPdfOptions={{
+                  headers: ["Customer", "OD Used", "OD Limit", "Monthly Use", "Status"],
+                  subtitle: `Customers Near Overdraft Limit | Generated on ${formatReportDate(new Date())}`,
+                }}
                 className="mb-0"
               />
             </div>
@@ -898,6 +1040,11 @@ const AdminReports = () => {
                 exportLabel="Export Classifications"
                 exportName="classification-policy-report"
                 exportRows={classificationCsvRows}
+                exportPdfRows={classificationPdfRows}
+                exportPdfOptions={{
+                  headers: ["Classification", "Customers", "Transfer Limits", "OD Limit", "Policy Notes"],
+                  subtitle: `Classification Policy Report | Generated on ${formatReportDate(new Date())}`,
+                }}
                 className="mb-0"
               />
             </div>
