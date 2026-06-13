@@ -198,6 +198,49 @@ const sendTierPolicyEmails = async ({ customers, tier, changes, updatedByName })
   };
 };
 
+const writeManagerTierPolicyNotifications = async ({
+  tier,
+  changes,
+  customerCount,
+  updatedBy,
+}) => {
+  if (changes.length === 0) return;
+
+  const managers = await User.find({ role: 'manager', status: 'active' }).select('name');
+
+  if (managers.length === 0) return;
+
+  const changeSummary = summarizeTierPolicyChanges(changes);
+  const extraChangeCount = Math.max(0, changes.length - 4);
+  const messageSuffix =
+    extraChangeCount > 0
+      ? `${changeSummary}; and ${extraChangeCount} more change${extraChangeCount === 1 ? '' : 's'}.`
+      : `${changeSummary}.`;
+  const updatedByName = updatedBy?.name || 'Admin';
+
+  await Promise.all(
+    managers.map((manager) =>
+      writeSystemLog({
+        action: 'tier.policy.updated.manager',
+        message: `${tier.label} tier policy was updated by ${updatedByName}. ${customerCount} assigned customer(s) may be affected. ${messageSuffix}`,
+        actor: manager._id,
+        actorName: manager.name,
+        entityType: 'Tier',
+        entityId: tier.name,
+        severity: 'info',
+        metadata: {
+          tierName: tier.name,
+          tierLabel: tier.label,
+          customerCount,
+          updatedBy: updatedByName,
+          updatedById: updatedBy?._id,
+          changes,
+        },
+      })
+    )
+  );
+};
+
 const serializeTier = (tier, stats = {}) => ({
   id: tier._id,
   key: tier.name,
@@ -550,6 +593,13 @@ const updateTier = async (req, res) => {
       )
     );
   }
+
+  await writeManagerTierPolicyNotifications({
+    tier,
+    changes: policyChanges,
+    customerCount: tierCustomers.length,
+    updatedBy: req.user,
+  });
 
   const email =
     policyChanges.length > 0 && tierCustomers.length > 0

@@ -123,6 +123,7 @@ function ManagerDashboard() {
     overdraftCustomers: [],
     overdraftRisk: [],
     overdraftExposureByType: [],
+    tierPolicies: [],
     recentOverdraftActivity: [],
     overdraftPayoffTransactions: [],
     escalations: [],
@@ -160,6 +161,7 @@ function ManagerDashboard() {
   const overdraftCustomers = dashboardData.overdraftCustomers || [];
   const overdraftRisk = dashboardData.overdraftRisk || [];
   const overdraftExposureByType = dashboardData.overdraftExposureByType || [];
+  const tierPolicies = dashboardData.tierPolicies || [];
   const recentOverdraftActivity = dashboardData.recentOverdraftActivity || [];
   const overdraftPayoffTransactions = dashboardData.overdraftPayoffTransactions || [];
   const escalations = dashboardData.escalations || [];
@@ -639,6 +641,79 @@ function ManagerDashboard() {
     </SectionCard>
   );
 
+  const tierPolicyDetails = (
+    <section className="table-shell">
+      <div className="flex items-center justify-between border-b border-slate-100 p-6">
+        <div className="flex items-center gap-3">
+          <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
+            <ShieldCheck size={22} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Tier Policy Details</h2>
+            <p className="text-sm text-slate-500">
+              Current admin-defined limits used while monitoring overdraft exposure.
+            </p>
+          </div>
+        </div>
+        <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
+          {tierPolicies.length} policies
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1080px] text-left">
+          <thead className="table-head">
+            <tr>
+              <th className="px-6 py-4">Tier</th>
+              <th className="px-6 py-4">Per Txn</th>
+              <th className="px-6 py-4">Daily</th>
+              <th className="px-6 py-4">Monthly</th>
+              <th className="px-6 py-4">OD Limit</th>
+              <th className="px-6 py-4">Min Balance</th>
+              <th className="px-6 py-4">Penalty</th>
+              <th className="px-6 py-4">Interest</th>
+              <th className="px-6 py-4">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tierPolicies.length === 0 && (
+              <tr>
+                <td colSpan={9} className="px-6 py-8">
+                  <EmptyState message="No tier policies are configured yet." />
+                </td>
+              </tr>
+            )}
+            {tierPolicies.map((tier) => (
+              <tr key={tier.key} className="table-row">
+                <td className="px-6 py-4">
+                  <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${getTierTone(tier.key).badge}`}>
+                    {tier.label}
+                  </span>
+                  {tier.eligibility && (
+                    <p className="mt-2 max-w-64 text-xs text-slate-500">
+                      {tier.eligibility}
+                    </p>
+                  )}
+                </td>
+                <td className="px-6 py-4 font-semibold">{formatCurrency(tier.perTxnLimit)}</td>
+                <td className="px-6 py-4 font-semibold">{formatCurrency(tier.dailyLimit)}</td>
+                <td className="px-6 py-4 font-semibold">{formatCurrency(tier.monthlyLimit)}</td>
+                <td className="px-6 py-4 font-semibold text-blue-700">
+                  {formatCurrency(tier.maxODLimit)}
+                </td>
+                <td className="px-6 py-4">{formatCurrency(tier.minBalance)}</td>
+                <td className="px-6 py-4">{formatCurrency(tier.penaltyAmount)}</td>
+                <td className="px-6 py-4">{tier.interestRate || "Not set"}</td>
+                <td className="px-6 py-4 text-sm text-slate-500">
+                  {tier.updatedAt ? new Date(tier.updatedAt).toLocaleString() : "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   const odCustomerTable = (
     <section className="table-shell">
       <div className="flex items-center justify-between border-b border-slate-100 p-6">
@@ -832,6 +907,7 @@ function ManagerDashboard() {
         {odRiskCard}
         {odExposureCard}
       </section>
+      {tierPolicyDetails}
       {odCustomerTable}
       {odPayoffTransactionsTable}
       {odRecentActivity}

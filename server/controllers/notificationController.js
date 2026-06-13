@@ -8,6 +8,7 @@ const titlesByAction = {
   'customer.created': 'New Customer Registered',
   'overdraft.third_attempt': 'Third OD Attempt Reached',
   'tier.policy.updated.customer': 'Tier Policy Updated',
+  'tier.policy.updated.manager': 'Tier Policy Updated',
 };
 
 const typeBySeverity = {

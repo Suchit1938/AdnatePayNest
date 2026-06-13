@@ -1,9 +1,26 @@
 const SystemLog = require('../models/SystemLog');
 const Transaction = require('../models/Transaction');
 const BankAccount = require('../models/BankAccount');
+const Tier = require('../models/Tier');
 const User = require('../models/User');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
+
+const serializeTierPolicy = (tier) => ({
+  id: tier._id,
+  key: tier.name,
+  label: tier.label,
+  perTxnLimit: tier.perTxnLimit,
+  dailyLimit: tier.dailyLimit,
+  monthlyLimit: tier.monthlyLimit,
+  maxODLimit: tier.maxODLimit,
+  minBalance: tier.minBalance,
+  penaltyAmount: tier.penaltyAmount,
+  interestRate: tier.lateFeeRate,
+  eligibility: tier.eligibility,
+  reviewNotes: tier.reviewNotes,
+  updatedAt: tier.updatedAt,
+});
 
 const getCustomerNameFromLog = (log) => {
   const metadata = log.metadata || {};
@@ -85,6 +102,7 @@ const getManagerDashboard = async (req, res) => {
 
   const [
     customers,
+    tierPolicies,
     bankAccounts,
     transactionsToday,
     odActivityTransactions,
@@ -97,6 +115,7 @@ const getManagerDashboard = async (req, res) => {
       User.find({ role: 'customer' }).select(
         'name email customerId classification account accounts status'
       ),
+      Tier.find().sort({ createdAt: -1, _id: -1 }),
       BankAccount.find().sort({ odUsed: -1, updatedAt: -1 }),
       Transaction.countDocuments({ createdAt: { $gte: startOfDay } }),
       Transaction.find({
@@ -119,15 +138,23 @@ const getManagerDashboard = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(12),
       SystemLog.find({
-        action: {
-          $in: [
-            'approval.approved',
-            'approval.rejected',
-            'customer.created',
-            'transfer.completed',
-            'transfer.own_account.completed',
-          ],
-        },
+        $or: [
+          {
+            action: {
+              $in: [
+                'approval.approved',
+                'approval.rejected',
+                'customer.created',
+                'transfer.completed',
+                'transfer.own_account.completed',
+              ],
+            },
+          },
+          {
+            action: 'tier.policy.updated.manager',
+            actor: req.user._id,
+          },
+        ],
       })
         .sort({ createdAt: -1 })
         .limit(20),
@@ -318,6 +345,7 @@ const getManagerDashboard = async (req, res) => {
     overdraftCustomers,
     overdraftRisk: riskCounts,
     overdraftExposureByType: exposureByAccountType,
+    tierPolicies: tierPolicies.map(serializeTierPolicy),
     recentOverdraftActivity,
     overdraftPayoffTransactions,
     escalations: [
