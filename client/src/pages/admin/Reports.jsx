@@ -37,6 +37,14 @@ const formatCompactCurrency = (value) =>
 const percentOf = (value, total) =>
   total > 0 ? Math.round((toNumber(value) / total) * 100) : 0;
 
+const dateRangeOptions = [
+  { value: "all", label: "All dates" },
+  { value: "today", label: "Today" },
+  { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
+  { value: "custom", label: "Custom range" },
+];
+
 const exportSequenceFallback = new Map();
 
 const getNextExportSequence = (exportName, fileType) => {
@@ -67,6 +75,63 @@ const formatReportDate = (value) => {
 };
 
 const formatStatus = (value) => getTransactionStatusLabel(value || "unknown");
+
+const getDateRangeBounds = ({ preset, startDate, endDate }) => {
+  const now = new Date();
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+  let start = null;
+
+  if (preset === "today") {
+    start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+  } else if (preset === "7d") {
+    start = new Date(now);
+    start.setDate(start.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+  } else if (preset === "30d") {
+    start = new Date(now);
+    start.setDate(start.getDate() - 29);
+    start.setHours(0, 0, 0, 0);
+  } else if (preset === "custom") {
+    start = startDate ? new Date(`${startDate}T00:00:00`) : null;
+    const customEnd = endDate ? new Date(`${endDate}T23:59:59`) : null;
+
+    return {
+      start: start && !Number.isNaN(start.getTime()) ? start : null,
+      end: customEnd && !Number.isNaN(customEnd.getTime()) ? customEnd : null,
+    };
+  }
+
+  return { start, end: preset === "all" ? null : end };
+};
+
+const isWithinDateRange = (value, range) => {
+  if (!range.start && !range.end) return true;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return false;
+  if (range.start && date < range.start) return false;
+  if (range.end && date > range.end) return false;
+
+  return true;
+};
+
+const formatApprovalRisk = (value) => {
+  const risk = String(value || "low").trim().toLowerCase();
+
+  return risk ? `${risk.charAt(0).toUpperCase()}${risk.slice(1)} Risk` : "Low Risk";
+};
+
+const maskAccountNumber = (value) => {
+  const accountNumber = String(value || "").trim();
+
+  if (!accountNumber) return "Not available";
+  return accountNumber.length <= 4
+    ? accountNumber
+    : `XXXX${accountNumber.slice(-4)}`;
+};
 
 const buildCsv = (rows) => {
   if (!rows.length) return "";
@@ -217,46 +282,67 @@ const HorizontalBarChart = ({ rows, valueFormatter = (value) => value, detailFor
   const maxValue = Math.max(...rows.map((row) => toNumber(row.value)), 0);
 
   if (maxValue === 0) {
-    return <ChartEmptyState message="No chart data available yet." />;
+    return <ChartEmptyState message="No transfer records to chart for this view." />;
   }
 
   return (
     <div className="flex min-h-60 flex-col justify-center space-y-4">
-      {rows.map((row) => (
-        <div
-          key={row.label}
-          className="group relative rounded-lg outline-none"
-          tabIndex={0}
-        >
-          <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-            <span className="font-semibold text-slate-700">{row.label}</span>
-            <span className="shrink-0 font-bold text-slate-950">
-              {valueFormatter(row.value)}
-            </span>
-          </div>
-          <div className="h-3 rounded-full bg-slate-100 ring-1 ring-slate-100">
-            <div
-              className="h-full rounded-full"
-              style={{
-                width: `${Math.max(7, percentOf(row.value, maxValue))}%`,
-                backgroundColor: row.color,
-              }}
+      {rows.map((row) => {
+        const rowValue = toNumber(row.value);
+        const width =
+          rowValue > 0 ? `${Math.max(7, percentOf(rowValue, maxValue))}%` : "0%";
+
+        return (
+          <div
+            key={row.label}
+            className="group relative rounded-lg outline-none"
+            tabIndex={0}
+          >
+            <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+              <span className="font-semibold text-slate-700">{row.label}</span>
+              <span className="shrink-0 font-bold text-slate-950">
+                {valueFormatter(row.value)}
+              </span>
+            </div>
+            <div className="h-3 rounded-full bg-slate-100 ring-1 ring-slate-100">
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width,
+                  backgroundColor: row.color,
+                }}
+              />
+            </div>
+            <ChartTooltip
+              label={row.label}
+              value={valueFormatter(row.value)}
+              detail={detailFormatter?.(row)}
+              className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
             />
+            {detailFormatter && (
+              <p className="mt-1 text-xs font-medium text-slate-500">
+                {detailFormatter(row)}
+              </p>
+            )}
           </div>
-          <ChartTooltip
-            label={row.label}
-            value={valueFormatter(row.value)}
-            detail={detailFormatter?.(row)}
-            className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-          />
-          {detailFormatter && (
-            <p className="mt-1 text-xs font-medium text-slate-500">
-              {detailFormatter(row)}
-            </p>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
+  );
+};
+
+const RiskBadge = ({ risk }) => {
+  const toneByRisk = {
+    high: "bg-red-50 text-red-700 ring-1 ring-red-100",
+    medium: "bg-amber-50 text-amber-700 ring-1 ring-amber-100",
+    low: "bg-blue-50 text-blue-700 ring-1 ring-blue-100",
+  };
+  const normalizedRisk = String(risk || "low").toLowerCase();
+
+  return (
+    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${toneByRisk[normalizedRisk] || toneByRisk.low}`}>
+      {formatApprovalRisk(normalizedRisk)}
+    </span>
   );
 };
 
@@ -264,41 +350,47 @@ const ColumnChart = ({ rows, valueFormatter = (value) => value }) => {
   const maxValue = Math.max(...rows.map((row) => toNumber(row.value)), 0);
 
   if (maxValue === 0) {
-    return <ChartEmptyState message="No chart data available yet." />;
+    return <ChartEmptyState message="No transfer split is available for this view." />;
   }
 
   return (
     <div className="flex h-64 items-stretch gap-3 border-b border-l border-slate-200 px-3 pt-5 sm:gap-4">
-      {rows.map((row) => (
-        <div
-          key={row.label}
-          className="group relative flex min-w-0 flex-1 flex-col items-center gap-2 outline-none"
-          tabIndex={0}
-        >
-          <span className="text-xs font-bold text-slate-700">
-            {valueFormatter(row.value)}
-          </span>
-          <div className="flex min-h-0 w-full flex-1 items-end">
-            <div
-              className="w-full rounded-t-lg shadow-sm"
-              style={{
-                height: `${Math.max(14, percentOf(row.value, maxValue))}%`,
-                backgroundColor: row.color,
-              }}
+      {rows.map((row) => {
+        const rowValue = toNumber(row.value);
+        const height =
+          rowValue > 0 ? `${Math.max(14, percentOf(rowValue, maxValue))}%` : "0%";
+
+        return (
+          <div
+            key={row.label}
+            className="group relative flex min-w-0 flex-1 flex-col items-center gap-2 outline-none"
+            tabIndex={0}
+          >
+            <span className="text-xs font-bold text-slate-700">
+              {valueFormatter(row.value)}
+            </span>
+            <div className="flex min-h-0 w-full flex-1 items-end">
+              <div
+                className="w-full rounded-t-lg shadow-sm"
+                style={{
+                  height,
+                  backgroundColor: row.color,
+                }}
+              />
+            </div>
+            <ChartTooltip
+              label={row.label}
+              value={valueFormatter(row.value)}
+              detail="Transactions recorded"
+              percent={percentOf(rowValue, maxValue)}
+              className="bottom-9 left-1/2 hidden -translate-x-1/2 group-hover:block group-focus:block"
             />
+            <span className="w-full truncate text-center text-xs font-semibold text-slate-500" title={row.label}>
+              {row.label}
+            </span>
           </div>
-          <ChartTooltip
-            label={row.label}
-            value={valueFormatter(row.value)}
-            detail="Transactions recorded"
-            percent={percentOf(row.value, maxValue)}
-            className="bottom-9 left-1/2 hidden -translate-x-1/2 group-hover:block group-focus:block"
-          />
-          <span className="w-full truncate text-center text-xs font-semibold text-slate-500" title={row.label}>
-            {row.label}
-          </span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
@@ -308,7 +400,7 @@ const DonutChart = ({ rows }) => {
   const [activeRow, setActiveRow] = useState(null);
 
   if (total === 0) {
-    return <ChartEmptyState message="No chart data available yet." />;
+    return <ChartEmptyState message="No approval records to chart for this view." />;
   }
 
   const segments = rows.reduce((items, row) => {
@@ -374,6 +466,122 @@ const DonutChart = ({ rows }) => {
 const getCustomerAccounts = (customer) =>
   customer.accounts?.length ? customer.accounts : [customer.account].filter(Boolean);
 
+const ACCOUNT_TYPES = ["Savings", "Current", "Salary"];
+
+const getTierAccountTypeRules = (tier) =>
+  ACCOUNT_TYPES.map((accountType) => {
+    const rule = (tier?.accountTypeOdRules || []).find(
+      (item) => item.accountType === accountType
+    );
+
+    return {
+      accountType,
+      odLimit: toNumber(rule?.odLimit ?? tier?.maxODLimit),
+      minOpeningBalance: toNumber(rule?.minOpeningBalance ?? tier?.minBalance),
+      monthlyOdUses: toNumber(rule?.monthlyOdUses || 3),
+    };
+  });
+
+const formatTierAccountTypeRules = (tier) =>
+  getTierAccountTypeRules(tier)
+    .map((rule) =>
+      [
+        `${rule.accountType}: limit ${formatCurrency(rule.odLimit)}`,
+        `minimum opening ${formatCurrency(rule.minOpeningBalance)}`,
+        `${rule.monthlyOdUses}/month`,
+      ].join(", ")
+    )
+    .join(" | ");
+
+const formatAccountTypeRule = (rule) =>
+  [
+    `${rule.accountType}: OD ${formatCurrency(rule.odLimit)}`,
+    `opening ${formatCurrency(rule.minOpeningBalance)}`,
+    `${rule.monthlyOdUses}/month`,
+  ].join(", ");
+
+const AccountTypeOdRulesTable = ({ tier }) => (
+  <div className="overflow-hidden rounded-lg border border-slate-100">
+    <div className="hidden grid-cols-[1fr_1.15fr_1.15fr_0.8fr] gap-0 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-[0.08em] text-slate-500 sm:grid">
+      <span>Account</span>
+      <span>OD Limit</span>
+      <span>Opening Balance</span>
+      <span>Uses</span>
+    </div>
+    <div className="divide-y divide-slate-100">
+      {getTierAccountTypeRules(tier).map((rule) => (
+        <div
+          key={rule.accountType}
+          className="grid grid-cols-2 gap-3 px-3 py-3 text-sm sm:grid-cols-[1fr_1.15fr_1.15fr_0.8fr] sm:gap-0"
+        >
+          <span className="min-w-0 font-bold text-slate-900">
+            <span className="block text-xs font-bold uppercase text-slate-400 sm:hidden">
+              Account
+            </span>
+            {rule.accountType}
+          </span>
+          <span className="min-w-0 break-words font-semibold text-slate-700">
+            <span className="block text-xs font-bold uppercase text-slate-400 sm:hidden">
+              OD Limit
+            </span>
+            {formatCurrency(rule.odLimit)}
+          </span>
+          <span className="min-w-0 break-words font-semibold text-slate-700">
+            <span className="block text-xs font-bold uppercase text-slate-400 sm:hidden">
+              Opening
+            </span>
+            {formatCurrency(rule.minOpeningBalance)}
+          </span>
+          <span className="min-w-0 font-semibold text-slate-700">
+            <span className="block text-xs font-bold uppercase text-slate-400 sm:hidden">
+              Uses
+            </span>
+            {rule.monthlyOdUses}/mo
+          </span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const PolicyMetric = ({ label, value }) => (
+  <div className="rounded-lg bg-bank-surface px-4 py-3">
+    <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
+      {label}
+    </p>
+    <p className="mt-1 break-words font-bold text-slate-950">{value}</p>
+  </div>
+);
+
+const getAccountDisplay = (accountNumber, accountByNumber) => {
+  const normalizedAccountNumber = normalizeIdentifier(accountNumber);
+  const account = accountByNumber.get(normalizedAccountNumber);
+  const accountType = account?.accountType || "Account";
+
+  return accountNumber
+    ? `${accountType} / ${maskAccountNumber(accountNumber)}`
+    : "Not available";
+};
+
+const formatAccountOdBreakdown = (accounts = []) =>
+  accounts.length
+    ? accounts
+        .map((account) => {
+          const used = toNumber(account.overdraftUsed);
+          const limit = toNumber(account.overdraftLimit);
+          const uses = toNumber(account.odCountThisMonth);
+          const status = account.odBlocked ? "blocked" : limit > 0 ? "available" : "not enabled";
+
+          return [
+            account.accountType || "Account",
+            `${formatCurrency(used)} used of ${formatCurrency(limit)}`,
+            `${uses}/3 uses`,
+            status,
+          ].join(", ");
+        })
+        .join(" | ")
+    : "No account OD data";
+
 const normalizeIdentifier = (value) => String(value || "").trim().toLowerCase();
 
 const AdminReports = () => {
@@ -381,6 +589,11 @@ const AdminReports = () => {
   const [tiers, setTiers] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [dateFilter, setDateFilter] = useState({
+    preset: "30d",
+    startDate: "",
+    endDate: "",
+  });
 
   useEffect(() => {
     Promise.allSettled([
@@ -405,13 +618,40 @@ const AdminReports = () => {
   }, []);
 
   const reportData = useMemo(() => {
-    const totalTransferValue = transactions.reduce(
+    const dateRange = getDateRangeBounds(dateFilter);
+    const filteredTransactions = transactions.filter((transaction) =>
+      isWithinDateRange(transaction.date || transaction.createdAt, dateRange)
+    );
+    const filteredApprovals = approvals.filter((approval) =>
+      isWithinDateRange(approval.updatedAt || approval.requestedOn, dateRange)
+    );
+    const accountByNumber = users.customers.reduce((map, customer) => {
+      getCustomerAccounts(customer).forEach((account) => {
+        const key = normalizeIdentifier(account.accountNumber);
+
+        if (key) {
+          map.set(key, {
+            ...account,
+            customerName: customer.name,
+            customerId: customer.customerId,
+          });
+        }
+      });
+
+      return map;
+    }, new Map());
+    const totalTransferValue = filteredTransactions.reduce(
       (sum, transaction) => sum + toNumber(transaction.amount),
       0
     );
-    const highValueTransfers = [...transactions]
-      .sort((a, b) => toNumber(b.amount) - toNumber(a.amount));
-    const volumeByDate = transactions.reduce((map, transaction) => {
+    const highValueTransfers = [...filteredTransactions]
+      .sort((a, b) => toNumber(b.amount) - toNumber(a.amount))
+      .map((transaction) => ({
+        ...transaction,
+        fromAccountDisplay: getAccountDisplay(transaction.fromAccountNumber, accountByNumber),
+        toAccountDisplay: getAccountDisplay(transaction.toAccountNumber, accountByNumber),
+      }));
+    const volumeByDate = filteredTransactions.reduce((map, transaction) => {
       const date = transaction.date || String(transaction.createdAt || "").slice(0, 10) || "Unknown";
       map.set(date, (map.get(date) || 0) + 1);
       return map;
@@ -424,12 +664,12 @@ const AdminReports = () => {
         value,
         color: ["#2563eb", "#0891b2", "#059669", "#7c3aed"][index % 4],
       }));
-    const ownTransfers = transactions.filter(
+    const ownTransfers = filteredTransactions.filter(
       (transaction) =>
         transaction.sender === transaction.receiver ||
         transaction.fromAccountNumber === transaction.toAccountNumber
     );
-    const beneficiaryTransfers = transactions.filter(
+    const beneficiaryTransfers = filteredTransactions.filter(
       (transaction) => !ownTransfers.includes(transaction)
     );
     const splitRows = [
@@ -437,7 +677,7 @@ const AdminReports = () => {
       { label: "Own Account", value: ownTransfers.length, color: "#14b8a6" },
     ];
 
-    const transactionUsageByCustomer = transactions.reduce((map, transaction) => {
+    const transactionUsageByCustomer = filteredTransactions.reduce((map, transaction) => {
       const amount = toNumber(transaction.amount);
       const accountKeys = [
         transaction.fromAccountNumber,
@@ -505,6 +745,7 @@ const AdminReports = () => {
         isActiveCustomer,
         hasOutstandingExposure,
         accountCount: accounts.length,
+        accountOdBreakdown: formatAccountOdBreakdown(accounts),
         balance,
         overdraftUsed,
         overdraftLimit,
@@ -562,10 +803,21 @@ const AdminReports = () => {
     });
 
     const approvalStatusRows = [
-      { label: "Pending", value: approvals.filter((item) => item.status === "pending").length, color: "#f59e0b" },
-      { label: "Approved", value: approvals.filter((item) => item.status === "approved").length, color: "#10b981" },
-      { label: "Rejected", value: approvals.filter((item) => item.status === "rejected").length, color: "#ef4444" },
+      { label: "Pending", value: filteredApprovals.filter((item) => item.status === "pending").length, color: "#f59e0b" },
+      { label: "Approved", value: filteredApprovals.filter((item) => item.status === "approved").length, color: "#10b981" },
+      { label: "Rejected", value: filteredApprovals.filter((item) => item.status === "rejected").length, color: "#ef4444" },
     ];
+    const approvalDetailRows = [...filteredApprovals]
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.requestedOn || 0).getTime() -
+          new Date(a.updatedAt || a.requestedOn || 0).getTime()
+      )
+      .map((approval) => ({
+        ...approval,
+        fromAccountDisplay: getAccountDisplay(approval.account, accountByNumber),
+        toAccountDisplay: getAccountDisplay(approval.toAccount, accountByNumber),
+      }));
     const tierDistributionRows = tiers.map((tier) => ({
       label: tier.label,
       value: activeCustomerRows.filter((customer) => customer.classification === tier.key).length,
@@ -582,16 +834,19 @@ const AdminReports = () => {
       odBlocked,
       odByTierRows,
       approvalStatusRows,
+      approvalDetailRows,
       tierDistributionRows,
+      accountByNumber,
+      dateRange,
     };
-  }, [approvals, tiers, transactions, users]);
+  }, [approvals, dateFilter, tiers, transactions, users]);
 
   const transferRegisterRows = reportData.highValueTransfers.map((transaction) => ({
     "Transfer ID": transaction.id || "Not available",
     "Sender": transaction.sender || "Not available",
     "Receiver": transaction.receiver || "Not available",
-    "From Account": transaction.fromAccountNumber || "Not available",
-    "To Account": transaction.toAccountNumber || "Not available",
+    "From Account": transaction.fromAccountDisplay || transaction.fromAccountNumber || "Not available",
+    "To Account": transaction.toAccountDisplay || transaction.toAccountNumber || "Not available",
     "Amount": formatCurrency(transaction.amount || 0),
     "Status": formatStatus(transaction.status),
     "Transfer Date": formatReportDate(transaction.date || transaction.createdAt),
@@ -632,8 +887,8 @@ const AdminReports = () => {
         `${transaction.sender || "Not available"} to ${transaction.receiver || "Not available"}`,
         `Status: ${formatStatus(transaction.status)}`,
       ].join(" | "),
-      "From Account": transaction.fromAccountNumber || "Not available",
-      "To Account": transaction.toAccountNumber || "Not available",
+      "From Account": transaction.fromAccountDisplay || transaction.fromAccountNumber || "Not available",
+      "To Account": transaction.toAccountDisplay || transaction.toAccountNumber || "Not available",
       Amount: formatCurrency(transaction.amount || 0),
     })),
   ];
@@ -641,6 +896,7 @@ const AdminReports = () => {
     "Customer ID": customer.customerId,
     "Customer Name": customer.name,
     "Tier": customer.classification,
+    "Account Level OD": customer.accountOdBreakdown,
     "Overdraft Used": formatCurrency(customer.overdraftUsed),
     "Overdraft Limit": formatCurrency(customer.overdraftLimit),
     "Limit Used": `${customer.odUsage}%`,
@@ -693,6 +949,7 @@ const AdminReports = () => {
     },
     ...reportData.nearOdLimitRows.map((customer) => ({
       Customer: `${customer.name} (${customer.customerId})`,
+      "Account OD": customer.accountOdBreakdown,
       "OD Used": formatCurrency(customer.overdraftUsed),
       "OD Limit": formatCurrency(customer.overdraftLimit),
       "Monthly Use": customer.hasReachedMonthlyOdLimit
@@ -701,16 +958,60 @@ const AdminReports = () => {
       Status: customer.isActiveCustomer ? "Active" : "Inactive exposure",
     })),
   ];
-  const approvalCsvRows = reportData.approvalStatusRows.map((status) => ({
-    "Approval Status": status.label,
-    "Approval Count": status.value,
+  const approvalCsvRows = reportData.approvalDetailRows.map((approval) => ({
+    "Approval ID": approval.id || "Not available",
+    "Customer": approval.customer || "Not available",
+    "Manager": approval.manager || "Unassigned",
+    "From Account": approval.fromAccountDisplay || approval.account || "Not available",
+    "To Account": approval.toAccountDisplay || approval.toAccount || "Not available",
+    "Type": approval.type || "bank-transfer",
+    "Risk": formatApprovalRisk(approval.risk),
+    "Amount": formatCurrency(approval.amount || 0),
+    "Status": formatStatus(approval.status),
+    "Requested On": formatReportDate(approval.requestedOn),
+    "Reviewed On": approval.reviewedAt ? formatReportDate(approval.reviewedAt) : "Not reviewed",
+    "Rejection Reason": approval.rejectionReason || "",
   }));
+  const approvalPdfRows = [
+    {
+      "Approval ID": "Report scope",
+      Customer: `${reportData.approvalDetailRows.length} approval request(s)`,
+      Manager: Object.entries(
+        reportData.approvalDetailRows.reduce((summary, approval) => {
+          const status = formatStatus(approval.status);
+          summary[status] = (summary[status] || 0) + 1;
+          return summary;
+        }, {})
+      )
+        .map(([status, count]) => `${status}: ${count}`)
+        .join(" | ") || "No approvals",
+      Route: "Customer, manager, account route, risk, status, and decision details",
+      Amount: "",
+      Status: "",
+    },
+    ...reportData.approvalDetailRows.map((approval) => ({
+      "Approval ID": approval.id || "Not available",
+      Customer: approval.customer || "Not available",
+      Manager: approval.manager || "Unassigned",
+      Route: [
+        `From ${approval.fromAccountDisplay || approval.account || "Not available"}`,
+        `To ${approval.toAccountDisplay || approval.toAccount || "Not available"}`,
+        formatApprovalRisk(approval.risk),
+        approval.rejectionReason ? `Reason: ${approval.rejectionReason}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | "),
+      Amount: formatCurrency(approval.amount || 0),
+      Status: formatStatus(approval.status),
+    })),
+  ];
   const customerCsvRows = reportData.customerRows.map((customer) => ({
     "Customer ID": customer.customerId,
     "Customer Name": customer.name,
     "Email": customer.email,
     "Tier": customer.classification,
     "Account Count": customer.accountCount,
+    "Account Level OD": customer.accountOdBreakdown,
     "Total Balance": formatCurrency(customer.balance),
     "Overdraft Used": formatCurrency(customer.overdraftUsed),
     "Monthly Overdraft Uses": `${customer.odUsesThisMonth}/3`,
@@ -731,7 +1032,15 @@ const AdminReports = () => {
     "Daily Limit": formatCurrency(tier.dailyLimit),
     "Monthly Limit": formatCurrency(tier.monthlyLimit),
     "Overdraft Limit": formatCurrency(tier.maxODLimit),
-    "Minimum Balance": formatCurrency(tier.minBalance),
+    "Savings OD Rule": formatAccountTypeRule(
+      getTierAccountTypeRules(tier).find((rule) => rule.accountType === "Savings")
+    ),
+    "Current OD Rule": formatAccountTypeRule(
+      getTierAccountTypeRules(tier).find((rule) => rule.accountType === "Current")
+    ),
+    "Salary OD Rule": formatAccountTypeRule(
+      getTierAccountTypeRules(tier).find((rule) => rule.accountType === "Salary")
+    ),
     "Penalty Amount": formatCurrency(tier.penaltyAmount),
     "Interest Rate": tier.interestRate || tier.lateFeeRate,
     "Overdraft Blocked Accounts": tier.odBlockedAccounts,
@@ -743,8 +1052,8 @@ const AdminReports = () => {
       Classification: "Report scope",
       Customers: `${reportData.customerRows.length} customers`,
       "Transfer Limits": "Per transfer, daily, and monthly policy limits",
-      "OD Limit": "Maximum overdraft access by tier",
-      "Policy Notes": "Monthly overdraft attempts limited to 3",
+      "Account-wise OD": "OD limit, opening balance, and monthly usage by account type",
+      Charges: "Interest and penalty",
     },
     ...tiers.map((tier) => ({
       Classification: tier.label,
@@ -754,9 +1063,8 @@ const AdminReports = () => {
         `Daily ${formatCurrency(tier.dailyLimit)}`,
         `Monthly ${formatCurrency(tier.monthlyLimit)}`,
       ].join(" | "),
-      "OD Limit": formatCurrency(tier.maxODLimit),
-      "Policy Notes": [
-        `Minimum balance ${formatCurrency(tier.minBalance)}`,
+      "Account-wise OD": formatTierAccountTypeRules(tier),
+      Charges: [
         `Penalty ${formatCurrency(tier.penaltyAmount)}`,
         `Interest ${tier.interestRate || tier.lateFeeRate || "Not set"}`,
         "Settle before month-end",
@@ -765,6 +1073,7 @@ const AdminReports = () => {
   ];
   const highValuePagination = usePaginatedRows(reportData.highValueTransfers);
   const nearOdPagination = usePaginatedRows(reportData.nearOdLimitRows);
+  const approvalPagination = usePaginatedRows(reportData.approvalDetailRows);
 
   return (
     <DashboardLayout>
@@ -792,6 +1101,71 @@ const AdminReports = () => {
             </a>
           ))}
         </div>
+
+        <section className="rounded-2xl border border-bank-card-border bg-white p-4 shadow-sm">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-end">
+            <label className="label-field">
+              <span>Report Date Range</span>
+              <select
+                value={dateFilter.preset}
+                onChange={(event) =>
+                  setDateFilter((current) => ({
+                    ...current,
+                    preset: event.target.value,
+                  }))
+                }
+                className="input-field"
+              >
+                {dateRangeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {dateFilter.preset === "custom" && (
+              <>
+                <label className="label-field">
+                  <span>Start Date</span>
+                  <input
+                    type="date"
+                    value={dateFilter.startDate}
+                    onChange={(event) =>
+                      setDateFilter((current) => ({
+                        ...current,
+                        startDate: event.target.value,
+                      }))
+                    }
+                    className="input-field"
+                  />
+                </label>
+                <label className="label-field">
+                  <span>End Date</span>
+                  <input
+                    type="date"
+                    value={dateFilter.endDate}
+                    onChange={(event) =>
+                      setDateFilter((current) => ({
+                        ...current,
+                        endDate: event.target.value,
+                      }))
+                    }
+                    className="input-field"
+                  />
+                </label>
+              </>
+            )}
+          </div>
+          <p className="mt-3 text-sm font-semibold text-slate-500">
+            Showing records for{" "}
+            {dateFilter.preset === "all"
+              ? "all available dates"
+              : dateFilter.preset === "custom"
+                ? `${dateFilter.startDate || "start"} to ${dateFilter.endDate || "end"}`
+                : dateRangeOptions.find((option) => option.value === dateFilter.preset)?.label.toLowerCase()}
+            .
+          </p>
+        </section>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <StatsCard
@@ -851,10 +1225,10 @@ const AdminReports = () => {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left">
               <thead className="table-head">
-                <tr>
-                  <th className="px-6 py-4">Transfer</th>
-                  <th className="px-6 py-4">Route</th>
-                  <th className="px-6 py-4">Amount</th>
+                  <tr>
+                    <th className="px-6 py-4">Transfer</th>
+                    <th className="px-6 py-4">Route</th>
+                    <th className="px-6 py-4">Amount</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4">Date</th>
                 </tr>
@@ -862,10 +1236,29 @@ const AdminReports = () => {
               <tbody>
                 {highValuePagination.pageRows.map((transaction) => (
                   <tr key={transaction.id} className="table-row">
-                    <td className="px-6 py-4 font-semibold">{transaction.id}</td>
                     <td className="px-6 py-4">
-                      <p className="font-semibold text-slate-900">{transaction.sender}</p>
-                      <p className="text-sm text-slate-500">to {transaction.receiver}</p>
+                      <p className="font-semibold text-slate-900">{transaction.id}</p>
+                      <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                        {transaction.type || "transfer"}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-xs font-bold uppercase text-slate-500">From</p>
+                          <p className="font-semibold text-slate-900">{transaction.sender}</p>
+                          <p className="text-sm text-slate-500">
+                            {transaction.fromAccountDisplay}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-bank-surface px-3 py-2">
+                          <p className="text-xs font-bold uppercase text-slate-500">To</p>
+                          <p className="mt-1 font-semibold text-slate-900">{transaction.receiver}</p>
+                          <p className="text-sm text-slate-500">
+                            {transaction.toAccountDisplay}
+                          </p>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-6 py-4 font-bold">{formatCurrency(transaction.amount)}</td>
                     <td className="px-6 py-4">
@@ -875,7 +1268,7 @@ const AdminReports = () => {
                   </tr>
                 ))}
                 {reportData.highValueTransfers.length === 0 && (
-                  <EmptyTableRow colSpan={5} message="No transfer records available yet." />
+                  <EmptyTableRow colSpan={5} message="No transfer records match the selected period." />
                 )}
               </tbody>
             </table>
@@ -921,18 +1314,19 @@ const AdminReports = () => {
                 exportRows={odCsvRows}
                 exportPdfRows={nearOdPdfRows}
                 exportPdfOptions={{
-                  headers: ["Customer", "OD Used", "OD Limit", "Monthly Use", "Status"],
+                  headers: ["Customer", "Account OD", "OD Used", "OD Limit", "Monthly Use", "Status"],
                   subtitle: `Customers Near Overdraft Limit | Generated on ${formatReportDate(new Date())}`,
                 }}
                 className="mb-0"
               />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] text-left">
+              <table className="w-full min-w-[1080px] text-left">
                 <thead className="table-head">
                   <tr>
                     <th className="px-6 py-4">Customer</th>
                     <th className="px-6 py-4">Tier</th>
+                    <th className="px-6 py-4">Account OD Rules</th>
                     <th className="px-6 py-4">Monthly Overdraft Uses</th>
                     <th className="px-6 py-4">Overdraft Exposure</th>
                     <th className="px-6 py-4">Transfer Activity</th>
@@ -958,6 +1352,11 @@ const AdminReports = () => {
                         <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${getTierTone(customer.classification).badge}`}>
                           {customer.classification}
                         </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="max-w-xs text-sm font-semibold leading-6 text-slate-600">
+                          {customer.accountOdBreakdown}
+                        </p>
                       </td>
                       <td className="px-6 py-4">
                         <span
@@ -993,7 +1392,7 @@ const AdminReports = () => {
                     </tr>
                   ))}
                   {reportData.nearOdLimitRows.length === 0 && (
-                    <EmptyTableRow colSpan={6} message="No customers are above the overdraft watch threshold." />
+                    <EmptyTableRow colSpan={7} message="No customers are above the overdraft watch threshold." />
                   )}
                 </tbody>
               </table>
@@ -1003,16 +1402,115 @@ const AdminReports = () => {
         </section>
 
         <section id="approvals" className="scroll-mt-8">
-          <div className="card-padded min-h-[360px]">
-            <SectionHeader
-              icon={Clock3}
-              title="Approval Reports"
-              subtitle="Approval health, resolution time, and bottleneck visibility."
-              exportLabel="Export Approvals"
-              exportName="approval-report"
-              exportRows={approvalCsvRows}
-            />
-            <DonutChart rows={reportData.approvalStatusRows} />
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+            <div className="card-padded min-h-[360px]">
+              <SectionHeader
+                icon={Clock3}
+                title="Approval Reports"
+                subtitle="Approval status overview for pending, approved, and rejected requests."
+                exportLabel="Export Approvals"
+                exportName="approval-report"
+                exportRows={approvalCsvRows}
+                exportPdfRows={approvalPdfRows}
+                exportPdfOptions={{
+                  headers: ["Approval ID", "Customer", "Manager", "Route", "Amount", "Status"],
+                  subtitle: `Approval Report | Generated on ${formatReportDate(new Date())}`,
+                }}
+              />
+              <DonutChart rows={reportData.approvalStatusRows} />
+            </div>
+
+            <div className="table-shell">
+              <div className="border-b border-bank-card-border p-5 sm:p-6">
+                <SectionHeader
+                  icon={FileBarChart}
+                  title="Approval Detail Register"
+                  subtitle="Request-level approval details with customer, manager, account route, risk, and decision status."
+                  className="mb-0"
+                />
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1040px] text-left">
+                  <thead className="table-head">
+                    <tr>
+                      <th className="px-5 py-4">Approval</th>
+                      <th className="px-5 py-4">Customer & Manager</th>
+                      <th className="px-5 py-4">Account Route</th>
+                      <th className="px-5 py-4">Risk</th>
+                      <th className="px-5 py-4">Amount</th>
+                      <th className="px-5 py-4">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {approvalPagination.pageRows.map((approval) => (
+                      <tr key={approval.id} className="table-row align-top">
+                        <td className="px-5 py-4">
+                          <p className="font-bold text-slate-950">{approval.id}</p>
+                          <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                            {approval.type || "bank-transfer"}
+                          </p>
+                          <p className="mt-2 text-xs font-semibold text-slate-500">
+                            Requested {formatReportDate(approval.requestedOn)}
+                          </p>
+                        </td>
+                        <td className="px-5 py-4">
+                          <p className="font-semibold text-slate-900">
+                            {approval.customer || "Customer not available"}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Manager: {approval.manager || "Unassigned"}
+                          </p>
+                          {approval.managerEmployeeId && (
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              {approval.managerEmployeeId}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="space-y-2 text-sm">
+                            <div className="rounded-lg bg-bank-surface px-3 py-2">
+                              <p className="text-xs font-bold uppercase text-slate-500">From</p>
+                              <p className="mt-1 break-words font-semibold text-slate-900">
+                                {approval.fromAccountDisplay || approval.account || "Not available"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg bg-bank-surface px-3 py-2">
+                              <p className="text-xs font-bold uppercase text-slate-500">To</p>
+                              <p className="mt-1 break-words font-semibold text-slate-900">
+                                {approval.toAccountDisplay || approval.toAccount || "Not available"}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <RiskBadge risk={approval.risk} />
+                        </td>
+                        <td className="px-5 py-4 font-bold text-slate-950">
+                          {formatCurrency(approval.amount || 0)}
+                        </td>
+                        <td className="px-5 py-4">
+                          <StatusBadge status={approval.status} />
+                          <p className="mt-2 text-xs font-semibold text-slate-500">
+                            {approval.reviewedAt
+                              ? `Reviewed ${formatReportDate(approval.reviewedAt)}`
+                              : "Not reviewed yet"}
+                          </p>
+                          {approval.rejectionReason && (
+                            <p className="mt-2 max-w-xs break-words rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold leading-5 text-red-700">
+                              {approval.rejectionReason}
+                            </p>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {reportData.approvalDetailRows.length === 0 && (
+                      <EmptyTableRow colSpan={6} message="No approval records match the selected period." />
+                    )}
+                  </tbody>
+                </table>
+                <TablePagination {...approvalPagination} />
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1042,7 +1540,7 @@ const AdminReports = () => {
                 exportRows={classificationCsvRows}
                 exportPdfRows={classificationPdfRows}
                 exportPdfOptions={{
-                  headers: ["Classification", "Customers", "Transfer Limits", "OD Limit", "Policy Notes"],
+                  headers: ["Classification", "Customers", "Transfer Limits", "Account-wise OD", "Charges"],
                   subtitle: `Classification Policy Report | Generated on ${formatReportDate(new Date())}`,
                 }}
                 className="mb-0"
@@ -1050,7 +1548,7 @@ const AdminReports = () => {
             </div>
             <div className="p-5 sm:p-6">
               {tiers.length === 0 ? (
-                <div className="empty-state">No classification policies available yet.</div>
+                <div className="empty-state">No classification policies are available for reporting.</div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                   {tiers.map((tier) => (
@@ -1059,7 +1557,7 @@ const AdminReports = () => {
                       className="rounded-xl border border-bank-card-border bg-white p-5 shadow-sm"
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
+                        <div className="min-w-0">
                           <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${getTierTone(tier.key).badge}`}>
                             {tier.label}
                           </span>
@@ -1067,9 +1565,9 @@ const AdminReports = () => {
                             {tier.customerCount} assigned customer{tier.customerCount === 1 ? "" : "s"}
                           </p>
                         </div>
-                        <div className="text-right">
+                        <div className="min-w-0 text-left sm:text-right">
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                            Overdraft Limit
+                            Highest OD Limit
                           </p>
                           <p className="mt-1 text-xl font-bold text-slate-950">
                             {formatCurrency(tier.maxODLimit)}
@@ -1078,45 +1576,26 @@ const AdminReports = () => {
                       </div>
 
                       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <div className="rounded-lg bg-bank-surface px-4 py-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
-                            Per Transfer
-                          </p>
-                          <p className="mt-1 font-bold text-slate-950">
-                            {formatCurrency(tier.perTxnLimit)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-bank-surface px-4 py-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
-                            Daily
-                          </p>
-                          <p className="mt-1 font-bold text-slate-950">
-                            {formatCurrency(tier.dailyLimit)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-bank-surface px-4 py-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
-                            Monthly
-                          </p>
-                          <p className="mt-1 font-bold text-slate-950">
-                            {formatCurrency(tier.monthlyLimit)}
-                          </p>
-                        </div>
+                        <PolicyMetric label="Per Transfer" value={formatCurrency(tier.perTxnLimit)} />
+                        <PolicyMetric label="Daily" value={formatCurrency(tier.dailyLimit)} />
+                        <PolicyMetric label="Monthly" value={formatCurrency(tier.monthlyLimit)} />
                       </div>
 
                       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div className="rounded-lg border border-slate-100 px-4 py-3">
-                          <p className="text-sm font-bold text-slate-700">Balance control</p>
-                          <p className="mt-1 text-sm text-slate-500">
-                            Minimum balance {formatCurrency(tier.minBalance)}
+                        <PolicyMetric label="Monthly OD Interest" value={tier.interestRate || tier.lateFeeRate || "Not set"} />
+                        <PolicyMetric label="Penalty" value={formatCurrency(tier.penaltyAmount)} />
+                      </div>
+
+                      <div className="mt-4 rounded-lg border border-slate-100 px-4 py-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-bold text-slate-700">
+                            Account-wise OD policy
                           </p>
+                          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
+                            3 uses monthly
+                          </span>
                         </div>
-                        <div className="rounded-lg border border-slate-100 px-4 py-3">
-                          <p className="text-sm font-bold text-slate-700">Overdraft charges</p>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {tier.interestRate || tier.lateFeeRate} interest, {formatCurrency(tier.penaltyAmount)} penalty
-                          </p>
-                        </div>
+                        <AccountTypeOdRulesTable tier={tier} />
                       </div>
 
                       <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold">

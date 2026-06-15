@@ -62,6 +62,9 @@ const initialAccountForm = {
 
 const accountTypes = ["Savings", "Current", "Salary"];
 
+const getAccountTypeRule = (tier, accountType) =>
+  (tier?.accountTypeOdRules || []).find((rule) => rule.accountType === accountType);
+
 const validationPatterns = {
   email: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/,
   phone: /^[6-9]\d{9}$/,
@@ -201,7 +204,8 @@ const ReadOnlyField = ({ label, value }) => (
   </Field>
 );
 
-const getPrimaryAccount = (user) => user.account || user.accounts?.[0] || {};
+const getCustomerAccounts = (user) =>
+  user.accounts?.length ? user.accounts : [user.account].filter((account) => account?.accountNumber);
 
 const sumAccountBalances = (accounts = []) =>
   accounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
@@ -254,10 +258,8 @@ const getNextAccountNumberPreview = (customerRows = []) => {
 };
 
 const toCustomerRow = (customer) => {
-  const primaryAccount = getPrimaryAccount(customer);
-  const accounts = customer.accounts?.length
-    ? customer.accounts
-    : [primaryAccount].filter((account) => account.accountNumber);
+  const accounts = getCustomerAccounts(customer);
+  const firstAccount = accounts[0] || {};
 
   return {
     id: customer.id,
@@ -269,17 +271,17 @@ const toCustomerRow = (customer) => {
     role: "customer",
     customerId: customer.customerId,
     accounts,
-    accountNumber: primaryAccount.accountNumber,
-    bankName: primaryAccount.bankName,
-    ifsc: primaryAccount.ifsc,
-    accountType: primaryAccount.accountType,
-    accountStatus: primaryAccount.accountStatus || "active",
+    accountNumber: firstAccount.accountNumber,
+    bankName: firstAccount.bankName,
+    ifsc: firstAccount.ifsc,
+    accountType: firstAccount.accountType,
+    accountStatus: firstAccount.accountStatus || "active",
     phone: customer.phone,
     address: customer.address,
     classification: customer.classification,
-    balance: sumAccountBalances(accounts) || primaryAccount.balance || 0,
-    overdraftLimit: primaryAccount.overdraftLimit || 0,
-    overdraftUsed: sumOverdraftUsed(accounts) || primaryAccount.overdraftUsed || 0,
+    balance: sumAccountBalances(accounts) || firstAccount.balance || 0,
+    overdraftLimit: accounts.reduce((sum, account) => sum + Number(account.overdraftLimit || 0), 0),
+    overdraftUsed: sumOverdraftUsed(accounts) || firstAccount.overdraftUsed || 0,
     pendingRequests: customer.pendingRequests || 0,
     totalTransfers: customer.totalTransfers || 0,
     status: customer.status,
@@ -372,6 +374,7 @@ const Customers = ({ managementMode = "users" }) => {
   const [formMessage, setFormMessage] = useState("");
   const [disableReview, setDisableReview] = useState(null);
   const [managerReplacementReview, setManagerReplacementReview] = useState(null);
+  const [managerStatusReview, setManagerStatusReview] = useState(null);
   const [search, setSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [tierFilter, setTierFilter] = useState("");
@@ -467,17 +470,78 @@ const Customers = ({ managementMode = "users" }) => {
     () => getNextEmployeeIdPreview(managerRows),
     [managerRows]
   );
+  const selectedCreateTier = tierRows.find(
+    (tier) => tier.key === userForm.classification
+  );
+  const selectedCreateAccountRule = getAccountTypeRule(
+    selectedCreateTier,
+    userForm.accountType
+  );
+  const selectedMinOpeningBalance = Number(
+    selectedCreateAccountRule?.minOpeningBalance || selectedCreateTier?.minBalance || 0
+  );
+  const getOpeningBalanceError = (value, minOpeningBalance = selectedMinOpeningBalance) => {
+    const trimmedValue = String(value || "").trim();
+
+    if (!trimmedValue) {
+      return "";
+    }
+
+    const openingBalance = Number(trimmedValue);
+
+    if (!Number.isFinite(openingBalance)) {
+      return "Opening balance must be a valid amount.";
+    }
+
+    if (openingBalance < 0) {
+      return "Opening balance cannot be negative.";
+    }
+
+    if (openingBalance < minOpeningBalance) {
+      return `Minimum opening balance is ${formatCurrency(minOpeningBalance)}.`;
+    }
+
+    return "";
+  };
+
+  const openingBalanceError =
+    userForm.role === "customer"
+      ? getOpeningBalanceError(userForm.walletBalance)
+      : "";
 
   const updateUserForm = (field, value) => {
-    setUserForm((currentForm) => ({
-      ...currentForm,
-      [field]: value,
-    }));
+    setUserForm((currentForm) => {
+      const nextForm = {
+        ...currentForm,
+        [field]: value,
+      };
+
+      if (["classification", "accountType"].includes(field) && nextForm.role === "customer") {
+        const selectedTier = tierRows.find((tier) => tier.key === nextForm.classification);
+        const selectedRule = getAccountTypeRule(selectedTier, nextForm.accountType);
+        const minOpeningBalance = Number(
+          selectedRule?.minOpeningBalance || selectedTier?.minBalance || 0
+        );
+
+        if (
+          minOpeningBalance > 0 &&
+          (!nextForm.walletBalance || Number(nextForm.walletBalance) < minOpeningBalance)
+        ) {
+          nextForm.walletBalance = String(minOpeningBalance);
+        }
+      }
+
+      return nextForm;
+    });
 
     setFieldErrors((currentErrors) => {
+      const fieldError =
+        field === "walletBalance"
+          ? getOpeningBalanceError(value)
+          : validateField(field, value);
       const nextErrors = {
         ...currentErrors,
-        [field]: validateField(field, value),
+        [field]: fieldError,
       };
 
       if (field === "role") {
@@ -567,6 +631,18 @@ const Customers = ({ managementMode = "users" }) => {
 
     if (Number(userForm.walletBalance || 0) < 0) {
       showFormToast("Wallet balance cannot be negative.", "warning");
+      return;
+    }
+
+    if (
+      isCustomer &&
+      selectedPolicy &&
+      Number(userForm.walletBalance || 0) < selectedMinOpeningBalance
+    ) {
+      showFormToast(
+        `${userForm.accountType} account requires at least ${formatCurrency(selectedMinOpeningBalance)} opening balance for ${selectedPolicy.label} tier.`,
+        "warning"
+      );
       return;
     }
 
@@ -695,7 +771,8 @@ const Customers = ({ managementMode = "users" }) => {
             bankName: userForm.bankName,
             accountType: userForm.accountType,
             balance: walletBalance,
-            overdraftLimit: selectedPolicy.maxODLimit || selectedPolicy.limit,
+            overdraftLimit:
+              selectedCreateAccountRule?.odLimit || selectedPolicy.maxODLimit || selectedPolicy.limit,
             accountStatus: userForm.accountStatus,
           }
           : undefined,
@@ -818,28 +895,90 @@ const Customers = ({ managementMode = "users" }) => {
     updateCustomerStatus(disableReview.customer, "inactive");
   };
 
-  const toggleManagerStatus = async (manager) => {
-    const nextStatus = manager.status === "active" ? "inactive" : "active";
+  const applyManagerStatusResult = (manager, nextStatus, data) => {
+    const reassignedPendingApprovals = Number(
+      data.managerReplacement?.reassignedPendingApprovals || 0
+    );
+    const replacementManagerId = data.managerReplacement?.replacementManagerId;
+
+    setManagerRows((currentRows) =>
+      currentRows.map((row) => {
+        if (row.id === manager.id) {
+          return {
+            ...row,
+            status: data.user.status,
+            pendingApprovals:
+              nextStatus === "active"
+                ? Number(row.pendingApprovals || 0) + reassignedPendingApprovals
+                : 0,
+          };
+        }
+
+        if (nextStatus === "active" && row.status === "active") {
+          return { ...row, status: "inactive", pendingApprovals: 0 };
+        }
+
+        if (replacementManagerId && row.id === replacementManagerId) {
+          return {
+            ...row,
+            pendingApprovals: Number(row.pendingApprovals || 0) + reassignedPendingApprovals,
+          };
+        }
+
+        return row;
+      })
+    );
+  };
+
+  const updateManagerStatus = async (manager, nextStatus) => {
+    setManagerStatusReview((current) =>
+      current ? { ...current, isSaving: true } : current
+    );
 
     try {
       const { data } = await api.patch(`/users/${manager.id}/status`, {
         status: nextStatus,
       });
 
-      setManagerRows((currentRows) =>
-        currentRows.map((row) =>
-          row.id === manager.id ? { ...row, status: data.user.status } : row
-        )
-      );
+      applyManagerStatusResult(manager, nextStatus, data);
+      setManagerStatusReview(null);
       toast.success(
-        `${manager.name} ${nextStatus === "inactive" ? "disabled" : "enabled"} successfully.`
+        nextStatus === "active"
+          ? `${manager.name} enabled. Pending approvals were moved to this manager.`
+          : `${manager.name} disabled successfully.`
       );
     } catch (error) {
       showFormToast(
         error.response?.data?.message || "Unable to update manager status.",
         "error"
       );
+      setManagerStatusReview((current) =>
+        current ? { ...current, isSaving: false } : current
+      );
     }
+  };
+
+  const toggleManagerStatus = (manager) => {
+    const nextStatus = manager.status === "active" ? "inactive" : "active";
+    const otherActiveManagers = managerRows.filter(
+      (row) => row.id !== manager.id && row.status === "active"
+    );
+    const pendingApprovals =
+      nextStatus === "active"
+        ? otherActiveManagers.reduce(
+            (total, row) => total + Number(row.pendingApprovals || 0),
+            0
+          )
+        : Number(manager.pendingApprovals || 0);
+
+    setManagerStatusReview({
+      manager,
+      nextStatus,
+      otherActiveManagers,
+      pendingApprovals,
+      isSaving: false,
+      canProceed: nextStatus === "active" || pendingApprovals === 0 || otherActiveManagers.length > 0,
+    });
   };
 
   const getAvailableAccountTypes = (customer) => {
@@ -853,6 +992,13 @@ const Customers = ({ managementMode = "users" }) => {
   const validateAccountForm = (form = accountForm) => {
     const errors = {};
     const availableTypes = getAvailableAccountTypes(form.customer);
+    const customerTier = tierRows.find(
+      (tier) => tier.key === form.customer?.classification
+    );
+    const accountRule = getAccountTypeRule(customerTier, form.accountType);
+    const minOpeningBalance = Number(
+      accountRule?.minOpeningBalance || customerTier?.minBalance || 0
+    );
 
     if (!availableTypes.includes(form.accountType)) {
       errors.accountType = "Choose an account type this customer does not already have.";
@@ -860,6 +1006,8 @@ const Customers = ({ managementMode = "users" }) => {
 
     if (Number(form.openingBalance || 0) < 0) {
       errors.openingBalance = "Opening balance cannot be negative.";
+    } else if (Number(form.openingBalance || 0) < minOpeningBalance) {
+      errors.openingBalance = `Minimum opening balance is ${formatCurrency(minOpeningBalance)}.`;
     }
 
     if (!["active", "inactive", "blocked"].includes(form.accountStatus)) {
@@ -872,12 +1020,19 @@ const Customers = ({ managementMode = "users" }) => {
 
   const beginAddAccount = (customer) => {
     const availableTypes = getAvailableAccountTypes(customer);
+    const initialType = availableTypes[0] || "";
+    const customerTier = tierRows.find((tier) => tier.key === customer.classification);
+    const accountRule = getAccountTypeRule(customerTier, initialType);
+    const minOpeningBalance = Number(
+      accountRule?.minOpeningBalance || customerTier?.minBalance || 0
+    );
 
     setAccountErrors({});
     setAccountForm({
       ...initialAccountForm,
       customer,
-      accountType: availableTypes[0] || "",
+      accountType: initialType,
+      openingBalance: minOpeningBalance > 0 ? String(minOpeningBalance) : "",
     });
   };
 
@@ -886,6 +1041,23 @@ const Customers = ({ managementMode = "users" }) => {
       ...accountForm,
       [field]: value,
     };
+
+    if (field === "accountType") {
+      const customerTier = tierRows.find(
+        (tier) => tier.key === accountForm.customer?.classification
+      );
+      const accountRule = getAccountTypeRule(customerTier, value);
+      const minOpeningBalance = Number(
+        accountRule?.minOpeningBalance || customerTier?.minBalance || 0
+      );
+
+      if (
+        minOpeningBalance > 0 &&
+        (!nextForm.openingBalance || Number(nextForm.openingBalance) < minOpeningBalance)
+      ) {
+        nextForm.openingBalance = String(minOpeningBalance);
+      }
+    }
 
     setAccountForm(nextForm);
     validateAccountForm(nextForm);
@@ -931,8 +1103,7 @@ const Customers = ({ managementMode = "users" }) => {
       panNumber: customer.panNumber || "",
       aadhaarNumber: customer.aadhaarNumber || "",
       dob: customer.dob ? String(customer.dob).slice(0, 10) : "",
-      accountNumber: customer.accountNumber || "",
-      accountType: customer.accountType || "",
+      accounts: customer.accounts || [],
       phone: customer.phone || "",
       address: customer.address || "",
       classification: customer.classification || "",
@@ -1101,11 +1272,21 @@ const Customers = ({ managementMode = "users" }) => {
           )
         );
       } else {
-        setManagerRows((currentRows) =>
-          currentRows.map((row) =>
-            row.id === editForm.id ? toManagerRow(data.user) : row
-          )
-        );
+        const editedManager = managerRows.find((manager) => manager.id === editForm.id) || {
+          id: editForm.id,
+          name: editForm.name,
+          pendingApprovals: 0,
+        };
+
+        if (data.managerReplacement) {
+          applyManagerStatusResult(editedManager, editForm.status, data);
+        } else {
+          setManagerRows((currentRows) =>
+            currentRows.map((row) =>
+              row.id === editForm.id ? toManagerRow(data.user) : row
+            )
+          );
+        }
       }
 
       showFormToast(`${editForm.name} updated.`, "success");
@@ -1123,7 +1304,9 @@ const Customers = ({ managementMode = "users" }) => {
   );
   const activeValidationFields =
     activeValidationFieldsByRole[userForm.role] || activeValidationFieldsByRole.customer;
-  const hasValidationErrors = activeValidationFields.some((field) => fieldErrors[field]);
+  const hasValidationErrors =
+    activeValidationFields.some((field) => fieldErrors[field]) ||
+    Boolean(openingBalanceError);
 
   return (
     <DashboardLayout>
@@ -1405,7 +1588,7 @@ const Customers = ({ managementMode = "users" }) => {
                           <option value="">Select tier</option>
                           {tierRows.map((tier) => (
                             <option key={tier.key} value={tier.key}>
-                              {tier.label} - {formatCurrency(tier.maxODLimit)}
+                              {tier.label}
                             </option>
                           ))}
                         </select>
@@ -1413,16 +1596,26 @@ const Customers = ({ managementMode = "users" }) => {
                       <Field label="Opening Balance" required>
                         <input
                           required
-                          min="0"
+                          min={selectedMinOpeningBalance}
                           type="number"
                           value={userForm.walletBalance}
                           onChange={(event) =>
                             updateUserForm("walletBalance", event.target.value)
                           }
                           className={inputClass}
-                          placeholder="0"
+                          placeholder={
+                            selectedMinOpeningBalance > 0
+                              ? String(selectedMinOpeningBalance)
+                              : "0"
+                          }
                         />
-                        <FieldError message={fieldErrors.walletBalance} />
+                        {selectedCreateTier && userForm.accountType && (
+                          <p className="mt-2 text-xs font-semibold text-blue-700">
+                            Minimum opening balance for {selectedCreateTier.label} {userForm.accountType}:{" "}
+                            {formatCurrency(selectedMinOpeningBalance)}
+                          </p>
+                        )}
+                        <FieldError message={fieldErrors.walletBalance || openingBalanceError} />
                       </Field>
                       <Field label="Account Number">
                         <input
@@ -1547,82 +1740,98 @@ const Customers = ({ managementMode = "users" }) => {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left">
+              <div>
+                <table className="w-full table-fixed text-left">
                   <thead className="table-head">
                     <tr>
-                      <th className="px-6 py-4">Customer</th>
-                      <th className="px-6 py-4">Account</th>
-                      <th className="px-6 py-4">Tier</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4">Action</th>
+                      <th className="w-[31%] px-4 py-4">Customer</th>
+                      <th className="w-[31%] px-4 py-4">Accounts</th>
+                      <th className="w-[13%] px-4 py-4">Tier</th>
+                      <th className="w-[11%] px-4 py-4">Status</th>
+                      <th className="w-[14%] px-4 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {customerPagination.pageRows.map((customer) => (
-                      <tr key={customer.customerId} className="table-row">
-                        <td className="px-6 py-4">
-                          <p className="font-semibold text-slate-900">
+                      <tr key={customer.customerId} className="table-row align-top">
+                        <td className="px-4 py-4">
+                          <p className="truncate font-semibold text-slate-900" title={customer.name}>
                             {customer.name}
                           </p>
-                          <p className="flex items-center gap-1 text-sm text-slate-500">
-                            <Mail size={14} />
-                            {customer.email}
+                          <p className="mt-1 flex min-w-0 items-center gap-1 text-sm text-slate-500">
+                            <Mail size={14} className="shrink-0" />
+                            <span className="truncate" title={customer.email}>
+                              {customer.email}
+                            </span>
                           </p>
-                          <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
-                            {customer.customerId}
-                          </p>
-                          <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
-                            PAN {customer.panNumber || "Not set"}
+                          <p className="mt-1 truncate text-xs font-semibold uppercase text-slate-400">
+                            {customer.customerId} / PAN {customer.panNumber || "Not set"}
                           </p>
                           <p className="mt-1 text-xs font-medium text-slate-400">
                             Registered {toDateOnly(customer.createdAt) || "Not available"}
                           </p>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-4">
                           {customer.accounts?.length > 0 ? (
                             <div>
-                              <p className="font-semibold text-slate-900">
-                                {customer.accounts.length} linked account
-                                {customer.accounts.length === 1 ? "" : "s"}
-                              </p>
-                              <p className="mt-1 text-sm text-slate-500">
-                                Primary: {maskAccountNumber(customer.accountNumber)}
-                              </p>
-                              <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
-                                {customer.accountStatus || "active"} account
-                              </p>
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-semibold text-slate-900">
+                                  {customer.accounts.length} account
+                                  {customer.accounts.length === 1 ? "" : "s"}
+                                </span>
+                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">
+                                  By type
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {customer.accounts.map((account) => (
+                                  <span
+                                    key={account.accountNumber || account.accountType}
+                                    className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs"
+                                    title={`${account.accountType || "Account"} ${maskAccountNumber(account.accountNumber)}`}
+                                  >
+                                    <span className="font-bold text-slate-800">
+                                      {account.accountType || "Account"}
+                                    </span>
+                                    <span className="truncate font-semibold text-slate-500">
+                                      {maskAccountNumber(account.accountNumber)}
+                                    </span>
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           ) : (
                             <span className="text-sm text-slate-400">No account linked</span>
                           )}
                         </td>
-                        <td className="px-6 py-4">
-                          <span className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ${getTierTone(customer.classification).badge}`}>
+                        <td className="px-4 py-4">
+                          <span className={`inline-flex max-w-full truncate rounded-full px-3 py-1 text-sm font-semibold capitalize ${getTierTone(customer.classification).badge}`}>
                             {customer.classification}
                           </span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-4">
                           <span
-                            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-semibold ${customer.status === "active"
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-slate-100 text-slate-500"
-                              }`}
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
+                              customer.status === "active"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
                           >
                             {customer.status === "active" ? (
-                              <BadgeCheck size={15} />
+                              <BadgeCheck size={14} />
                             ) : (
-                              <Ban size={15} />
+                              <Ban size={14} />
                             )}
                             {customer.status}
                           </span>
                         </td>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-wrap items-center gap-2">
+                        <td className="px-4 py-4">
+                          <div className="flex flex-wrap justify-end gap-1.5">
                             <button
                               type="button"
                               className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
                               aria-label={`Edit ${customer.name}`}
+                              title="Edit customer"
                               onClick={() => beginEditCustomer(customer)}
                             >
                               <Edit3 size={16} />
@@ -1630,10 +1839,11 @@ const Customers = ({ managementMode = "users" }) => {
                             <button
                               type="button"
                               onClick={() => beginAddAccount(customer)}
-                              className="inline-flex items-center gap-2 rounded-lg border border-blue-100 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+                              className="rounded-lg border border-blue-100 p-2 text-blue-700 hover:bg-blue-50"
+                              aria-label={`Add account for ${customer.name}`}
+                              title="Add account"
                             >
-                              <Plus size={15} />
-                              Add Account
+                              <Plus size={16} />
                             </button>
                             <button
                               type="button"
@@ -1643,24 +1853,24 @@ const Customers = ({ managementMode = "users" }) => {
                                   summary: getCustomerAccountSummary(customer),
                                 })
                               }
-                              className="inline-flex items-center gap-2 rounded-lg border border-emerald-100 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+                              className="rounded-lg border border-emerald-100 p-2 text-emerald-700 hover:bg-emerald-50"
+                              aria-label={`View accounts for ${customer.name}`}
+                              title="View accounts"
                             >
-                              <Wallet size={15} />
-                              Accounts
+                              <Wallet size={16} />
                             </button>
                             <button
                               type="button"
                               onClick={() => toggleCustomerStatus(customer)}
-                              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                              className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
+                              aria-label={`${customer.status === "active" ? "Disable" : "Enable"} ${customer.name}`}
+                              title={customer.status === "active" ? "Disable access" : "Enable access"}
                             >
                               {customer.status === "active" ? (
-                                <Ban size={15} />
+                                <Ban size={16} />
                               ) : (
-                                <BadgeCheck size={15} />
+                                <BadgeCheck size={16} />
                               )}
-                              {customer.status === "active"
-                                ? "Disable"
-                                : "Enable"}
                             </button>
                           </div>
                         </td>
@@ -1669,7 +1879,7 @@ const Customers = ({ managementMode = "users" }) => {
                     {filteredCustomers.length === 0 && (
                       <tr>
                         <td
-                          colSpan={6}
+                          colSpan={5}
                           className="px-6 py-8 text-center text-sm font-semibold text-slate-500"
                         >
                           No customers match the selected filters.
@@ -2265,6 +2475,187 @@ const Customers = ({ managementMode = "users" }) => {
           </div>
         )}
 
+        {managerStatusReview && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:items-center">
+            <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="shrink-0 border-b border-slate-100 px-6 py-5">
+                <div className="flex items-start gap-4">
+                  <div
+                    className={`rounded-xl p-3 ${
+                      managerStatusReview.nextStatus === "active"
+                        ? "bg-amber-50 text-amber-700"
+                        : "bg-red-50 text-red-700"
+                    }`}
+                  >
+                    {managerStatusReview.nextStatus === "active" ? (
+                      <ShieldAlert size={24} />
+                    ) : (
+                      <Ban size={24} />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">
+                      Manager Access Review
+                    </p>
+                    <h2 className="mt-1 text-2xl font-bold text-slate-950">
+                      {managerStatusReview.nextStatus === "active"
+                        ? `Enable ${managerStatusReview.manager.name}?`
+                        : `Disable ${managerStatusReview.manager.name}?`}
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {managerStatusReview.nextStatus === "active"
+                        ? "Only one manager can be active. Enabling this manager will disable the current active manager and move pending approvals here."
+                        : "Disabling a manager removes login access. Pending approvals need another active manager before this can continue."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                <div className="rounded-xl border border-bank-card-border bg-bank-surface px-4 py-3">
+                  <p className="font-bold text-slate-950">
+                    {managerStatusReview.manager.name}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {managerStatusReview.manager.employeeId} / {managerStatusReview.manager.email}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                    <Users size={18} className="text-blue-600" />
+                    <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                      Active Managers
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-slate-950">
+                      {managerRows.filter((manager) => manager.status === "active").length}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                    <AlertTriangle size={18} className="text-amber-600" />
+                    <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                      Pending Work
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-slate-950">
+                      {managerStatusReview.pendingApprovals}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                    <BadgeCheck size={18} className="text-emerald-600" />
+                    <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                      New Status
+                    </p>
+                    <p className="mt-1 text-lg font-bold capitalize text-slate-950">
+                      {managerStatusReview.nextStatus}
+                    </p>
+                  </div>
+                </div>
+
+                {managerStatusReview.nextStatus === "active" && (
+                  <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="mt-0.5 shrink-0 text-amber-700" size={20} />
+                      <div>
+                        <h3 className="font-bold text-amber-950">
+                          Pending approvals will transfer
+                        </h3>
+                        <p className="mt-1 text-sm leading-6 text-amber-900">
+                          Current active manager access will be disabled. Pending approval records,
+                          customer links, and transaction details stay saved and are reassigned to
+                          {` ${managerStatusReview.manager.name}`}.
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {managerStatusReview.nextStatus !== "active" &&
+                  managerStatusReview.pendingApprovals > 0 && (
+                    <section className="rounded-xl border border-red-200 bg-red-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 shrink-0 text-red-700" size={20} />
+                        <div>
+                          <h3 className="font-bold text-red-950">
+                            Disable is blocked for now
+                          </h3>
+                          <p className="mt-1 text-sm leading-6 text-red-900">
+                            This manager still owns pending approvals. Enable or create another
+                            manager first, then those approvals will transfer automatically.
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                {managerStatusReview.nextStatus === "active" && (
+                  <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                    <h3 className="font-bold text-slate-950">Managers affected</h3>
+                    <div className="mt-3 space-y-2">
+                      {managerStatusReview.otherActiveManagers.length === 0 && (
+                        <p className="text-sm text-slate-500">
+                          No other manager is currently active.
+                        </p>
+                      )}
+                      {managerStatusReview.otherActiveManagers.map((manager) => (
+                        <div
+                          key={manager.id || manager.employeeId}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-bank-surface px-3 py-2"
+                        >
+                          <div>
+                            <p className="font-semibold text-slate-900">{manager.name}</p>
+                            <p className="text-xs font-semibold text-slate-500">
+                              {manager.employeeId} / {manager.email}
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-bold uppercase text-red-700">
+                            Will be inactive
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="shrink-0 border-t border-slate-100 bg-slate-50 px-6 py-4">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setManagerStatusReview(null)}
+                    disabled={managerStatusReview.isSaving}
+                    className="btn-secondary justify-center px-4 py-2"
+                  >
+                    Cancel
+                  </button>
+                  {managerStatusReview.canProceed && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateManagerStatus(
+                          managerStatusReview.manager,
+                          managerStatusReview.nextStatus
+                        )
+                      }
+                      disabled={managerStatusReview.isSaving}
+                      className={`justify-center px-4 py-2 ${
+                        managerStatusReview.nextStatus === "active"
+                          ? "btn-primary"
+                          : "btn-primary bg-red-600 hover:bg-red-700"
+                      }`}
+                    >
+                      {managerStatusReview.isSaving
+                        ? "Saving..."
+                        : managerStatusReview.nextStatus === "active"
+                          ? "Enable Manager"
+                          : "Disable Manager"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {accountForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
             <form
@@ -2352,7 +2743,16 @@ const Customers = ({ managementMode = "users" }) => {
 
                   <Field label="Opening Balance" required>
                     <input
-                      min="0"
+                      min={
+                        Number(
+                          getAccountTypeRule(
+                            tierRows.find((tier) => tier.key === accountForm.customer?.classification),
+                            accountForm.accountType
+                          )?.minOpeningBalance ||
+                            tierRows.find((tier) => tier.key === accountForm.customer?.classification)?.minBalance ||
+                            0
+                        )
+                      }
                       type="number"
                       value={accountForm.openingBalance}
                       onChange={(event) =>
@@ -2361,6 +2761,17 @@ const Customers = ({ managementMode = "users" }) => {
                       className={inputClass}
                       placeholder="0"
                     />
+                    <p className="mt-2 text-xs font-semibold text-blue-700">
+                      Minimum opening balance:{" "}
+                      {formatCurrency(
+                        getAccountTypeRule(
+                          tierRows.find((tier) => tier.key === accountForm.customer?.classification),
+                          accountForm.accountType
+                        )?.minOpeningBalance ||
+                          tierRows.find((tier) => tier.key === accountForm.customer?.classification)?.minBalance ||
+                          0
+                      )}
+                    </p>
                     <FieldError message={accountErrors.openingBalance} />
                   </Field>
 
@@ -2573,8 +2984,24 @@ const Customers = ({ managementMode = "users" }) => {
                       <ReadOnlyField label="Customer ID" value={editForm.customerId} />
                       <ReadOnlyField label="PAN Number" value={editForm.panNumber} />
                       <ReadOnlyField label="Aadhaar Number" value={editForm.aadhaarNumber} />
-                      <ReadOnlyField label="Account Number" value={maskAccountNumber(editForm.accountNumber)} />
-                      <ReadOnlyField label="Account Type" value={editForm.accountType} />
+                      <div className="sm:col-span-2">
+                        <p className="text-sm font-semibold text-slate-600">Accounts By Type</p>
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          {(editForm.accounts || []).map((account) => (
+                            <div
+                              key={account.accountNumber || account.accountType}
+                              className="rounded-lg border border-slate-200 bg-white p-3"
+                            >
+                              <p className="font-bold text-slate-900">
+                                {account.accountType || "Account"}
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-slate-500">
+                                {maskAccountNumber(account.accountNumber)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </section>
                 </div>

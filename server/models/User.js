@@ -54,6 +54,11 @@ const accountSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    odMonthlyUseLimit: {
+      type: Number,
+      default: 3,
+      min: 0,
+    },
     odBlocked: {
       type: Boolean,
       default: false,

@@ -1,4 +1,3 @@
-const dns = require('dns');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -14,10 +13,8 @@ const tierRoutes = require('./routes/tierRoutes');
 const overdraftRoutes = require('./routes/overdraftRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const businessRuleRoutes = require('./routes/businessRuleRoutes');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
-
-dns.setServers(['8.8.8.8', '1.1.1.1']);
-dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
@@ -36,6 +33,7 @@ app.use('/api/tiers', tierRoutes);
 app.use('/api/overdraft', overdraftRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/business-rules', businessRuleRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

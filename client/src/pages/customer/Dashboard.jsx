@@ -116,7 +116,8 @@ const Dashboard = () => {
             <div className="space-y-4">
               {accounts.map((account) => {
                 const balance = Number(account.balance || 0);
-                const width = Math.max(6, Math.round((balance / highestBalance) * 100));
+                const width =
+                  balance > 0 ? Math.max(6, Math.round((balance / highestBalance) * 100)) : 0;
 
                 return (
                   <div key={account.accountNumber || account.accountType}>

@@ -28,6 +28,36 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem("adnate-token");
   }, [token]);
 
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    let isMounted = true;
+
+    api
+      .get("/users/me")
+      .then(({ data }) => {
+        if (isMounted) {
+          setUser(data.user);
+        }
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+
+        if ([401, 403].includes(error.response?.status)) {
+          setUser(null);
+          setToken(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [token]);
+
   const login = useCallback(async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
 

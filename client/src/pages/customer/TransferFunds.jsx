@@ -93,6 +93,12 @@ const TransferFunds = () => {
     (account) => account.accountNumber === effectiveOwnFormData.toAccountNumber
   );
   const selectedTransferLimit = Number(selectedFromAccount?.transferLimit || 0);
+  const selectedBalance = Number(selectedFromAccount?.balance || 0);
+  const selectedOdLimit = Number(selectedFromAccount?.overdraftLimit || 0);
+  const selectedOdUsed = Number(selectedFromAccount?.overdraftUsed || 0);
+  const selectedOdAvailable = Math.max(0, selectedOdLimit - selectedOdUsed);
+  const beneficiaryTransferAmount = Number(formData.amount || 0);
+  const overdraftNeeded = Math.max(0, beneficiaryTransferAmount - selectedBalance);
   const ownTransferAmount = Number(ownFormData.amount || 0);
   const beneficiaryAccounts = selectedBeneficiaryAccounts;
 
@@ -284,12 +290,12 @@ const TransferFunds = () => {
             }}
           />
           <StatsCard
-            title="Transfer Limit"
+            title="Per Transfer Limit"
             value={selectedTransferLimit > 0 ? formatCurrency(selectedTransferLimit) : "No limit"}
             icon={ArrowLeftRight}
             accent="bg-amber-500"
             iconTone="bg-amber-50 text-amber-600"
-            footer={{ text: "Per selected account" }}
+            footer={{ text: "For the selected account" }}
           />
         </div>
 
@@ -365,6 +371,39 @@ const TransferFunds = () => {
             </span>
           )}
         </label>
+
+        {selectedFromAccount && (
+          <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <p className="font-semibold">Balance</p>
+                <p className="mt-1 text-lg font-bold">{formatCurrency(selectedBalance)}</p>
+              </div>
+              <div>
+                <p className="font-semibold">OD Available</p>
+                <p className="mt-1 text-lg font-bold">{formatCurrency(selectedOdAvailable)}</p>
+              </div>
+              <div>
+                <p className="font-semibold">OD Uses</p>
+                <p className="mt-1 text-lg font-bold">
+                  {selectedFromAccount.odCountThisMonth || 0} / {selectedFromAccount.odMonthlyUseLimit ?? 3}
+                </p>
+              </div>
+            </div>
+            {beneficiaryTransferAmount > 0 && (
+              <p className="mt-3 font-semibold">
+                {overdraftNeeded > 0
+                  ? `${formatCurrency(overdraftNeeded)} will use OD from this ${selectedFromAccount.accountType} account.`
+                  : "This transfer can be covered by the selected account balance."}
+              </p>
+            )}
+            {selectedFromAccount.odBlocked && (
+              <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 font-semibold text-red-700">
+                OD is blocked for this account until the next monthly reset.
+              </p>
+            )}
+          </div>
+        )}
 
         <label className="label-field mt-5">
           Beneficiary

@@ -224,7 +224,7 @@ const Profile = () => {
   return (
     <DashboardLayout>
       <PageContent>
-        <PageHeader title="Profile" subtitle="Manage your personal customer details.">
+        <PageHeader title="Profile" subtitle="Manage your personal details, contact information, and account identity.">
           <button
             type="button"
             onClick={() => {
@@ -282,8 +282,8 @@ const Profile = () => {
         </div>
 
         <SectionCard
-          title="Database Profile"
-          subtitle="Your profile is loaded from the database each time this page opens."
+          title="Personal Details"
+          subtitle="Review verified identity details and update your contact information."
           className="max-w-5xl"
         >
           <form onSubmit={saveProfile}>

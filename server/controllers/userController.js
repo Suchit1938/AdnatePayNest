@@ -10,6 +10,7 @@ const {
   syncCustomerAccounts,
   toWholeRupees,
 } = require('../utils/customerAccounts');
+const { getAccountTypeOdRule, getAccountTypeOdRules } = require('../utils/accountTypeOdPolicy');
 const Counter = require('../models/Counter');
 const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
@@ -162,6 +163,120 @@ const generateEmployeeId = async () => {
   return `MGR${nextNumber}`;
 };
 
+const getPendingApprovalCountForManagers = async (managerIds = []) => {
+  const normalizedIds = managerIds.filter(Boolean);
+
+  if (normalizedIds.length === 0) return 0;
+
+  return Approval.countDocuments({
+    status: 'pending',
+    assignedManager: { $in: normalizedIds },
+  });
+};
+
+const activateManagerAccess = async ({ manager, actor }) => {
+  const previousManagers = await User.find({
+    _id: { $ne: manager._id },
+    role: 'manager',
+    status: 'active',
+  }).select('_id name employeeId status');
+  const previousManagerIds = previousManagers.map((entry) => entry._id);
+  const pendingApprovalOwnershipFilters = [
+    { assignedManager: { $exists: false } },
+    { assignedManager: null },
+  ];
+
+  if (previousManagerIds.length > 0) {
+    await User.updateMany(
+      { _id: { $in: previousManagerIds } },
+      { $set: { status: 'inactive' } }
+    );
+    pendingApprovalOwnershipFilters.unshift({
+      assignedManager: { $in: previousManagerIds },
+    });
+  }
+
+  manager.status = 'active';
+  await manager.save();
+
+  const approvalUpdate = await Approval.updateMany(
+    {
+      status: 'pending',
+      $or: pendingApprovalOwnershipFilters,
+    },
+    { $set: { assignedManager: manager._id } }
+  );
+  const managerReplacement = {
+    replacedManagers: previousManagerIds.length,
+    reassignedPendingApprovals: approvalUpdate.modifiedCount || approvalUpdate.nModified || 0,
+    replacedManagerIds: previousManagerIds.map((id) => String(id)),
+  };
+
+  if (
+    managerReplacement.replacedManagers > 0 ||
+    managerReplacement.reassignedPendingApprovals > 0
+  ) {
+    await writeSystemLog({
+      action: 'manager.replaced',
+      message: `${manager.name} replaced ${previousManagers.length} active manager(s) for ${manager.branchName}`,
+      actor: actor?._id,
+      actorName: actor?.name || 'Admin',
+      entityType: 'User',
+      entityId: manager.employeeId,
+      severity: 'warning',
+      metadata: {
+        newManager: {
+          id: manager._id,
+          name: manager.name,
+          employeeId: manager.employeeId,
+        },
+        replacedManagers: previousManagers.map((entry) => ({
+          id: entry._id,
+          name: entry.name,
+          employeeId: entry.employeeId,
+        })),
+        reassignedPendingApprovals: managerReplacement.reassignedPendingApprovals,
+        branchId: manager.branchId,
+        branchName: manager.branchName,
+      },
+    });
+  }
+
+  return managerReplacement;
+};
+
+const deactivateManagerAccess = async ({ manager, status }) => {
+  const pendingApprovals = await getPendingApprovalCountForManagers([manager._id]);
+  const replacementManager = await User.findOne({
+    _id: { $ne: manager._id },
+    role: 'manager',
+    status: 'active',
+  }).select('_id');
+
+  if (pendingApprovals > 0 && !replacementManager) {
+    const error = new Error(
+      `${manager.name} has ${pendingApprovals} pending approval(s). Enable or create another manager first so pending work can be transferred.`
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
+  if (pendingApprovals > 0 && replacementManager) {
+    await Approval.updateMany(
+      { status: 'pending', assignedManager: manager._id },
+      { $set: { assignedManager: replacementManager._id } }
+    );
+  }
+
+  manager.status = status;
+  await manager.save();
+
+  return {
+    reassignedPendingApprovals: pendingApprovals,
+    replacementManagerId: replacementManager ? String(replacementManager._id) : null,
+  };
+};
+
 
 const validationPatterns = {
   email: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/,
@@ -197,10 +312,9 @@ const formatCurrency = (value) =>
 
 const buildTierDetails = (tier) => {
   const details = [
-    ['Minimum Balance Requirement', formatCurrency(tier.minBalance)],
-    ['Per Transaction Limit', formatCurrency(tier.perTxnLimit)],
-    ['Daily Transaction Limit', formatCurrency(tier.dailyLimit)],
-    ['Monthly Transaction Limit', formatCurrency(tier.monthlyLimit)],
+    ['Per Transfer Limit', formatCurrency(tier.perTxnLimit)],
+    ['Daily Transfer Limit', formatCurrency(tier.dailyLimit)],
+    ['Monthly Transfer Limit', formatCurrency(tier.monthlyLimit)],
     ['Maximum Overdraft Limit', formatCurrency(tier.maxODLimit)],
     ['Overdraft Due Rule', 'Clear used overdraft before month-end'],
     ['Interest Charging Rule', 'Minimum 1 day interest on any overdraft usage'],
@@ -237,6 +351,16 @@ const buildHtmlDetails = (details) =>
         `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`
     )
     .join('');
+
+const buildAccountTypeOdDetails = (tier) =>
+  getAccountTypeOdRules(tier).map((rule) => [
+    `${rule.accountType} Account OD`,
+    [
+      `Limit ${formatCurrency(rule.odLimit)}`,
+      `Minimum Opening Balance ${formatCurrency(rule.minOpeningBalance)}`,
+      `${rule.monthlyOdUses} monthly uses`,
+    ].join(' | '),
+  ]);
 
 const isAdult = (dob) => {
   if (!dob) return true;
@@ -634,6 +758,16 @@ const createUser = async (req, res) => {
       });
     }
 
+    const openingBalance = Number(account.balance || 0);
+    const accountRule = getAccountTypeOdRule(tier, accountType);
+    const minOpeningBalance = Number(accountRule.minOpeningBalance || 0);
+
+    if (openingBalance < minOpeningBalance) {
+      return res.status(400).json({
+        message: `${accountType} account requires a minimum opening balance of ${formatCurrency(minOpeningBalance)} for the selected tier`,
+      });
+    }
+
     generatedCustomerId = await generateCustomerId();
     generatedAccountNumber = await generateAccountNumber();
   } else if (
@@ -646,7 +780,8 @@ const createUser = async (req, res) => {
     generatedEmployeeId = await generateEmployeeId();
   }
 
-  const overdraftLimit = Number(tier?.maxODLimit || account?.overdraftLimit || 0);
+  const initialOdRule = getAccountTypeOdRule(tier, accountType);
+  const overdraftLimit = Number(initialOdRule.odLimit || 0);
   const userAccount = isCustomer
     ? {
       accountNumber: generatedAccountNumber,
@@ -688,76 +823,19 @@ const createUser = async (req, res) => {
     branchName: isCustomer ? undefined : DEFAULT_BRANCH_NAME,
     permissions,
     createdBy,
-    account: userAccount,
     accounts: isCustomer ? [userAccount] : [],
   });
 
   if (!isCustomer) {
-    const previousManagers = await User.find({
-      _id: { $ne: user._id },
-      role: 'manager',
-    }).select('_id name employeeId');
-    const previousManagerIds = previousManagers.map((manager) => manager._id);
+    const replacementResult = await activateManagerAccess({
+      manager: user,
+      actor: req.user || { name: createdBy || 'Admin' },
+    });
 
-    if (previousManagerIds.length > 0) {
-      await User.updateMany(
-        { _id: { $in: previousManagerIds } },
-        { $set: { status: 'inactive' } }
-      );
-    }
-
-    const pendingApprovalOwnershipFilters = [
-      { assignedManager: { $exists: false } },
-      { assignedManager: null },
-    ];
-
-    if (previousManagerIds.length > 0) {
-      pendingApprovalOwnershipFilters.unshift({
-        assignedManager: { $in: previousManagerIds },
-      });
-    }
-
-    const approvalUpdate = await Approval.updateMany(
-      {
-        status: 'pending',
-        $or: pendingApprovalOwnershipFilters,
-      },
-      { $set: { assignedManager: user._id } }
-    );
-
-    managerReplacement.replacedManagers = previousManagerIds.length;
+    managerReplacement.replacedManagers = replacementResult.replacedManagers;
     managerReplacement.reassignedPendingApprovals =
-      approvalUpdate.modifiedCount || approvalUpdate.nModified || 0;
-
-    if (
-      managerReplacement.replacedManagers > 0 ||
-      managerReplacement.reassignedPendingApprovals > 0
-    ) {
-      await writeSystemLog({
-        action: 'manager.replaced',
-        message: `${user.name} replaced ${previousManagers.length} manager(s) for ${user.branchName}`,
-        actor: req.user?._id,
-        actorName: req.user?.name || createdBy || 'Admin',
-        entityType: 'User',
-        entityId: user.employeeId,
-        severity: 'warning',
-        metadata: {
-          newManager: {
-            id: user._id,
-            name: user.name,
-            employeeId: user.employeeId,
-          },
-          replacedManagers: previousManagers.map((manager) => ({
-            id: manager._id,
-            name: manager.name,
-            employeeId: manager.employeeId,
-          })),
-          reassignedPendingApprovals: managerReplacement.reassignedPendingApprovals,
-          branchId: user.branchId,
-          branchName: user.branchName,
-        },
-      });
-    }
+      replacementResult.reassignedPendingApprovals;
+    managerReplacement.replacedManagerIds = replacementResult.replacedManagerIds;
   }
 
   if (isCustomer) {
@@ -793,8 +871,14 @@ const createUser = async (req, res) => {
 
     const tierDisplayName = tier.label || classification;
     const tierDetails = buildTierDetails(tier);
+    const accountTypeOdDetails = buildAccountTypeOdDetails(tier);
+    const selectedAccountOdDetail = accountTypeOdDetails.find(
+      ([label]) => label.startsWith(`${accountType} Account`)
+    );
     const plainTierDetails = buildPlainDetails(tierDetails);
     const htmlTierDetails = buildHtmlDetails(tierDetails);
+    const plainAccountTypeOdDetails = buildPlainDetails(accountTypeOdDetails);
+    const htmlAccountTypeOdDetails = buildHtmlDetails(accountTypeOdDetails);
     const passwordFormat =
       'First 5 letters of your first name + @ + Last 5 digits of your registered mobile number';
 
@@ -812,9 +896,14 @@ Registered Mobile Number: ${normalizedPhone}
 Account Number: ${generatedAccountNumber}
 Account Type: ${accountType}
 Account Tier: ${tierDisplayName}
+Opening Balance: ${formatCurrency(account.balance)}
+${selectedAccountOdDetail ? `${selectedAccountOdDetail[0]}: ${selectedAccountOdDetail[1]}` : ''}
 
 Your ${tierDisplayName} Tier Details:
 ${plainTierDetails}
+
+Account Type OD Policy:
+${plainAccountTypeOdDetails}
 
 Your temporary password has been generated using the following format:
 ${passwordFormat}
@@ -830,26 +919,47 @@ Regards,
 Team AdnatePayNest
 Our Technology, Your Trust`,
       html: `
-        <p>Dear ${escapeHtml(user.name)},</p>
-        <p>Welcome to <strong>AdnatePayNest</strong>.</p>
-        <p>Your account has been successfully created. Please find your account details below:</p>
-        <ul>
-          <li><strong>Customer ID:</strong> ${escapeHtml(generatedCustomerId)}</li>
-          <li><strong>Registered Mobile Number:</strong> ${escapeHtml(normalizedPhone)}</li>
-          <li><strong>Account Number:</strong> ${escapeHtml(generatedAccountNumber)}</li>
-          <li><strong>Account Type:</strong> ${escapeHtml(accountType)}</li>
-          <li><strong>Account Tier:</strong> ${escapeHtml(tierDisplayName)}</li>
-        </ul>
-        <p>Your account is classified under the <strong>${escapeHtml(tierDisplayName)} Tier</strong>. Please find your tier details below:</p>
-        <ul>
-          ${htmlTierDetails}
-        </ul>
-        <p>Your temporary password has been generated using the following format:</p>
-        <p><strong>First 5 letters of your first name + @ + Last 5 digits of your registered mobile number</strong></p>
-        <p><strong>Example:</strong> If your first name is <strong>XYZPQR</strong> and your registered mobile number is <strong>1234567890</strong>, your temporary password will be <strong>XYZPQ@67890</strong>.</p>
-        <p>For security reasons, please log in and change your password immediately after your first login.</p>
-        <p>If any of the above details are incorrect, please contact the AdnatePayNest support team.</p>
-        <p>Regards,<br /><strong>Team AdnatePayNest</strong><br />Our Technology, Your Trust</p>
+        <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;">
+          <div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+            <div style="background:#0f172a;color:#ffffff;padding:18px 22px;">
+              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#bfdbfe;">Adnate PayNest</p>
+              <h1 style="margin:6px 0 0;font-size:22px;line-height:1.3;">Your account has been created</h1>
+            </div>
+            <div style="padding:22px;">
+              <p>Dear ${escapeHtml(user.name)},</p>
+              <p>Welcome to <strong>AdnatePayNest</strong>.</p>
+              <p>Your account has been successfully created. Please find your account details below:</p>
+              <ul style="line-height:1.8;">
+                <li><strong>Customer ID:</strong> ${escapeHtml(generatedCustomerId)}</li>
+                <li><strong>Registered Mobile Number:</strong> ${escapeHtml(normalizedPhone)}</li>
+                <li><strong>Account Number:</strong> ${escapeHtml(generatedAccountNumber)}</li>
+                <li><strong>Account Type:</strong> ${escapeHtml(accountType)}</li>
+                <li><strong>Account Tier:</strong> ${escapeHtml(tierDisplayName)}</li>
+                <li><strong>Opening Balance:</strong> ${escapeHtml(formatCurrency(account.balance))}</li>
+              </ul>
+              ${selectedAccountOdDetail ? `
+                <div style="border:1px solid #bfdbfe;background:#eff6ff;border-radius:10px;padding:14px 16px;margin:16px 0;">
+                  <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#1d4ed8;text-transform:uppercase;">Selected account OD facility</p>
+                  <p style="margin:0;font-size:15px;color:#0f172a;"><strong>${escapeHtml(selectedAccountOdDetail[0])}:</strong> ${escapeHtml(selectedAccountOdDetail[1])}</p>
+                </div>
+              ` : ''}
+              <p>Your account is classified under the <strong>${escapeHtml(tierDisplayName)} Tier</strong>. Please find your tier details below:</p>
+              <ul style="line-height:1.8;">
+                ${htmlTierDetails}
+              </ul>
+              <p><strong>Account Type OD Policy</strong></p>
+              <ul style="line-height:1.8;">
+                ${htmlAccountTypeOdDetails}
+              </ul>
+              <p>Your temporary password has been generated using the following format:</p>
+              <p style="border:1px solid #e2e8f0;background:#f8fafc;border-radius:10px;padding:12px 14px;"><strong>First 5 letters of your first name + @ + Last 5 digits of your registered mobile number</strong></p>
+              <p><strong>Example:</strong> If your first name is <strong>XYZPQR</strong> and your registered mobile number is <strong>1234567890</strong>, your temporary password will be <strong>XYZPQ@67890</strong>.</p>
+              <p>For security reasons, please log in and change your password immediately after your first login.</p>
+              <p>If any of the above details are incorrect, please contact the AdnatePayNest support team.</p>
+              <p>Regards,<br /><strong>Team AdnatePayNest</strong><br />Our Technology, Your Trust</p>
+            </div>
+          </div>
+        </div>
       `,
     });
     emailDelivery = delivery.sent
@@ -921,7 +1031,15 @@ const addCustomerAccount = async (req, res) => {
   }
 
   const accountNumber = await generateAccountNumber();
-  const odLimit = Number(tier?.maxODLimit || user.account?.overdraftLimit || 0);
+  const odRule = getAccountTypeOdRule(tier, accountType);
+  const odLimit = Number(odRule.odLimit || 0);
+  const minOpeningBalance = Number(odRule.minOpeningBalance || 0);
+
+  if (balance < minOpeningBalance) {
+    return res.status(400).json({
+      message: `${accountType} account requires a minimum opening balance of ${formatCurrency(minOpeningBalance)} for ${tier?.label || user.classification} tier`,
+    });
+  }
 
   try {
     await BankAccount.create({
@@ -957,7 +1075,12 @@ const addCustomerAccount = async (req, res) => {
 };
 
 const getMyProfile = async (req, res) => {
-  res.json({ user: serializeUser(req.user) });
+  const user =
+    req.user.role === 'customer'
+      ? await syncCustomerAccounts(req.user)
+      : req.user;
+
+  res.json({ user: serializeUser(user) });
 };
 
 const updateMyProfile = async (req, res) => {
@@ -1012,17 +1135,34 @@ const updateUserStatus = async (req, res) => {
     return res.status(400).json({ message: 'Status must be active, inactive, or suspended' });
   }
 
-  const user = await User.findOneAndUpdate(
-    { _id: req.params.id, role: { $in: ['customer', 'manager'] } },
-    { status },
-    { new: true }
-  );
+  const user = await User.findOne({
+    _id: req.params.id,
+    role: { $in: ['customer', 'manager'] },
+  });
 
   if (!user) {
     return res.status(404).json({ message: 'User not found' });
   }
 
-  res.json({ user: serializeUser(user) });
+  let managerReplacement;
+
+  try {
+    if (user.role === 'manager' && status === 'active') {
+      managerReplacement = await activateManagerAccess({
+        manager: user,
+        actor: req.user,
+      });
+    } else if (user.role === 'manager' && ['inactive', 'suspended'].includes(status)) {
+      managerReplacement = await deactivateManagerAccess({ manager: user, status });
+    } else {
+      user.status = status;
+      await user.save();
+    }
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ message: error.message });
+  }
+
+  res.json({ user: serializeUser(user), managerReplacement });
 };
 
 const updateUser = async (req, res) => {
@@ -1037,12 +1177,13 @@ const updateUser = async (req, res) => {
 
   const allowedStatuses = ['active', 'inactive', 'suspended'];
   const trimValue = (value) => String(value || '').trim();
+  let requestedStatus;
 
   if (req.body.status !== undefined) {
     if (!allowedStatuses.includes(req.body.status)) {
       return res.status(400).json({ message: 'Status must be active, inactive, or suspended' });
     }
-    user.status = req.body.status;
+    requestedStatus = req.body.status;
   }
 
   if (req.body.phone !== undefined) {
@@ -1110,27 +1251,34 @@ const updateUser = async (req, res) => {
       }
 
       user.classification = classification;
-      const overdraftLimit = Number(tier.maxODLimit || 0);
       const transferLimit = Number(tier.perTxnLimit || 0);
+      const ruleByType = new Map(
+        getAccountTypeOdRules(tier).map((rule) => [rule.accountType, rule])
+      );
 
       if (user.account) {
-        user.account.overdraftLimit = overdraftLimit;
+        const rule = ruleByType.get(user.account.accountType);
+        user.account.overdraftLimit = Number(rule?.odLimit || 0);
         user.account.transferLimit = transferLimit;
       }
 
       user.accounts = (user.accounts || []).map((account) => ({
         ...(account.toObject?.() || account),
-        overdraftLimit,
+        overdraftLimit: Number(ruleByType.get(account.accountType)?.odLimit || 0),
         transferLimit,
       }));
 
-      await BankAccount.updateMany(
-        { customerId: user.customerId },
-        {
-          odLimit: overdraftLimit,
-          transferLimit,
-          withdrawalLimit: Number(tier.dailyLimit || 0),
-        }
+      await Promise.all(
+        getAccountTypeOdRules(tier).map((rule) =>
+          BankAccount.updateMany(
+            { customerId: user.customerId, accountType: rule.accountType },
+            {
+              odLimit: Number(rule.odLimit || 0),
+              transferLimit,
+              withdrawalLimit: Number(tier.dailyLimit || 0),
+            }
+          )
+        )
       );
     }
 
@@ -1176,9 +1324,33 @@ const updateUser = async (req, res) => {
 
   }
 
-  await user.save();
+  let managerReplacement;
 
-  res.json({ user: serializeUser(user) });
+  try {
+    if (user.role === 'manager' && requestedStatus === 'active') {
+      managerReplacement = await activateManagerAccess({
+        manager: user,
+        actor: req.user,
+      });
+    } else if (
+      user.role === 'manager' &&
+      ['inactive', 'suspended'].includes(requestedStatus)
+    ) {
+      managerReplacement = await deactivateManagerAccess({
+        manager: user,
+        status: requestedStatus,
+      });
+    } else {
+      if (requestedStatus !== undefined) {
+        user.status = requestedStatus;
+      }
+      await user.save();
+    }
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ message: error.message });
+  }
+
+  res.json({ user: serializeUser(user), managerReplacement });
 };
 
 module.exports = {

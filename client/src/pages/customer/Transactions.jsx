@@ -93,7 +93,7 @@ const Transactions = () => {
           subtitle={`All ${BANK_NAME} transfers linked to your account`}
         >
           {transactions.length === 0 ? (
-            <EmptyState message="No transactions found yet." />
+            <EmptyState message="No transactions are available for this account." />
           ) : (
             <div className="table-shell">
               <table className="w-full text-left">

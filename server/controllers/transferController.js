@@ -6,6 +6,7 @@ const Tier = require('../models/Tier');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts } = require('../utils/customerAccounts');
+const { DEFAULT_MONTHLY_OD_USES, getAccountTypeOdRule } = require('../utils/accountTypeOdPolicy');
 const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
 
@@ -74,31 +75,6 @@ const getAccountSnapshot = (user, accountNumber) =>
   (user.accounts || []).find((account) => account.accountNumber === accountNumber) ||
   (user.account?.accountNumber === accountNumber ? user.account : null);
 
-const getCustomerOverdraftUsed = (user, bankAccounts = []) => {
-  const sourceValues = bankAccounts.length
-    ? bankAccounts.map((account) => account.odUsed)
-    : [
-        user.account?.overdraftUsed,
-        ...(user.accounts || []).map((account) => account.overdraftUsed),
-      ];
-
-  return Math.max(0, ...sourceValues.map(toWholeRupees));
-};
-
-const setCustomerOverdraftUsed = (user, overdraftUsed) => {
-  user.accounts = (user.accounts || []).map((account) => ({
-    ...(account.toObject?.() || account),
-    overdraftUsed,
-  }));
-
-  if (user.account?.accountNumber) {
-    user.account = {
-      ...(user.account.toObject?.() || user.account),
-      overdraftUsed,
-    };
-  }
-};
-
 const syncUserAccountSnapshot = (user, bankAccount) => {
   const bankName =
     user.account?.bankName ||
@@ -130,12 +106,6 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
       : account
   );
 
-  if (
-    !user.account?.accountNumber ||
-    user.account.accountNumber === bankAccount.accountNumber
-  ) {
-    user.account = nextSnapshot;
-  }
 };
 
 const getTransactions = async (req, res) => {
@@ -227,18 +197,13 @@ const createTransfer = async (req, res) => {
     }
 
     const senderSnapshot = getAccountSnapshot(sender, senderBankAccount.accountNumber);
-    const activeSenderBankAccounts = await BankAccount.find({
-      customerId: sender.customerId,
-      accountStatus: 'active',
-    }).session(session);
-    const senderBankAccounts = activeSenderBankAccounts.map((account) =>
-      account.accountNumber === senderBankAccount.accountNumber ? senderBankAccount : account
-    );
     const currentBalance = toWholeRupees(senderBankAccount.walletBalance);
+    const odRule = getAccountTypeOdRule(senderTier, senderBankAccount.accountType);
     const overdraftLimit = toWholeRupees(
-      firstDefined(senderBankAccount.odLimit, senderSnapshot?.overdraftLimit, sender.account?.overdraftLimit)
+      firstDefined(senderBankAccount.odLimit, senderSnapshot?.overdraftLimit, odRule.odLimit)
     );
-    const overdraftUsed = getCustomerOverdraftUsed(sender, senderBankAccounts);
+    const monthlyOdUses = toWholeRupees(odRule.monthlyOdUses ?? DEFAULT_MONTHLY_OD_USES);
+    const overdraftUsed = toWholeRupees(senderBankAccount.odUsed);
     const overdraftAvailable = Math.max(0, overdraftLimit - overdraftUsed);
     const overdraftNeeded = Math.max(0, transferAmount - currentBalance);
     const canUseOverdraft = overdraftNeeded > 0 && overdraftNeeded <= overdraftAvailable;
@@ -393,9 +358,10 @@ const createTransfer = async (req, res) => {
 
     if (
       overdraftNeeded > 0 &&
-      (senderBankAccount.odBlocked || toWholeRupees(senderBankAccount.odCountThisMonth) >= 3)
+      (senderBankAccount.odBlocked ||
+        toWholeRupees(senderBankAccount.odCountThisMonth) >= monthlyOdUses)
     ) {
-      throw new Error('Monthly overdraft attempt limit reached. You can use overdraft only 3 times in a month');
+      throw new Error(`Monthly overdraft attempt limit reached for this ${senderBankAccount.accountType} account. You can use overdraft only ${monthlyOdUses} times in a month`);
     }
 
     if (overdraftNeeded > overdraftAvailable) {
@@ -409,18 +375,12 @@ const createTransfer = async (req, res) => {
     senderBankAccount.availableBalance = senderBankAccount.walletBalance;
     senderBankAccount.odLimit = overdraftLimit;
     senderBankAccount.odUsed = nextOverdraftUsed;
-    senderBankAccounts.forEach((account) => {
-      account.odUsed = nextOverdraftUsed;
-    });
 
     if (overdraftNeeded > 0) {
-      const odStartedAt = senderBankAccount.odStartedAt || new Date();
-      senderBankAccounts.forEach((account) => {
-        account.odStartedAt = account.odStartedAt || odStartedAt;
-      });
+      senderBankAccount.odStartedAt = senderBankAccount.odStartedAt || new Date();
       senderBankAccount.odCountThisMonth = toWholeRupees(senderBankAccount.odCountThisMonth) + 1;
       senderBankAccount.odCountMonthKey = getCurrentMonthKey();
-      senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= 3;
+      senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= monthlyOdUses;
     }
 
     receiverBankAccount.walletBalance = toWholeRupees(receiverBankAccount.walletBalance) + transferAmount;
@@ -430,11 +390,10 @@ const createTransfer = async (req, res) => {
     sender.totalTransfers += 1;
 
     syncUserAccountSnapshot(sender, senderBankAccount);
-    setCustomerOverdraftUsed(sender, nextOverdraftUsed);
     syncUserAccountSnapshot(receiver, receiverBankAccount);
 
     await Promise.all([
-      ...senderBankAccounts.map((account) => account.save({ session })),
+      senderBankAccount.save({ session }),
       receiverBankAccount.save({ session }),
     ]);
     await sender.save({ session });
@@ -495,6 +454,8 @@ const createTransfer = async (req, res) => {
           customerName: sender.name,
           amount: transferAmount,
           overdraftUsed: nextOverdraftUsed,
+            accountType: senderBankAccount.accountType,
+            accountNumber: senderBankAccount.accountNumber,
             odCountThisMonth: senderBankAccount.odCountThisMonth,
           },
         },
@@ -534,8 +495,8 @@ const createTransfer = async (req, res) => {
           subject: 'Overdraft usage limit reached',
           lines: [
             `Hello ${sender.name},`,
-            `Your monthly overdraft usage count has reached ${senderBankAccount.odCountThisMonth}.`,
-            'Overdraft usage is now blocked until next month.',
+            `Your ${senderBankAccount.accountType} account monthly overdraft usage count has reached ${senderBankAccount.odCountThisMonth}.`,
+            'Overdraft usage for this account is now blocked until next month.',
           ],
         })
         : null,

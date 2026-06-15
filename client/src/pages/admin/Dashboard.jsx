@@ -146,7 +146,7 @@ const HorizontalBarChart = ({ rows, valueFormatter = (value) => value, detailFor
   const maxValue = Math.max(...rows.map((row) => toNumber(row.value)), 0);
 
   if (maxValue === 0) {
-    return <ChartEmptyState message="No chart data available yet." />;
+    return <ChartEmptyState message="No customer balance records to chart." />;
   }
 
   return (
@@ -196,7 +196,7 @@ const DonutChart = ({ rows }) => {
   const [activeRow, setActiveRow] = useState(null);
 
   if (total === 0) {
-    return <ChartEmptyState message="No chart data available yet." />;
+    return <ChartEmptyState message="No tier distribution records to chart." />;
   }
 
   const chartSegments = rows.reduce((segments, row) => {
@@ -572,7 +572,7 @@ function AdminDashboard() {
 
             {recentLogs.length === 0 && (
               <div className="rounded-xl border border-dashed border-bank-card-border bg-bank-surface px-4 py-8 text-center text-sm font-semibold text-slate-500">
-                No recent system activity yet.
+                No recent system activity is available.
               </div>
             )}
           </div>

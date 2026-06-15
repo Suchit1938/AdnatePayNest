@@ -1,5 +1,26 @@
 const mongoose = require('mongoose');
 
+const accountTypeOdRuleSchema = new mongoose.Schema(
+  {
+    accountType: {
+      type: String,
+      enum: ['Savings', 'Current', 'Salary'],
+      required: true,
+    },
+    odLimit: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    minOpeningBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+  },
+  { _id: false }
+);
+
 const tierSchema = new mongoose.Schema(
   {
     name: {
@@ -58,6 +79,10 @@ const tierSchema = new mongoose.Schema(
       type: String,
       default: '',
       trim: true,
+    },
+    accountTypeOdRules: {
+      type: [accountTypeOdRuleSchema],
+      default: [],
     },
   },
   { timestamps: true }

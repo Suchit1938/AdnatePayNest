@@ -17,6 +17,11 @@ const tiers = [
     lateFeeRate: '1.5% monthly',
     eligibility: 'Default tier for newly onboarded or low-risk customers',
     reviewNotes: 'Entry tier with conservative overdraft and transaction exposure.',
+    accountTypeOdRules: [
+      { accountType: 'Savings', odLimit: 30000, minOpeningBalance: 10000 },
+      { accountType: 'Salary', odLimit: 50000, minOpeningBalance: 15000 },
+      { accountType: 'Current', odLimit: 75000, minOpeningBalance: 25000 },
+    ],
   },
   {
     name: 'gold',
@@ -30,6 +35,11 @@ const tiers = [
     lateFeeRate: '1.5% monthly',
     eligibility: 'High-value customers with strong repayment history',
     reviewNotes: 'Priority review for overdraft renewal and higher transaction caps.',
+    accountTypeOdRules: [
+      { accountType: 'Savings', odLimit: 100000, minOpeningBalance: 100000 },
+      { accountType: 'Salary', odLimit: 150000, minOpeningBalance: 125000 },
+      { accountType: 'Current', odLimit: 250000, minOpeningBalance: 200000 },
+    ],
   },
   {
     name: 'platinum',
@@ -43,6 +53,11 @@ const tiers = [
     lateFeeRate: '1.5% monthly',
     eligibility: 'Established customers with regular account activity',
     reviewNotes: 'Balanced tier for active salary and current account holders.',
+    accountTypeOdRules: [
+      { accountType: 'Savings', odLimit: 75000, minOpeningBalance: 50000 },
+      { accountType: 'Salary', odLimit: 100000, minOpeningBalance: 75000 },
+      { accountType: 'Current', odLimit: 175000, minOpeningBalance: 125000 },
+    ],
   },
 ];
 

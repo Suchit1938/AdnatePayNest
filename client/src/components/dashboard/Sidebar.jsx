@@ -18,6 +18,7 @@ import {
   WalletCards,
   UserRoundCheck,
   BadgeIndianRupee,
+  SlidersHorizontal,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
@@ -40,6 +41,7 @@ const navItemsByRole = {
     { label: "Customers", path: "/admin/customers", icon: Users },
     { label: "Managers", path: "/admin/managers", icon: ShieldCheck },
     { label: "Tier Policies", path: "/admin/classifications", icon: BadgeIndianRupee },
+    { label: "Business Rules", path: "/admin/business-rules", icon: SlidersHorizontal },
     { label: "Reports", path: "/admin/reports", icon: FileBarChart },
     { label: "System Alerts", path: "/admin/notifications", icon: Bell },
     { label: "Profile", path: "/admin/profile", icon: UserCircle },

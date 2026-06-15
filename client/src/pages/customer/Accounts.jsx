@@ -40,6 +40,9 @@ const Accounts = () => {
     transferLimit: sourceAccount.transferLimit || 0,
     overdraftLimit: sourceAccount.overdraftLimit || 0,
     overdraftUsed: sourceAccount.overdraftUsed || 0,
+    odCountThisMonth: sourceAccount.odCountThisMonth || 0,
+    odMonthlyUseLimit: sourceAccount.odMonthlyUseLimit ?? 3,
+    odBlocked: sourceAccount.odBlocked || false,
     status: sourceAccount.accountStatus || sourceAccount.status || activeUser?.status || "active",
   }));
 
@@ -52,6 +55,15 @@ const Accounts = () => {
     (sum, currentAccount) => sum + Number(currentAccount.balance || 0),
     0
   );
+  const totalOverdraftUsed = customerAccounts.reduce(
+    (sum, currentAccount) => sum + Number(currentAccount.overdraftUsed || 0),
+    0
+  );
+  const accountOdLimit = Number(account?.overdraftLimit || 0);
+  const accountOdUsed = Number(account?.overdraftUsed || 0);
+  const accountOdAvailable = Math.max(0, accountOdLimit - accountOdUsed);
+  const accountOdPercent =
+    accountOdLimit > 0 ? Math.round((accountOdUsed / accountOdLimit) * 100) : 0;
 
   useEffect(() => {
     api
@@ -135,13 +147,21 @@ const Accounts = () => {
             footer={{ text: account?.typeLabel || "Account" }}
           />
           <StatsCard
-            title="Transfer Limit"
+            title="Per Transfer Limit"
             value={formatCurrency(account?.transferLimit || 0)}
             icon={Percent}
             accent="bg-violet-500"
             iconTone="bg-violet-50 text-violet-600"
-            footer={{ text: "Loaded from account policy" }}
+            footer={{ text: "Based on your active account policy" }}
             badge={{ text: account?.status || "active", tone: "success" }}
+          />
+          <StatsCard
+            title="OD Used"
+            value={formatCurrency(totalOverdraftUsed)}
+            icon={Wallet}
+            accent="bg-amber-500"
+            iconTone="bg-amber-50 text-amber-600"
+            footer={{ text: "Across all accounts" }}
           />
         </div>
 
@@ -179,10 +199,66 @@ const Accounts = () => {
                 tone="accent"
               />
               <MetricTile
-                label="Transfer Limit"
+                label="Per Transfer Limit"
                 value={formatCurrency(account?.transferLimit || 0)}
               />
               <MetricTile label="Account Type" value={account?.typeLabel || "Savings"} />
+              <MetricTile
+                label="OD Limit"
+                value={formatCurrency(accountOdLimit)}
+                tone="accent"
+              />
+              <MetricTile
+                label="OD Used"
+                value={formatCurrency(accountOdUsed)}
+                tone={accountOdUsed > 0 ? "warning" : "success"}
+              />
+              <MetricTile
+                label="OD Available"
+                value={formatCurrency(accountOdAvailable)}
+                tone={account?.odBlocked ? "danger" : "success"}
+              />
+            </div>
+
+            <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    Account-level overdraft status
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Usage count: {account?.odCountThisMonth || 0} / {account?.odMonthlyUseLimit ?? 3} this month
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-bold ${
+                    account?.odBlocked
+                      ? "bg-red-50 text-red-700"
+                      : accountOdUsed > 0
+                        ? "bg-amber-50 text-amber-700"
+                        : "bg-emerald-50 text-emerald-700"
+                  }`}
+                >
+                  {account?.odBlocked ? "OD blocked" : accountOdUsed > 0 ? "OD active" : "OD available"}
+                </span>
+              </div>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
+                <div
+                  className={`h-full rounded-full ${
+                    accountOdPercent >= 90
+                      ? "bg-red-500"
+                      : accountOdPercent >= 70
+                        ? "bg-amber-500"
+                        : "bg-blue-500"
+                  }`}
+                  style={{
+                    width:
+                      accountOdPercent > 0
+                        ? `${Math.max(4, Math.min(100, accountOdPercent))}%`
+                        : "0%",
+                  }}
+                />
+              </div>
             </div>
           </SectionCard>
         </section>
@@ -190,7 +266,7 @@ const Accounts = () => {
         <section>
           <SectionCard
             title="Recent Activity"
-            subtitle="Latest database transactions for the selected account"
+            subtitle="Recent transfers and overdraft repayments for the selected account"
             icon={Clock3}
           >
             <div className="space-y-3">

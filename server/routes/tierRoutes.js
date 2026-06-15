@@ -9,7 +9,7 @@ const router = express.Router();
 router.get('/', protect, authorize('admin', 'manager'), listTiers);
 router.get('/policy', protect, authorize('customer', 'admin', 'manager'), getCustomerPolicy);
 router.post('/', protect, authorize('admin'), createTier);
-router.patch('/:name', protect, authorize('admin'), updateTier);
+router.patch('/:name', protect, authorize('admin', 'manager'), updateTier);
 router.delete('/:name', protect, authorize('admin'), deleteTier);
 
 module.exports = router;

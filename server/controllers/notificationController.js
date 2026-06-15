@@ -5,8 +5,13 @@ const titlesByAction = {
   'approval.approved': 'Manager Approved Request',
   'approval.rejected': 'Manager Rejected Request',
   'approval.rejected.customer': 'Transfer Rejected',
+  'business.rules.updated': 'Business Rules Updated',
   'customer.created': 'New Customer Registered',
+  'manual.message': 'Message From Admin',
+  'manual.message.admin': 'Manual Message Sent',
   'overdraft.third_attempt': 'Third OD Attempt Reached',
+  'tier.policy.created.manager': 'New Tier Policy Added',
+  'tier.policy.updated.admin': 'Manager Updated Tier Policy',
   'tier.policy.updated.customer': 'Tier Policy Updated',
   'tier.policy.updated.manager': 'Tier Policy Updated',
 };
@@ -52,8 +57,11 @@ const getNotifications = async (req, res) => {
     'approval.created',
     'approval.approved',
     'approval.rejected',
+    'business.rules.updated',
     'customer.created',
+    'manual.message.admin',
     'overdraft.third_attempt',
+    'tier.policy.updated.admin',
   ];
   const filter =
     req.user.role === 'admin'

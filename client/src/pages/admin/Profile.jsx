@@ -134,7 +134,7 @@ const AdminProfile = () => {
         <PageHeader
           eyebrow="Admin / Profile"
           title="Profile"
-          subtitle="Your administrator profile is loaded from the database."
+          subtitle="Manage your administrator details and account contact information."
         >
           <button
             type="button"

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import api from "../../api/axios";
 import EmptyState from "../../components/ui/EmptyState";
 import {
@@ -7,6 +7,7 @@ import {
   Check,
   CircleDollarSign,
   CreditCard,
+  Edit3,
   Gauge,
   IdCard,
   ListChecks,
@@ -14,8 +15,10 @@ import {
   Mail,
   MapPin,
   Phone,
+  Search,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   UserCircle,
   Users,
   X,
@@ -89,6 +92,44 @@ const transactionTypeLabels = {
 
 const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
 
+const tierPermissionDefaults = {
+  perTxnLimit: false,
+  dailyLimit: false,
+  monthlyLimit: false,
+  accountTypeOdRules: false,
+  penaltyAmount: false,
+  interestRate: false,
+};
+
+const parseMonthlyInterestPercent = (value) => {
+  const match = String(value || "").match(/(\d+(?:\.\d+)?)/);
+
+  return match ? match[1] : "";
+};
+
+const formatMonthlyInterestRate = (value) => {
+  const percent = parseMonthlyInterestPercent(value);
+  const numericValue = Number(percent);
+
+  if (!Number.isFinite(numericValue)) return "";
+
+  return `${numericValue.toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  })}% monthly`;
+};
+
+const normalizeTierRules = (rules = []) =>
+  ["Savings", "Current", "Salary"].map((accountType) => {
+    const rule = rules.find((item) => item.accountType === accountType) || {};
+
+    return {
+      accountType,
+      odLimit: rule.odLimit ?? "",
+      minOpeningBalance: rule.minOpeningBalance ?? "",
+    };
+  });
+
 const getDefaultRejectionReason = (approval) =>
   `Transfer request ${approval.id} for ${formatCurrency(
     approval.amount
@@ -107,6 +148,15 @@ function ManagerDashboard() {
   const [profilePhone, setProfilePhone] = useState(user?.phone || "");
   const [profileMessage, setProfileMessage] = useState("");
   const [profileError, setProfileError] = useState("");
+  const [odCustomerFilter, setOdCustomerFilter] = useState("attention");
+  const [odCustomerSearch, setOdCustomerSearch] = useState("");
+  const [odMonitoringTab, setOdMonitoringTab] = useState("cases");
+  const [businessRules, setBusinessRules] = useState({
+    managerTierPermissions: tierPermissionDefaults,
+  });
+  const [tierEditReview, setTierEditReview] = useState(null);
+  const [tierEditForm, setTierEditForm] = useState(null);
+  const [isSavingTierEdit, setIsSavingTierEdit] = useState(false);
   const [dashboardData, setDashboardData] = useState({
     stats: {
       pendingApprovals: 0,
@@ -139,6 +189,20 @@ function ManagerDashboard() {
         // Approval queue should still update when dashboard summary APIs are unavailable.
       });
 
+    api
+      .get("/business-rules")
+      .then(({ data }) => {
+        setBusinessRules({
+          managerTierPermissions: {
+            ...tierPermissionDefaults,
+            ...(data.config?.managerTierPermissions || {}),
+          },
+        });
+      })
+      .catch(() => {
+        setBusinessRules({ managerTierPermissions: tierPermissionDefaults });
+      });
+
     return api.get("/approvals").then(({ data }) => {
       setApprovals(data.approvals || []);
     });
@@ -158,10 +222,18 @@ function ManagerDashboard() {
   const utilizedOd = dashboardData.stats.utilizedOd;
   const odPercent = dashboardData.stats.odPercent;
   const odUtilizers = dashboardData.odUtilizers;
-  const overdraftCustomers = dashboardData.overdraftCustomers || [];
+  const overdraftCustomers = useMemo(
+    () => dashboardData.overdraftCustomers || [],
+    [dashboardData.overdraftCustomers]
+  );
   const overdraftRisk = dashboardData.overdraftRisk || [];
   const overdraftExposureByType = dashboardData.overdraftExposureByType || [];
   const tierPolicies = dashboardData.tierPolicies || [];
+  const managerTierPermissions = {
+    ...tierPermissionDefaults,
+    ...(businessRules.managerTierPermissions || {}),
+  };
+  const canEditAnyTierField = Object.values(managerTierPermissions).some(Boolean);
   const recentOverdraftActivity = dashboardData.recentOverdraftActivity || [];
   const overdraftPayoffTransactions = dashboardData.overdraftPayoffTransactions || [];
   const escalations = dashboardData.escalations || [];
@@ -181,11 +253,61 @@ function ManagerDashboard() {
     },
   }));
   const displayedEscalations = [...approvalEscalations, ...escalations];
+  const odCustomerSummary = useMemo(() => {
+    const active = overdraftCustomers.filter((customer) => Number(customer.used || 0) > 0);
+    const blocked = overdraftCustomers.filter((customer) => customer.isBlocked);
+    const critical = overdraftCustomers.filter((customer) => customer.risk === "critical");
+    const high = overdraftCustomers.filter((customer) => customer.risk === "high");
+    const nearLimit = overdraftCustomers.filter(
+      (customer) => Number(customer.utilization || 0) >= 70
+    );
+
+    return {
+      activeCount: active.length,
+      blockedCount: blocked.length,
+      criticalCount: critical.length,
+      highCount: high.length,
+      nearLimitCount: nearLimit.length,
+      attentionCount: new Set([...blocked, ...critical, ...high, ...nearLimit]).size,
+    };
+  }, [overdraftCustomers]);
+  const filteredOverdraftCustomers = useMemo(() => {
+    const query = odCustomerSearch.trim().toLowerCase();
+
+    return overdraftCustomers.filter((customer) => {
+      const matchesFilter =
+        odCustomerFilter === "all" ||
+        (odCustomerFilter === "attention" &&
+          (customer.isBlocked ||
+            ["critical", "high"].includes(customer.risk) ||
+            Number(customer.utilization || 0) >= 70)) ||
+        (odCustomerFilter === "active" && Number(customer.used || 0) > 0) ||
+        (odCustomerFilter === "blocked" && customer.isBlocked);
+
+      if (!matchesFilter) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      return [
+        customer.customer,
+        customer.customerId,
+        customer.account,
+        customer.accountType,
+        customer.classification,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [odCustomerFilter, odCustomerSearch, overdraftCustomers]);
 
   const visibleApprovalQueue = pendingApprovals;
   const approvalPagination = usePaginatedRows(visibleApprovalQueue);
   const approvalHistoryPagination = usePaginatedRows(approvalHistory);
-  const overdraftCustomerPagination = usePaginatedRows(overdraftCustomers);
+  const overdraftCustomerPagination = usePaginatedRows(filteredOverdraftCustomers);
   const overdraftPayoffPagination = usePaginatedRows(overdraftPayoffTransactions);
   const transactionPagination = usePaginatedRows(transactions);
   const recentOverdraftActivityPagination = usePaginatedRows(recentOverdraftActivity);
@@ -271,6 +393,93 @@ function ManagerDashboard() {
     }
   };
 
+  const openTierEdit = (tier) => {
+    if (!canEditAnyTierField) {
+      toast.warning("Admin has not allowed manager tier edits yet.");
+      return;
+    }
+
+    setTierEditReview(tier);
+    setTierEditForm({
+      perTxnLimit: tier.perTxnLimit,
+      dailyLimit: tier.dailyLimit,
+      monthlyLimit: tier.monthlyLimit,
+      penaltyAmount: tier.penaltyAmount,
+      interestRate: parseMonthlyInterestPercent(tier.interestRate || tier.lateFeeRate),
+      accountTypeOdRules: normalizeTierRules(tier.accountTypeOdRules),
+    });
+  };
+
+  const closeTierEdit = () => {
+    setTierEditReview(null);
+    setTierEditForm(null);
+    setIsSavingTierEdit(false);
+  };
+
+  const updateTierEditForm = (field, value) => {
+    setTierEditForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const updateTierEditRule = (accountType, field, value) => {
+    setTierEditForm((current) => ({
+      ...current,
+      accountTypeOdRules: normalizeTierRules(current.accountTypeOdRules).map((rule) =>
+        rule.accountType === accountType ? { ...rule, [field]: value } : rule
+      ),
+    }));
+  };
+
+  const saveTierEdit = async (event) => {
+    event.preventDefault();
+
+    if (!tierEditReview || !tierEditForm) return;
+
+    const payload = {};
+
+    if (managerTierPermissions.perTxnLimit) {
+      payload.perTxnLimit = tierEditForm.perTxnLimit;
+    }
+    if (managerTierPermissions.dailyLimit) {
+      payload.dailyLimit = tierEditForm.dailyLimit;
+    }
+    if (managerTierPermissions.monthlyLimit) {
+      payload.monthlyLimit = tierEditForm.monthlyLimit;
+    }
+    if (managerTierPermissions.penaltyAmount) {
+      payload.penaltyAmount = tierEditForm.penaltyAmount;
+    }
+    if (managerTierPermissions.interestRate) {
+      payload.interestRate = formatMonthlyInterestRate(tierEditForm.interestRate);
+    }
+    if (managerTierPermissions.accountTypeOdRules) {
+      payload.accountTypeOdRules = normalizeTierRules(tierEditForm.accountTypeOdRules);
+      payload.maxODLimit = Math.max(
+        0,
+        ...payload.accountTypeOdRules.map((rule) => Number(rule.odLimit || 0))
+      );
+    }
+
+    if (Object.keys(payload).length === 0) {
+      toast.warning("No permitted fields are available to save.");
+      return;
+    }
+
+    setIsSavingTierEdit(true);
+
+    try {
+      await api.patch(`/tiers/${tierEditReview.key}`, payload);
+      toast.success(`${tierEditReview.label} policy updated.`);
+      closeTierEdit();
+      await loadDashboard();
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to update tier policy.");
+      setIsSavingTierEdit(false);
+    }
+  };
+
   const handleLogout = () => {
     logout();
     navigate("/login", { replace: true });
@@ -310,7 +519,7 @@ function ManagerDashboard() {
             {visibleApprovalQueue.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No pending approval requests in the database yet." />
+                  <EmptyState message="No transfer requests are waiting for your decision." />
                 </td>
               </tr>
             )}
@@ -433,7 +642,7 @@ function ManagerDashboard() {
             {approvalHistory.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No approved or rejected approvals yet." />
+                  <EmptyState message="No reviewed approval requests are available." />
                 </td>
               </tr>
             )}
@@ -525,6 +734,88 @@ function ManagerDashboard() {
     </section>
   );
 
+  const odOperationsStrip = (
+    <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+      <div className="rounded-xl border border-bank-card-border bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-bank-eyebrow">
+              Manager Focus
+            </p>
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">
+              {odCustomerSummary.attentionCount > 0
+                ? `${odCustomerSummary.attentionCount} OD account cases need attention`
+                : "OD exposure is currently steady"}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+              Prioritize blocked accounts, high utilization, and customers close to exhausting
+              monthly OD usage before reviewing routine activity.
+            </p>
+          </div>
+          <span
+            className={`rounded-full px-3 py-1 text-sm font-bold ${
+              odCustomerSummary.attentionCount > 0
+                ? "bg-amber-50 text-amber-700 ring-1 ring-amber-100"
+                : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
+            }`}
+          >
+            {odCustomerSummary.attentionCount > 0 ? "Review queue" : "All clear"}
+          </span>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <MetricTile
+            label="Critical"
+            value={odCustomerSummary.criticalCount}
+            tone={odCustomerSummary.criticalCount > 0 ? "danger" : "success"}
+          />
+          <MetricTile
+            label="Blocked"
+            value={odCustomerSummary.blockedCount}
+            tone={odCustomerSummary.blockedCount > 0 ? "danger" : "success"}
+          />
+          <MetricTile
+            label="Near Limit"
+            value={odCustomerSummary.nearLimitCount}
+            tone={odCustomerSummary.nearLimitCount > 0 ? "warning" : "success"}
+          />
+          <MetricTile
+            label="Active OD"
+            value={odCustomerSummary.activeCount}
+            tone={odCustomerSummary.activeCount > 0 ? "accent" : "default"}
+          />
+        </div>
+      </div>
+      <div className="rounded-xl border border-bank-card-border bg-white p-5 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-blue-50 p-2.5 text-blue-700">
+            <SlidersHorizontal size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Review Workflow</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              Start with attention cases, confirm payoff movement, then check whether tier rules
+              still match account-level exposure.
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 space-y-3 text-sm">
+          {[
+            "Check blocked and 70%+ utilization accounts",
+            "Review recent payoff transactions",
+            "Compare exposure with tier and account type rules",
+          ].map((step, index) => (
+            <div key={step} className="flex items-center gap-3 rounded-lg bg-bank-surface p-3">
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white text-xs font-bold text-bank-eyebrow shadow-sm">
+                {index + 1}
+              </span>
+              <span className="font-semibold text-slate-700">{step}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+
   const odUtilizationCard = (
     <SectionCard title="OD Utilization" subtitle="Sanctioned limit versus active usage" icon={Gauge}>
       <div className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-center">
@@ -562,7 +853,7 @@ function ManagerDashboard() {
     <SectionCard title="Top Customer Utilization" subtitle="Highest active overdraft balances" icon={BarChart3}>
       <div className="space-y-4">
         {odUtilizers.length === 0 && (
-          <EmptyState message="No overdraft utilization records found." />
+        <EmptyState message="No active overdraft usage is recorded right now." />
         )}
         {odUtilizers.map((item) => {
           const risk = odRiskStyles[item.risk] || odRiskStyles.active;
@@ -582,7 +873,10 @@ function ManagerDashboard() {
                 </span>
               </div>
               <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                <div className={`h-full rounded-full ${risk.bar}`} style={{ width: `${width}%` }} />
+                <div
+                  className={`h-full rounded-full ${risk.bar}`}
+                  style={{ width: item.used > 0 ? `${width}%` : "0%" }}
+                />
               </div>
             </div>
           );
@@ -594,6 +888,9 @@ function ManagerDashboard() {
   const odRiskCard = (
     <SectionCard title="Risk Distribution" subtitle="Customers grouped by OD utilization">
       <div className="space-y-4">
+        {overdraftRisk.length === 0 && (
+          <EmptyState message="No overdraft utilization groups are available right now." />
+        )}
         {overdraftRisk.map((item) => {
           const risk = odRiskStyles[item.label] || odRiskStyles.unused;
           const width = Math.max(4, Math.round((Number(item.value || 0) / totalRiskCount) * 100));
@@ -607,7 +904,10 @@ function ManagerDashboard() {
                 <span className="text-sm font-bold text-slate-900">{item.value}</span>
               </div>
               <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
-                <div className={`h-full rounded-full ${risk.bar}`} style={{ width: `${width}%` }} />
+                <div
+                  className={`h-full rounded-full ${risk.bar}`}
+                  style={{ width: Number(item.value || 0) > 0 ? `${width}%` : "0%" }}
+                />
               </div>
             </div>
           );
@@ -620,7 +920,7 @@ function ManagerDashboard() {
     <SectionCard title="Exposure By Account Type" subtitle="Active OD amount by primary account">
       <div className="space-y-4">
         {overdraftExposureByType.length === 0 && (
-          <EmptyState message="No overdraft exposure by account type yet." />
+          <EmptyState message="No active overdraft exposure is linked to account types." />
         )}
         {overdraftExposureByType.map((item) => {
           const width = Math.max(6, Math.round((Number(item.value || 0) / maxExposure) * 100));
@@ -632,7 +932,10 @@ function ManagerDashboard() {
                 <p className="text-sm font-bold text-slate-900">{formatCurrency(item.value)}</p>
               </div>
               <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full rounded-full bg-sky-500" style={{ width: `${width}%` }} />
+                <div
+                  className="h-full rounded-full bg-sky-500"
+                  style={{ width: Number(item.value || 0) > 0 ? `${width}%` : "0%" }}
+                />
               </div>
             </div>
           );
@@ -642,169 +945,238 @@ function ManagerDashboard() {
   );
 
   const tierPolicyDetails = (
-    <section className="table-shell">
-      <div className="flex items-center justify-between border-b border-slate-100 p-6">
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
-            <ShieldCheck size={22} />
+    <SectionCard
+      title="Tier Policy Details"
+      subtitle={
+        canEditAnyTierField
+          ? "Admin has allowed selected policy fields for manager edits."
+          : "Admin-defined limits used while monitoring account-level OD exposure."
+      }
+      icon={ShieldCheck}
+    >
+      {tierPolicies.length === 0 && (
+        <EmptyState message="No tier policies are available for manager review." />
+      )}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        {tierPolicies.map((tier) => (
+          <div key={tier.key} className="rounded-xl border border-bank-card-border bg-white p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${getTierTone(tier.key).badge}`}>
+                  {tier.label}
+                </span>
+                <p className="mt-3 text-sm font-semibold text-slate-500">
+                  Txn {formatCurrency(tier.perTxnLimit)} / Daily {formatCurrency(tier.dailyLimit)}
+                </p>
+              </div>
+              <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                {tier.interestRate || "No interest"}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => openTierEdit(tier)}
+              disabled={!canEditAnyTierField}
+              className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold ${
+                canEditAnyTierField
+                  ? "border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                  : "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
+              }`}
+            >
+              <Edit3 size={15} />
+              {canEditAnyTierField ? "Edit allowed fields" : "Edit locked by admin"}
+            </button>
+            <div className="mt-4 grid grid-cols-1 gap-2">
+              {(tier.accountTypeOdRules || []).map((rule) => (
+                <div
+                  key={`${tier.key}-${rule.accountType}`}
+                  className="rounded-lg border border-slate-100 bg-slate-50 p-3"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-bold text-slate-900">{rule.accountType}</p>
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
+                      Account rule
+                    </span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <p className="font-semibold text-slate-500">OD Limit</p>
+                      <p className="font-bold text-slate-900">
+                        {formatCurrency(rule.odLimit || 0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-slate-500">Uses</p>
+                      <p className="font-bold text-slate-900">
+                        3/month
+                      </p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="font-semibold text-slate-500">Minimum Opening Balance</p>
+                      <p className="font-bold text-slate-900">
+                        {formatCurrency(rule.minOpeningBalance || 0)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <div className="rounded-lg bg-blue-50 p-3 text-blue-800">
+                <p className="font-semibold">Penalty</p>
+                <p className="font-bold">{formatCurrency(tier.penaltyAmount)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3 text-slate-700">
+                <p className="font-semibold">Updated</p>
+                <p className="font-bold">
+                  {tier.updatedAt ? new Date(tier.updatedAt).toLocaleDateString() : "-"}
+                </p>
+              </div>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xl font-bold">Tier Policy Details</h2>
-            <p className="text-sm text-slate-500">
-              Current admin-defined limits used while monitoring overdraft exposure.
-            </p>
-          </div>
-        </div>
-        <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
-          {tierPolicies.length} policies
-        </span>
+        ))}
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[1080px] text-left">
-          <thead className="table-head">
-            <tr>
-              <th className="px-6 py-4">Tier</th>
-              <th className="px-6 py-4">Per Txn</th>
-              <th className="px-6 py-4">Daily</th>
-              <th className="px-6 py-4">Monthly</th>
-              <th className="px-6 py-4">OD Limit</th>
-              <th className="px-6 py-4">Min Balance</th>
-              <th className="px-6 py-4">Penalty</th>
-              <th className="px-6 py-4">Interest</th>
-              <th className="px-6 py-4">Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tierPolicies.length === 0 && (
-              <tr>
-                <td colSpan={9} className="px-6 py-8">
-                  <EmptyState message="No tier policies are configured yet." />
-                </td>
-              </tr>
-            )}
-            {tierPolicies.map((tier) => (
-              <tr key={tier.key} className="table-row">
-                <td className="px-6 py-4">
-                  <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${getTierTone(tier.key).badge}`}>
-                    {tier.label}
-                  </span>
-                  {tier.eligibility && (
-                    <p className="mt-2 max-w-64 text-xs text-slate-500">
-                      {tier.eligibility}
-                    </p>
-                  )}
-                </td>
-                <td className="px-6 py-4 font-semibold">{formatCurrency(tier.perTxnLimit)}</td>
-                <td className="px-6 py-4 font-semibold">{formatCurrency(tier.dailyLimit)}</td>
-                <td className="px-6 py-4 font-semibold">{formatCurrency(tier.monthlyLimit)}</td>
-                <td className="px-6 py-4 font-semibold text-blue-700">
-                  {formatCurrency(tier.maxODLimit)}
-                </td>
-                <td className="px-6 py-4">{formatCurrency(tier.minBalance)}</td>
-                <td className="px-6 py-4">{formatCurrency(tier.penaltyAmount)}</td>
-                <td className="px-6 py-4">{tier.interestRate || "Not set"}</td>
-                <td className="px-6 py-4 text-sm text-slate-500">
-                  {tier.updatedAt ? new Date(tier.updatedAt).toLocaleString() : "-"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    </SectionCard>
   );
 
   const odCustomerTable = (
-    <section className="table-shell">
-      <div className="flex items-center justify-between border-b border-slate-100 p-6">
+    <SectionCard title="Customer Overdraft Accounts" subtitle="Each row below is one account-level OD case">
+      <div className="mb-5 grid gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
         <div>
-          <h2 className="text-xl font-bold">Customer Overdraft Accounts</h2>
-          <p className="text-sm text-slate-500">
-            Customer-level OD limits, usage, remaining balance, and current risk.
+          <p className="text-sm font-bold text-slate-900">
+            {filteredOverdraftCustomers.length} of {overdraftCustomers.length} account cases shown
           </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Salary, Current, and Savings accounts are tracked independently.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {[
+              { key: "attention", label: "Needs attention", count: odCustomerSummary.attentionCount },
+              { key: "active", label: "Active OD", count: odCustomerSummary.activeCount },
+              { key: "blocked", label: "Blocked", count: odCustomerSummary.blockedCount },
+              { key: "all", label: "All cases", count: overdraftCustomers.length },
+            ].map((filter) => (
+              <button
+                key={filter.key}
+                type="button"
+                onClick={() => setOdCustomerFilter(filter.key)}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${
+                  odCustomerFilter === filter.key
+                    ? "bg-bank-accent text-white shadow-sm"
+                    : "border border-bank-card-border bg-white text-slate-600 hover:bg-bank-surface"
+                }`}
+              >
+                <span>{filter.label}</span>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs ${
+                    odCustomerFilter === filter.key
+                      ? "bg-white/20 text-white"
+                      : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {filter.count}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
-        <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
-          {overdraftCustomers.length} customers
-        </span>
+        <label className="relative block min-w-full xl:min-w-80">
+          <span className="sr-only">Search overdraft accounts</span>
+          <Search
+            size={18}
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+          />
+          <input
+            value={odCustomerSearch}
+            onChange={(event) => setOdCustomerSearch(event.target.value)}
+            className="w-full rounded-lg border border-bank-card-border bg-white py-3 pl-11 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-bank-accent focus:ring-4 focus:ring-bank-accent/15"
+            placeholder="Search customer, account, tier"
+          />
+        </label>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[1040px] text-left">
-          <thead className="table-head">
-            <tr>
-              <th className="px-6 py-4">Customer</th>
-              <th className="px-6 py-4">Customer ID</th>
-              <th className="px-6 py-4">Account</th>
-              <th className="px-6 py-4">OD Limit</th>
-              <th className="px-6 py-4">Used</th>
-              <th className="px-6 py-4">Available</th>
-              <th className="px-6 py-4">Utilization</th>
-              <th className="px-6 py-4">Risk</th>
-            </tr>
-          </thead>
-          <tbody>
-            {overdraftCustomers.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No customer overdraft accounts found." />
-                </td>
-              </tr>
-            )}
-            {overdraftCustomerPagination.pageRows.map((customer) => {
-              const risk = odRiskStyles[customer.risk] || odRiskStyles.unused;
+      {overdraftCustomers.length === 0 && (
+        <EmptyState message="No customer accounts are currently using overdraft." />
+      )}
+      {overdraftCustomers.length > 0 && filteredOverdraftCustomers.length === 0 && (
+        <EmptyState message="No overdraft accounts match this filter." />
+      )}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {overdraftCustomerPagination.pageRows.map((customer) => {
+          const risk = odRiskStyles[customer.risk] || odRiskStyles.unused;
+          const usagePercent = clampPercent(customer.utilization);
 
-              return (
-                <tr key={customer.id || customer.customerId} className="table-row">
-                  <td className="px-6 py-4">
-                    <p className="font-semibold text-slate-900">{customer.customer}</p>
-                    <span className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getTierTone(customer.classification).badge}`}>
+          return (
+            <div
+              key={customer.id || `${customer.customerId}-${customer.account}`}
+              className={`rounded-xl border bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                customer.isBlocked || customer.risk === "critical"
+                  ? "border-red-200"
+                  : customer.risk === "high" || usagePercent >= 70
+                    ? "border-amber-200"
+                    : "border-bank-card-border"
+              }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-slate-950">{customer.customer}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getTierTone(customer.classification).badge}`}>
                       {customer.classification}
                     </span>
-                  </td>
-                  <td className="px-6 py-4">{customer.customerId}</td>
-                  <td className="px-6 py-4">
-                    <p>{maskAccountNumber(customer.account)}</p>
-                    <p className="text-xs text-slate-500">
-                      {customer.accountType} - {customer.accountCount} account{customer.accountCount === 1 ? "" : "s"}
-                    </p>
-                  </td>
-                  <td className="px-6 py-4 font-semibold">{formatCurrency(customer.limit)}</td>
-                  <td className="px-6 py-4 font-semibold text-amber-700">
-                    {formatCurrency(customer.used)}
-                  </td>
-                  <td className="px-6 py-4">{formatCurrency(customer.available)}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex min-w-36 items-center gap-3">
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className={`h-full rounded-full ${risk.bar}`}
-                          style={{ width: `${Math.max(4, clampPercent(customer.utilization))}%` }}
-                        />
-                      </div>
-                      <span className="w-10 text-right text-sm font-bold">
-                        {customer.utilization}%
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${risk.badge}`}>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${risk.badge}`}>
                       {risk.label}
                     </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        <TablePagination {...overdraftCustomerPagination} />
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-bold uppercase text-slate-500">{customer.accountType}</p>
+                  <p className="mt-1 font-bold text-slate-900">{maskAccountNumber(customer.account)}</p>
+                </div>
+              </div>
+              <div className="mt-5 flex items-center justify-between gap-3 text-sm">
+                <span className="font-semibold text-slate-600">Limit usage</span>
+                <span className="font-bold text-slate-950">{usagePercent}%</span>
+              </div>
+              <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${risk.bar}`}
+                  style={{
+                    width: usagePercent > 0 ? `${Math.max(4, usagePercent)}%` : "0%",
+                  }}
+                />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <MetricTile label="Limit" value={formatCurrency(customer.limit)} />
+                <MetricTile label="Used" value={formatCurrency(customer.used)} tone={customer.used > 0 ? "warning" : "success"} />
+                <MetricTile label="Available" value={formatCurrency(customer.available)} tone="success" />
+                <MetricTile
+                  label="Uses"
+                  value={`${customer.odAttempts || 0} / ${customer.monthlyOdUses ?? 3}`}
+                  tone={customer.isBlocked ? "danger" : "accent"}
+                />
+              </div>
+              <div className="mt-4 rounded-lg bg-bank-surface p-3 text-sm font-semibold text-slate-600">
+                {customer.isBlocked
+                  ? "OD blocked for this account until monthly reset."
+                  : usagePercent >= 70
+                    ? "High utilization. Review before additional exposure."
+                    : Number(customer.used || 0) > 0
+                      ? "Active OD. Monitor repayment and monthly usage."
+                      : "OD available. No active balance."}
+              </div>
+            </div>
+          );
+        })}
       </div>
-    </section>
+      <TablePagination {...overdraftCustomerPagination} />
+    </SectionCard>
   );
 
   const odRecentActivity = (
     <SectionCard title="Recent OD Activity" subtitle="Latest overdraft payoff and OD alerts">
       <div className="space-y-3">
         {recentOverdraftActivity.length === 0 && (
-          <EmptyState message="No recent overdraft activity yet." />
+          <EmptyState message="No recent overdraft activity is available." />
         )}
         {recentOverdraftActivityPagination.pageRows.map((activity) => (
           <div key={activity.id} className="activity-item items-center justify-between">
@@ -829,16 +1201,21 @@ function ManagerDashboard() {
 
   const odPayoffTransactionsTable = (
     <section className="table-shell">
-      <div className="flex items-center justify-between border-b border-slate-100 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-6">
         <div>
           <h2 className="text-xl font-bold">Overdraft Payoff Transactions</h2>
           <p className="text-sm text-slate-500">
             Customer payments made to reduce or close active overdraft dues.
           </p>
         </div>
-        <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
-          {overdraftPayoffTransactions.length} payoff transactions
-        </span>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700 ring-1 ring-emerald-100">
+            {overdraftPayoffTransactions.length} payoff transactions
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600 ring-1 ring-slate-200">
+            Latest first
+          </span>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-left">
@@ -857,7 +1234,7 @@ function ManagerDashboard() {
             {overdraftPayoffTransactions.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-6 py-8">
-                  <EmptyState message="No overdraft payoff transactions found yet." />
+                  <EmptyState message="No overdraft payoff transactions are available." />
                 </td>
               </tr>
             )}
@@ -896,21 +1273,67 @@ function ManagerDashboard() {
     </section>
   );
 
+  const odMonitoringTabs = [
+    { key: "cases", label: "Customer Cases", count: filteredOverdraftCustomers.length },
+    { key: "overview", label: "Risk Overview", count: overdraftRisk.length + overdraftExposureByType.length },
+    { key: "payoffs", label: "Payoffs", count: overdraftPayoffTransactions.length },
+    { key: "policies", label: "Tier Policies", count: tierPolicies.length },
+    { key: "activity", label: "Recent Activity", count: recentOverdraftActivity.length },
+  ];
+
+  const odTabContent = {
+    cases: odCustomerTable,
+    overview: (
+      <div className="space-y-6">
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+          {odUtilizationCard}
+          {odTopUtilizersCard}
+        </section>
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          {odRiskCard}
+          {odExposureCard}
+        </section>
+      </div>
+    ),
+    payoffs: odPayoffTransactionsTable,
+    policies: tierPolicyDetails,
+    activity: odRecentActivity,
+  };
+
   const odSection = (
     <div className="space-y-6">
       {odOverview}
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        {odUtilizationCard}
-        {odTopUtilizersCard}
+      {odOperationsStrip}
+      <section className="sticky top-0 z-10 -mx-1 overflow-x-auto border-y border-bank-card-border bg-bank-surface/95 px-1 py-3 backdrop-blur">
+        <div className="flex min-w-max gap-2">
+          {odMonitoringTabs.map((tab) => {
+            const isActive = odMonitoringTab === tab.key;
+
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setOdMonitoringTab(tab.key)}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition ${
+                  isActive
+                    ? "bg-bank-accent text-white shadow-sm"
+                    : "border border-bank-card-border bg-white text-slate-600 hover:bg-white hover:text-bank-eyebrow"
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs ${
+                    isActive ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </section>
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        {odRiskCard}
-        {odExposureCard}
-      </section>
-      {tierPolicyDetails}
-      {odCustomerTable}
-      {odPayoffTransactionsTable}
-      {odRecentActivity}
+      {odTabContent[odMonitoringTab] ?? odCustomerTable}
     </div>
   );
 
@@ -926,7 +1349,7 @@ function ManagerDashboard() {
       </div>
       <div className="space-y-3">
         {displayedEscalations.length === 0 && (
-          <EmptyState message="No escalations requiring attention." />
+          <EmptyState message="No manager escalations require attention." />
         )}
         {escalationPagination.pageRows.map((item) => (
           <div
@@ -1002,7 +1425,7 @@ function ManagerDashboard() {
             {transactions.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No customer transactions found yet." />
+                  <EmptyState message="No customer transactions are available for review." />
                 </td>
               </tr>
             )}
@@ -1284,6 +1707,157 @@ function ManagerDashboard() {
         )}
 
         {contentBySection[section] ?? contentBySection.dashboard}
+
+        {tierEditReview && tierEditForm && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:items-center">
+            <form
+              onSubmit={saveTierEdit}
+              className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            >
+              <div className="shrink-0 border-b border-slate-100 px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-blue-700">
+                      Manager Policy Edit
+                    </p>
+                    <h2 className="mt-1 text-2xl font-bold text-slate-950">
+                      {tierEditReview.label} Tier
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      Locked fields are controlled by admin business-rule permissions.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeTierEdit}
+                    className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
+                    aria-label="Close tier edit modal"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {[
+                    ["perTxnLimit", "Per Transfer Limit"],
+                    ["dailyLimit", "Daily Limit"],
+                    ["monthlyLimit", "Monthly Limit"],
+                    ["penaltyAmount", "Penalty Amount"],
+                  ].map(([field, label]) => (
+                    <label key={field} className="label-field">
+                      <span>{label}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={tierEditForm[field]}
+                        disabled={!managerTierPermissions[field]}
+                        onChange={(event) => updateTierEditForm(field, event.target.value)}
+                        className="input-field disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                      />
+                    </label>
+                  ))}
+                  <label className="label-field sm:col-span-2">
+                    <span>Monthly OD Interest (%)</span>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={tierEditForm.interestRate}
+                      disabled={!managerTierPermissions.interestRate}
+                      onChange={(event) => updateTierEditForm("interestRate", event.target.value)}
+                      className="input-field disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                    />
+                    {tierEditForm.interestRate && (
+                      <p className="mt-2 text-xs font-semibold text-blue-700">
+                        Saved as {formatMonthlyInterestRate(tierEditForm.interestRate)}
+                      </p>
+                    )}
+                  </label>
+                </div>
+
+                <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-slate-950">Account-wise OD Rules</h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        OD limit and minimum opening balance by account type.
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-bold ${
+                        managerTierPermissions.accountTypeOdRules
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {managerTierPermissions.accountTypeOdRules ? "Editable" : "Locked"}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                    {normalizeTierRules(tierEditForm.accountTypeOdRules).map((rule) => (
+                      <div key={rule.accountType} className="rounded-xl border border-slate-200 bg-white p-4">
+                        <p className="font-bold text-slate-950">{rule.accountType}</p>
+                        <label className="mt-3 block">
+                          <span className="text-xs font-bold uppercase text-slate-500">
+                            OD Limit
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={rule.odLimit}
+                            disabled={!managerTierPermissions.accountTypeOdRules}
+                            onChange={(event) =>
+                              updateTierEditRule(rule.accountType, "odLimit", event.target.value)
+                            }
+                            className="input-field mt-1 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                          />
+                        </label>
+                        <label className="mt-3 block">
+                          <span className="text-xs font-bold uppercase text-slate-500">
+                            Minimum Opening
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={rule.minOpeningBalance}
+                            disabled={!managerTierPermissions.accountTypeOdRules}
+                            onChange={(event) =>
+                              updateTierEditRule(rule.accountType, "minOpeningBalance", event.target.value)
+                            }
+                            className="input-field mt-1 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                          />
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="shrink-0 border-t border-slate-100 bg-slate-50 px-6 py-4">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={closeTierEdit}
+                    disabled={isSavingTierEdit}
+                    className="btn-secondary justify-center px-4 py-2"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingTierEdit}
+                    className="btn-primary justify-center px-4 py-2"
+                  >
+                    <Check size={17} />
+                    {isSavingTierEdit ? "Saving..." : "Save Allowed Changes"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        )}
       </PageContent>
     </DashboardLayout>
   );

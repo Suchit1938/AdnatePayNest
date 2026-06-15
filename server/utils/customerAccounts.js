@@ -1,5 +1,6 @@
 const BankAccount = require('../models/BankAccount');
 const Tier = require('../models/Tier');
+const { getAccountTypeOdRule } = require('./accountTypeOdPolicy');
 
 const validAccountTypes = new Set(['Savings', 'Current', 'Salary']);
 
@@ -11,6 +12,12 @@ const normalizeAccountType = (value) =>
 
 const firstDefined = (...values) =>
   values.find((value) => value !== undefined && value !== null);
+
+const isLegacySingleAccountSnapshot = (user, snapshot) =>
+  user.account?.accountNumber === snapshot.accountNumber &&
+  !(user.accounts || []).some(
+    (account) => account.accountNumber === snapshot.accountNumber
+  );
 
 const getAccountSnapshots = (user) => {
   const snapshots = [user.account, ...(user.accounts || [])].filter(
@@ -30,13 +37,15 @@ const getAccountSnapshots = (user) => {
   });
 };
 
-const buildAccountSnapshot = (user, bankAccount) => {
+const buildAccountSnapshot = (user, bankAccount, tier) => {
   const existingAccount =
     (user.accounts || []).find(
       (account) => account.accountNumber === bankAccount.accountNumber
     ) ||
     (user.account?.accountNumber === bankAccount.accountNumber ? user.account : null) ||
     {};
+
+  const odRule = getAccountTypeOdRule(tier, bankAccount.accountType);
 
   return {
     accountNumber: bankAccount.accountNumber,
@@ -59,6 +68,7 @@ const buildAccountSnapshot = (user, bankAccount) => {
     overdraftUsed: toWholeRupees(firstDefined(bankAccount.odUsed, existingAccount.overdraftUsed)),
     odStartedAt: bankAccount.odStartedAt || existingAccount.odStartedAt || null,
     odCountThisMonth: toWholeRupees(bankAccount.odCountThisMonth),
+    odMonthlyUseLimit: toWholeRupees(odRule.monthlyOdUses),
     odBlocked: bankAccount.odBlocked || false,
     accountStatus: bankAccount.accountStatus,
     accountOpenedAt: bankAccount.accountOpenedAt || bankAccount.createdAt,
@@ -102,9 +112,12 @@ const ensureBankAccountsForUser = async (user, options = {}) => {
       continue;
     }
 
+    const accountType = normalizeAccountType(snapshot.accountType || user.accountType);
     const balance = toWholeRupees(snapshot.balance);
+    const shouldCarryLegacyOdUsage = !isLegacySingleAccountSnapshot(user, snapshot);
+    const odRule = getAccountTypeOdRule(tier, accountType);
     const overdraftLimit = toWholeRupees(
-      snapshot.overdraftLimit || tier?.maxODLimit
+      firstDefined(snapshot.overdraftLimit, odRule.odLimit, tier?.maxODLimit)
     );
 
     await BankAccount.create(
@@ -113,7 +126,7 @@ const ensureBankAccountsForUser = async (user, options = {}) => {
           customerId: user.customerId,
           panNumber,
           accountNumber,
-          accountType: normalizeAccountType(snapshot.accountType || user.accountType),
+          accountType,
           walletBalance: balance,
           availableBalance: balance,
           transferLimit: toWholeRupees(tier?.perTxnLimit),
@@ -121,9 +134,11 @@ const ensureBankAccountsForUser = async (user, options = {}) => {
           accountOpenedAt: user.createdAt,
           accountStatus: 'active',
           odLimit: overdraftLimit,
-          odUsed: toWholeRupees(snapshot.overdraftUsed),
-          odCountThisMonth: toWholeRupees(snapshot.odCountThisMonth),
-          odBlocked: snapshot.odBlocked || false,
+          odUsed: shouldCarryLegacyOdUsage ? toWholeRupees(snapshot.overdraftUsed) : 0,
+          odCountThisMonth: shouldCarryLegacyOdUsage
+            ? toWholeRupees(snapshot.odCountThisMonth)
+            : 0,
+          odBlocked: shouldCarryLegacyOdUsage ? snapshot.odBlocked || false : false,
         },
       ],
       { session }
@@ -148,22 +163,20 @@ const syncCustomerAccounts = async (user, options = {}) => {
     return user;
   }
 
-  const bankAccounts = await ensureBankAccountsForUser(user, { session });
+  const [bankAccounts, tier] = await Promise.all([
+    ensureBankAccountsForUser(user, { session }),
+    sessionQuery(Tier.findOne({ name: user.classification }), session),
+  ]);
 
   if (bankAccounts.length === 0) {
     return user;
   }
 
   const accountSnapshots = bankAccounts.map((bankAccount) =>
-    buildAccountSnapshot(user, bankAccount)
+    buildAccountSnapshot(user, bankAccount, tier)
   );
-  const currentAccount =
-    accountSnapshots.find(
-      (account) => account.accountNumber === user.account?.accountNumber
-    ) || accountSnapshots[0];
-
   user.accounts = accountSnapshots;
-  user.account = currentAccount;
+  user.account = undefined;
   await user.save({ session });
 
   return user;

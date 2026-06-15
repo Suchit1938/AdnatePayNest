@@ -3,6 +3,7 @@ const connectDB = require('./config/db');
 const seedDatabase = require('./utils/seedData');
 
 const PORT = process.env.PORT || 5000;
+const DB_RETRY_MS = Number(process.env.DB_RETRY_MS || 10000);
 
 const startServer = async () => {
     try {
@@ -12,10 +13,11 @@ const startServer = async () => {
         app.listen(PORT, () => {
             console.log(`Starting the server at port ${PORT}`);
             console.log(`http://localhost:${PORT}`);
-        })
+        });
     } catch (error) {
         console.error('Server startup failed:', error.message);
-        process.exit(1);
+        console.log(`Retrying startup in ${DB_RETRY_MS / 1000}s...`);
+        setTimeout(startServer, DB_RETRY_MS);
     }
 };
 

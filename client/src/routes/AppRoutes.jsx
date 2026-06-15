@@ -9,6 +9,7 @@ import AdminClassifications from "../pages/admin/Classifications";
 import AdminReports from "../pages/admin/Reports";
 import AdminNotifications from "../pages/admin/Notifications";
 import AdminProfile from "../pages/admin/Profile";
+import AdminBusinessRules from "../pages/admin/BusinessRules";
 import ManagerDashboard from "../pages/manager/Dashboard";
 import Dashboard from "../pages/customer/Dashboard";
 import TransferFunds from "../pages/customer/TransferFunds";
@@ -64,6 +65,10 @@ const AppRoutes = () => {
           <Route
             path="/admin/reports"
             element={adminRoute(<AdminReports />)}
+          />
+          <Route
+            path="/admin/business-rules"
+            element={adminRoute(<AdminBusinessRules />)}
           />
           <Route
             path="/admin/notifications"

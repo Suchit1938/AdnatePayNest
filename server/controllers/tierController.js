@@ -2,7 +2,13 @@ const BankAccount = require('../models/BankAccount');
 const Tier = require('../models/Tier');
 const User = require('../models/User');
 const { sendEmail } = require('../utils/email');
+const { ACCOUNT_TYPES, DEFAULT_MONTHLY_OD_USES, getAccountTypeOdRules } = require('../utils/accountTypeOdPolicy');
+const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { writeSystemLog } = require('../utils/systemLog');
+const {
+  getBusinessRuleConfig,
+  DEFAULT_MANAGER_TIER_PERMISSIONS,
+} = require('./businessRuleController');
 
 const GRACE_PERIOD_DAYS = 3;
 const REVIEW_CYCLE = 'Monthly';
@@ -14,12 +20,12 @@ const tierFieldLabels = {
   dailyLimit: 'Daily limit',
   monthlyLimit: 'Monthly limit',
   maxODLimit: 'Overdraft limit',
-  minBalance: 'Minimum balance',
   penaltyAmount: 'Penalty amount',
   lateFeeRate: 'Interest rate',
   interestRate: 'Interest rate',
   eligibility: 'Eligibility',
   reviewNotes: 'Review notes',
+  accountTypeOdRules: 'Account type OD rules',
 };
 
 const moneyFields = new Set([
@@ -27,7 +33,6 @@ const moneyFields = new Set([
   'dailyLimit',
   'monthlyLimit',
   'maxODLimit',
-  'minBalance',
   'penaltyAmount',
 ]);
 
@@ -36,6 +41,12 @@ const numberFields = new Set([
 ]);
 
 const formatTierValue = (field, value) => {
+  if (field === 'accountTypeOdRules') {
+    return (Array.isArray(value) ? value : [])
+      .map((rule) => `${rule.accountType}: OD INR ${Number(rule.odLimit || 0).toLocaleString('en-IN')}, minimum opening INR ${Number(rule.minOpeningBalance || 0).toLocaleString('en-IN')}, ${Number(rule.monthlyOdUses || DEFAULT_MONTHLY_OD_USES)} monthly uses`)
+      .join(', ') || 'not set';
+  }
+
   if (moneyFields.has(field)) {
     return `INR ${Number(value || 0).toLocaleString('en-IN')}`;
   }
@@ -43,13 +54,91 @@ const formatTierValue = (field, value) => {
   return String(value || '').trim() || 'not set';
 };
 
-const getInterestRateValue = (payload) =>
-  payload.interestRate !== undefined ? payload.interestRate : payload.lateFeeRate;
+const parseMonthlyInterestPercent = (value) => {
+  const match = String(value || '').match(/(\d+(?:\.\d+)?)/);
+
+  return match ? match[1] : '';
+};
+
+const formatPercentNumber = (value) => {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) return '';
+
+  return numericValue.toLocaleString('en-IN', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  });
+};
+
+const normalizeMonthlyInterestRate = (value) => {
+  const displayValue = formatPercentNumber(parseMonthlyInterestPercent(value));
+
+  return displayValue ? `${displayValue}% monthly` : '';
+};
+
+const getInterestRateValue = (payload) => {
+  const value = payload.interestRate !== undefined ? payload.interestRate : payload.lateFeeRate;
+
+  return value === undefined ? undefined : normalizeMonthlyInterestRate(value);
+};
+
+const normalizeAccountTypeOdRules = (
+  payloadRules,
+  fallbackOdLimit = 0,
+  fallbackMinOpeningBalance = 0
+) => {
+  const rulesByType = new Map(
+    (Array.isArray(payloadRules) ? payloadRules : []).map((rule) => [
+      rule.accountType,
+      rule,
+    ])
+  );
+
+  return ACCOUNT_TYPES.map((accountType) => {
+    const rule = rulesByType.get(accountType) || {};
+
+    return {
+      accountType,
+      odLimit: Number(
+        rule.odLimit === '' || rule.odLimit === undefined
+          ? fallbackOdLimit ?? 0
+          : rule.odLimit
+      ),
+      minOpeningBalance: Number(rule.minOpeningBalance ?? fallbackMinOpeningBalance ?? 0),
+    };
+  });
+};
+
+const validateAccountTypeOdRules = (rules = []) => {
+  for (const rule of rules) {
+    if (!ACCOUNT_TYPES.includes(rule.accountType)) {
+      return 'Invalid account type in overdraft rules';
+    }
+
+    if (!Number.isFinite(Number(rule.odLimit)) || Number(rule.odLimit) < 0) {
+      return `${rule.accountType} overdraft limit must be 0 or greater`;
+    }
+
+    if (!Number.isFinite(Number(rule.minOpeningBalance)) || Number(rule.minOpeningBalance) < 0) {
+      return `${rule.accountType} minimum opening balance must be 0 or greater`;
+    }
+  }
+
+  return '';
+};
 
 const getTierPolicyChanges = (existingTier, update) =>
   Object.entries(update)
     .filter(([field, nextValue]) => {
       const currentValue = existingTier[field];
+
+      if (field === 'accountTypeOdRules') {
+        return (
+          JSON.stringify(getAccountTypeOdRules(existingTier)) !==
+          JSON.stringify(normalizeAccountTypeOdRules(nextValue, existingTier.maxODLimit, existingTier.minBalance))
+        );
+      }
 
       if (numberFields.has(field)) {
         return Number(currentValue || 0) !== Number(nextValue || 0);
@@ -78,6 +167,46 @@ const escapeHtml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
+const formatMoney = (value) =>
+  `INR ${Number(value || 0).toLocaleString('en-IN')}`;
+
+const buildAccountTypeOdRuleCards = (tier) =>
+  getAccountTypeOdRules(tier)
+    .map((rule) => {
+      return `
+        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#ffffff;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
+            <strong style="font-size:15px;color:#0f172a;">${escapeHtml(rule.accountType)} Account</strong>
+            <span style="background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700;">
+              Account rule
+            </span>
+          </div>
+          <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;color:#475569;">
+            <tr>
+              <td style="padding:4px 0;">OD limit</td>
+              <td align="right" style="padding:4px 0;font-weight:700;color:#0f172a;">${escapeHtml(formatMoney(rule.odLimit))}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0;">Minimum opening balance</td>
+              <td align="right" style="padding:4px 0;font-weight:700;color:#0f172a;">${escapeHtml(formatMoney(rule.minOpeningBalance))}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0;">Monthly OD uses</td>
+              <td align="right" style="padding:4px 0;font-weight:700;color:#0f172a;">${Number(rule.monthlyOdUses || DEFAULT_MONTHLY_OD_USES)}</td>
+            </tr>
+          </table>
+        </div>`;
+    })
+    .join('');
+
+const buildAccountTypeOdRuleLines = (tier) =>
+  getAccountTypeOdRules(tier)
+    .map(
+      (rule) =>
+        `- ${rule.accountType}: limit ${formatMoney(rule.odLimit)}; minimum opening balance ${formatMoney(rule.minOpeningBalance)}; monthly OD uses ${Number(rule.monthlyOdUses || DEFAULT_MONTHLY_OD_USES)}`
+    )
+    .join('\n');
+
 const buildFullTierPolicyRows = (tier, changes = []) => {
   const changeByField = changes.reduce((map, change) => {
     map.set(change.field, change);
@@ -89,9 +218,9 @@ const buildFullTierPolicyRows = (tier, changes = []) => {
     ['dailyLimit', 'Daily limit', tier.dailyLimit],
     ['monthlyLimit', 'Monthly limit', tier.monthlyLimit],
     ['maxODLimit', 'Maximum overdraft limit', tier.maxODLimit],
-    ['minBalance', 'Minimum balance requirement', tier.minBalance],
     ['penaltyAmount', 'Penalty after grace period', tier.penaltyAmount],
     ['lateFeeRate', 'Overdraft interest rate', tier.lateFeeRate],
+    ['accountTypeOdRules', 'Account type OD rules', getAccountTypeOdRules(tier)],
     ['overdraftDueRule', 'Overdraft due rule', OVERDRAFT_DUE_RULE],
     ['gracePeriodDays', 'Grace period', `${GRACE_PERIOD_DAYS} days after month-end`],
     ['reviewCycle', 'Review cycle', REVIEW_CYCLE],
@@ -116,26 +245,54 @@ const buildFullTierPolicyRows = (tier, changes = []) => {
 
 const buildTierPolicyEmail = ({ customer, tier, changes, updatedByName }) => {
   const policyRows = buildFullTierPolicyRows(tier, changes);
-  const policyLines = policyRows
+  const generalPolicyRows = policyRows.filter((row) => row.field !== 'accountTypeOdRules');
+  const changedRows = policyRows.filter((row) => row.changed);
+  const odRulesChanged = changedRows.some((row) => row.field === 'accountTypeOdRules');
+  const policyLines = generalPolicyRows
     .map((row) =>
       row.changed
         ? `- ${row.label}: ${row.value} (changed from ${row.previousValue})`
         : `- ${row.label}: ${row.value}`
     )
     .join('\n');
-  const policyTableRows = policyRows
+  const policyTableRows = generalPolicyRows
     .map(
       (row) => `
-        <tr style="${row.changed ? 'background:#ecfdf5;' : ''}">
-          <td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;">${escapeHtml(row.label)}</td>
-          <td style="padding:8px;border:1px solid #e5e7eb;${row.changed ? 'font-weight:700;color:#047857;' : ''}">${escapeHtml(row.value)}</td>
-          <td style="padding:8px;border:1px solid #e5e7eb;color:#64748b;">${row.changed ? `Changed from ${escapeHtml(row.previousValue)}` : 'No change'}</td>
+        <tr style="${row.changed ? 'background:#f0fdf4;' : ''}">
+          <td style="padding:11px 12px;border-bottom:1px solid #e5e7eb;font-weight:700;color:#334155;">${escapeHtml(row.label)}</td>
+          <td style="padding:11px 12px;border-bottom:1px solid #e5e7eb;color:#0f172a;${row.changed ? 'font-weight:700;' : ''}">${escapeHtml(row.value)}</td>
+          <td style="padding:11px 12px;border-bottom:1px solid #e5e7eb;color:${row.changed ? '#047857' : '#94a3b8'};font-weight:700;">${row.changed ? 'Updated' : '-'}</td>
         </tr>`
     )
     .join('');
+  const changedHtml = changedRows.length
+    ? changedRows
+        .map((row) => {
+          if (row.field === 'accountTypeOdRules') {
+            return `
+              <div style="border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;padding:12px;margin-top:8px;">
+                <strong style="display:block;color:#166534;">${escapeHtml(row.label)}</strong>
+                <span style="display:block;margin-top:4px;color:#475569;">Your account-type overdraft policy was updated. The current rules are shown below.</span>
+              </div>`;
+          }
+
+          return `
+            <div style="border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;padding:12px;margin-top:8px;">
+              <strong style="display:block;color:#166534;">${escapeHtml(row.label)}</strong>
+              <span style="display:block;margin-top:4px;color:#475569;">${escapeHtml(row.previousValue)} &rarr; <strong style="color:#0f172a;">${escapeHtml(row.value)}</strong></span>
+            </div>`;
+        })
+        .join('')
+    : '<p style="margin:0;color:#475569;">No field-level changes were listed, but the current policy is included below for reference.</p>';
   const changedSummary = changes
-    .map((change) => `${change.label}: ${change.from} -> ${change.to}`)
+    .map((change) =>
+      change.field === 'accountTypeOdRules'
+        ? `${change.label}: updated. Current account-type OD rules are listed below.`
+        : `${change.label}: ${change.from} -> ${change.to}`
+    )
     .join('\n');
+  const accountTypeOdLines = buildAccountTypeOdRuleLines(tier);
+  const accountTypeOdCards = buildAccountTypeOdRuleCards(tier);
 
   return {
     subject: `${tier.label} tier policy updated`,
@@ -149,23 +306,51 @@ ${changedSummary}
 Complete current policy:
 ${policyLines}
 
+Account type OD rules:
+${accountTypeOdLines}
+
 Regards,
 Adnate PayNest`,
     html: `
-      <p>Hello ${escapeHtml(customer.name)},</p>
-      <p>Your <strong>${escapeHtml(tier.label)}</strong> tier policy was updated by ${escapeHtml(updatedByName)}.</p>
-      <p>The complete current policy is shown below. Updated items are highlighted.</p>
-      <table style="border-collapse:collapse;width:100%;max-width:720px;">
-        <thead>
-          <tr>
-            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Policy detail</th>
-            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Current value</th>
-            <th align="left" style="padding:8px;border:1px solid #e5e7eb;background:#f8fafc;">Change status</th>
-          </tr>
-        </thead>
-        <tbody>${policyTableRows}</tbody>
-      </table>
-      <p>Regards,<br />Adnate PayNest</p>
+      <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;line-height:1.5;">
+        <div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+          <div style="background:#0f172a;color:#ffffff;padding:18px 22px;">
+            <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#bfdbfe;">Adnate PayNest</p>
+            <h1 style="margin:6px 0 0;font-size:22px;line-height:1.3;">Tier policy updated</h1>
+          </div>
+          <div style="padding:22px;">
+            <p style="margin-top:0;">Hello ${escapeHtml(customer.name)},</p>
+            <p>Your <strong>${escapeHtml(tier.label)}</strong> tier policy was updated by ${escapeHtml(updatedByName)}.</p>
+
+            <div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:14px 16px;margin:18px 0;">
+              <p style="margin:0 0 8px;font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#1d4ed8;">What changed</p>
+              ${changedHtml}
+            </div>
+
+            <div style="margin:20px 0;">
+              <p style="margin:0 0 10px;font-size:16px;font-weight:800;color:#0f172a;">Account type OD policy</p>
+              ${odRulesChanged ? '<p style="margin:0 0 12px;color:#047857;font-weight:700;">Overdraft rules were updated. Please review the current account-wise limits below.</p>' : '<p style="margin:0 0 12px;color:#475569;">Current account-wise overdraft rules are shown below.</p>'}
+              <div style="display:block;">
+                ${accountTypeOdCards}
+              </div>
+            </div>
+
+            <p style="margin:20px 0 10px;font-size:16px;font-weight:800;color:#0f172a;">Complete current policy</p>
+            <table style="border-collapse:collapse;width:100%;font-size:14px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+              <thead>
+                <tr>
+                  <th align="left" style="padding:12px;background:#f8fafc;border-bottom:1px solid #e5e7eb;">Policy detail</th>
+                  <th align="left" style="padding:12px;background:#f8fafc;border-bottom:1px solid #e5e7eb;">Current value</th>
+                  <th align="left" style="padding:12px;background:#f8fafc;border-bottom:1px solid #e5e7eb;">Status</th>
+                </tr>
+              </thead>
+              <tbody>${policyTableRows}</tbody>
+            </table>
+            <p style="margin-top:18px;color:#475569;">Please keep these limits in mind while using transfers and overdraft facilities. Monthly OD usage resets at the start of the next month.</p>
+            <p>Regards,<br /><strong>Adnate PayNest</strong></p>
+          </div>
+        </div>
+      </div>
     `,
   };
 };
@@ -241,6 +426,84 @@ const writeManagerTierPolicyNotifications = async ({
   );
 };
 
+const writeAdminTierPolicyNotifications = async ({
+  tier,
+  changes,
+  customerCount,
+  updatedBy,
+}) => {
+  if (changes.length === 0 || updatedBy?.role !== 'manager') return;
+
+  const admins = await User.find({ role: 'admin', status: 'active' }).select('name');
+
+  if (admins.length === 0) return;
+
+  const changeSummary = summarizeTierPolicyChanges(changes);
+  const extraChangeCount = Math.max(0, changes.length - 4);
+  const messageSuffix =
+    extraChangeCount > 0
+      ? `${changeSummary}; and ${extraChangeCount} more change${extraChangeCount === 1 ? '' : 's'}.`
+      : `${changeSummary}.`;
+
+  await Promise.all(
+    admins.map((admin) =>
+      writeSystemLog({
+        action: 'tier.policy.updated.admin',
+        message: `${updatedBy.name} updated ${tier.label} tier policy. ${customerCount} assigned customer(s) may be affected. ${messageSuffix}`,
+        actor: admin._id,
+        actorName: admin.name,
+        entityType: 'Tier',
+        entityId: tier.name,
+        severity: 'warning',
+        metadata: {
+          tierName: tier.name,
+          tierLabel: tier.label,
+          customerCount,
+          updatedBy: updatedBy.name,
+          updatedById: updatedBy._id,
+          updatedByRole: updatedBy.role,
+          changes,
+        },
+      })
+    )
+  );
+};
+
+const writeManagerTierCreatedNotifications = async ({ tier, createdBy }) => {
+  const managers = await User.find({ role: 'manager', status: 'active' }).select('name');
+
+  if (managers.length === 0) return;
+
+  const createdByName = createdBy?.name || 'Admin';
+  const accountRules = getAccountTypeOdRules(tier)
+    .map(
+      (rule) =>
+        `${rule.accountType}: OD ${formatMoney(rule.odLimit)}, minimum opening ${formatMoney(rule.minOpeningBalance)}`
+    )
+    .join('; ');
+
+  await Promise.all(
+    managers.map((manager) =>
+      writeSystemLog({
+        action: 'tier.policy.created.manager',
+        message: `${tier.label} tier policy was added by ${createdByName}. ${accountRules}`,
+        actor: manager._id,
+        actorName: manager.name,
+        entityType: 'Tier',
+        entityId: tier.name,
+        severity: 'success',
+        metadata: {
+          tierName: tier.name,
+          tierLabel: tier.label,
+          createdBy: createdByName,
+          createdById: createdBy?._id,
+          accountTypeOdRules: getAccountTypeOdRules(tier),
+        },
+      })
+    )
+  );
+};
+
 const serializeTier = (tier, stats = {}) => ({
   id: tier._id,
   key: tier.name,
@@ -250,6 +513,7 @@ const serializeTier = (tier, stats = {}) => ({
   dailyLimit: tier.dailyLimit,
   monthlyLimit: tier.monthlyLimit,
   maxODLimit: tier.maxODLimit,
+  accountTypeOdRules: getAccountTypeOdRules(tier),
   minBalance: tier.minBalance,
   penaltyAmount: tier.penaltyAmount,
   interestRate: tier.lateFeeRate,
@@ -321,7 +585,23 @@ const validateTierPayload = (payload, { partial = false } = {}) => {
     }
   }
 
+  if (payload.interestRate !== undefined) {
+    const monthlyInterestPercent = Number(parseMonthlyInterestPercent(payload.interestRate));
+
+    if (!Number.isFinite(monthlyInterestPercent) || monthlyInterestPercent <= 0) {
+      return 'Interest rate must be a monthly percentage above 0';
+    }
+  }
+
   return '';
+};
+
+const getDerivedMinBalance = (rules = []) => {
+  const balances = rules
+    .map((rule) => Number(rule.minOpeningBalance || 0))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  return balances.length > 0 ? Math.min(...balances) : 0;
 };
 
 const buildTierStats = async () => {
@@ -429,9 +709,24 @@ const createTier = async (req, res) => {
     return res.status(409).json({ message: 'Classification name already exists' });
   }
 
-  const validationMessage = validateTierPayload({ ...req.body, label, interestRate });
+  const validationMessage = validateTierPayload({
+    ...req.body,
+    label,
+    interestRate,
+    minBalance: req.body.minBalance ?? 0,
+  });
   if (validationMessage) {
     return res.status(400).json({ message: validationMessage });
+  }
+  const accountTypeOdRules = normalizeAccountTypeOdRules(
+    req.body.accountTypeOdRules,
+    req.body.maxODLimit,
+    req.body.minBalance
+  );
+  const accountTypeRuleValidationMessage = validateAccountTypeOdRules(accountTypeOdRules);
+
+  if (accountTypeRuleValidationMessage) {
+    return res.status(400).json({ message: accountTypeRuleValidationMessage });
   }
 
   const tier = await Tier.create({
@@ -441,11 +736,17 @@ const createTier = async (req, res) => {
     dailyLimit: Number(req.body.dailyLimit),
     monthlyLimit: Number(req.body.monthlyLimit),
     maxODLimit: Number(req.body.maxODLimit),
-    minBalance: Number(req.body.minBalance),
+    minBalance: Number(req.body.minBalance ?? getDerivedMinBalance(accountTypeOdRules)),
     penaltyAmount: Number(req.body.penaltyAmount),
     lateFeeRate: interestRate,
     eligibility: req.body.eligibility,
     reviewNotes: req.body.reviewNotes,
+    accountTypeOdRules,
+  });
+
+  await writeManagerTierCreatedNotifications({
+    tier,
+    createdBy: req.user,
   });
 
   res.status(201).json({ tier: serializeTier(tier) });
@@ -489,6 +790,52 @@ const updateTier = async (req, res) => {
     'eligibility',
     'reviewNotes',
   ];
+  const managerRestrictedFields = new Set(['label', 'minBalance', 'eligibility', 'reviewNotes']);
+  const managerPermissionFieldByRequestField = {
+    perTxnLimit: 'perTxnLimit',
+    dailyLimit: 'dailyLimit',
+    monthlyLimit: 'monthlyLimit',
+    maxODLimit: 'accountTypeOdRules',
+    penaltyAmount: 'penaltyAmount',
+    interestRate: 'interestRate',
+    lateFeeRate: 'interestRate',
+    accountTypeOdRules: 'accountTypeOdRules',
+  };
+
+  if (req.user.role === 'manager') {
+    const requestedFields = [
+      ...allowedFields.filter((field) => req.body[field] !== undefined),
+      ...(req.body.accountTypeOdRules !== undefined ? ['accountTypeOdRules'] : []),
+    ];
+
+    const blockedAdminOnlyField = requestedFields.find((field) =>
+      managerRestrictedFields.has(field)
+    );
+
+    if (blockedAdminOnlyField) {
+      return res.status(403).json({
+        message: `${tierFieldLabels[blockedAdminOnlyField] || blockedAdminOnlyField} can be changed only by admin`,
+      });
+    }
+
+    const config = await getBusinessRuleConfig();
+    const permissions = {
+      ...DEFAULT_MANAGER_TIER_PERMISSIONS,
+      ...(config.managerTierPermissions?.toObject?.() || config.managerTierPermissions || {}),
+    };
+    const blockedField = requestedFields.find((field) => {
+      const permissionField = managerPermissionFieldByRequestField[field];
+
+      return !permissionField || permissions[permissionField] !== true;
+    });
+
+    if (blockedField) {
+      return res.status(403).json({
+        message: `Manager is not allowed to edit ${tierFieldLabels[blockedField] || blockedField}`,
+      });
+    }
+  }
+
   const update = {};
   const normalizedBody = {
     ...req.body,
@@ -501,13 +848,37 @@ const updateTier = async (req, res) => {
   if (validationMessage) {
     return res.status(400).json({ message: validationMessage });
   }
+  let accountTypeOdRules;
+
+  if (req.body.accountTypeOdRules !== undefined) {
+    accountTypeOdRules = normalizeAccountTypeOdRules(
+      req.body.accountTypeOdRules,
+      normalizedBody.maxODLimit ?? existingTier.maxODLimit,
+      normalizedBody.minBalance ?? existingTier.minBalance
+    );
+    const accountTypeRuleValidationMessage = validateAccountTypeOdRules(accountTypeOdRules);
+
+    if (accountTypeRuleValidationMessage) {
+      return res.status(400).json({ message: accountTypeRuleValidationMessage });
+    }
+  }
 
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
       const targetField = field === 'interestRate' ? 'lateFeeRate' : field;
-      update[targetField] = ['label', 'lateFeeRate', 'eligibility', 'reviewNotes'].includes(targetField)
-        ? req.body[field]
-        : Number(req.body[field] || 0);
+      update[targetField] =
+        targetField === 'lateFeeRate'
+          ? getInterestRateValue({ [field]: req.body[field] })
+          : ['label', 'eligibility', 'reviewNotes'].includes(targetField)
+            ? req.body[field]
+            : Number(req.body[field] || 0);
+    }
+  }
+
+  if (accountTypeOdRules) {
+    update.accountTypeOdRules = accountTypeOdRules;
+    if (req.body.minBalance === undefined) {
+      update.minBalance = getDerivedMinBalance(accountTypeOdRules);
     }
   }
 
@@ -532,8 +903,6 @@ const updateTier = async (req, res) => {
     { role: 'customer', classification: tier.name },
     {
       $set: {
-        'account.overdraftLimit': tier.maxODLimit,
-        'accounts.$[].overdraftLimit': tier.maxODLimit,
         'account.transferLimit': tier.perTxnLimit,
         'accounts.$[].transferLimit': tier.perTxnLimit,
       },
@@ -543,22 +912,31 @@ const updateTier = async (req, res) => {
   const tierCustomers = await User.find({
     role: 'customer',
     classification: tier.name,
-  }).select('name email customerId');
+  }).select('name email customerId account accounts role classification');
   const customerIds = tierCustomers
     .map((user) => user.customerId)
     .filter(Boolean);
 
   if (customerIds.length > 0) {
-    await BankAccount.updateMany(
-      { customerId: { $in: customerIds } },
-      {
-        $set: {
-          transferLimit: tier.perTxnLimit,
-          withdrawalLimit: tier.dailyLimit,
-          odLimit: tier.maxODLimit,
-        },
-      }
+    await Promise.all(
+      getAccountTypeOdRules(tier).map((rule) =>
+        BankAccount.updateMany(
+          {
+            customerId: { $in: customerIds },
+            accountType: rule.accountType,
+          },
+          {
+            $set: {
+              transferLimit: tier.perTxnLimit,
+              withdrawalLimit: tier.dailyLimit,
+              odLimit: rule.odLimit,
+            },
+          }
+        )
+      )
     );
+
+    await Promise.all(tierCustomers.map((customer) => syncCustomerAccounts(customer)));
   }
 
   if (policyChanges.length > 0 && tierCustomers.length > 0) {
@@ -595,6 +973,12 @@ const updateTier = async (req, res) => {
   }
 
   await writeManagerTierPolicyNotifications({
+    tier,
+    changes: policyChanges,
+    customerCount: tierCustomers.length,
+    updatedBy: req.user,
+  });
+  await writeAdminTierPolicyNotifications({
     tier,
     changes: policyChanges,
     customerCount: tierCustomers.length,

@@ -10,17 +10,21 @@ export const getCustomerAccounts = (user) => {
 
 export const getCustomerOverdraftSummary = (user) => {
   const accounts = getCustomerAccounts(user);
-  const snapshots = [user?.account, ...accounts].filter(Boolean);
-  const overdraftLimit = Math.max(
-    ...snapshots.map((account) => toAmount(account.overdraftLimit)),
+  const uniqueAccounts = accounts.filter(
+    (account, index, list) =>
+      account?.accountNumber &&
+      list.findIndex((item) => item.accountNumber === account.accountNumber) === index
+  );
+  const overdraftLimit = uniqueAccounts.reduce(
+    (sum, account) => sum + toAmount(account.overdraftLimit),
     0
   );
-  const overdraftUsed = Math.max(
-    ...snapshots.map((account) => toAmount(account.overdraftUsed)),
+  const overdraftUsed = uniqueAccounts.reduce(
+    (sum, account) => sum + toAmount(account.overdraftUsed),
     0
   );
-  const odUsageCount = Math.max(
-    ...snapshots.map((account) => toAmount(account.odCountThisMonth)),
+  const odUsageCount = uniqueAccounts.reduce(
+    (sum, account) => sum + toAmount(account.odCountThisMonth),
     0
   );
 

@@ -3,6 +3,11 @@ const Transaction = require('../models/Transaction');
 const BankAccount = require('../models/BankAccount');
 const Tier = require('../models/Tier');
 const User = require('../models/User');
+const {
+  DEFAULT_MONTHLY_OD_USES,
+  getAccountTypeOdRule,
+  getAccountTypeOdRules,
+} = require('../utils/accountTypeOdPolicy');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 
@@ -14,6 +19,7 @@ const serializeTierPolicy = (tier) => ({
   dailyLimit: tier.dailyLimit,
   monthlyLimit: tier.monthlyLimit,
   maxODLimit: tier.maxODLimit,
+  accountTypeOdRules: getAccountTypeOdRules(tier),
   minBalance: tier.minBalance,
   penaltyAmount: tier.penaltyAmount,
   interestRate: tier.lateFeeRate,
@@ -103,7 +109,7 @@ const getManagerDashboard = async (req, res) => {
   const [
     customers,
     tierPolicies,
-    bankAccounts,
+    fetchedBankAccounts,
     transactionsToday,
     odActivityTransactions,
     allTransactions,
@@ -151,7 +157,9 @@ const getManagerDashboard = async (req, res) => {
             },
           },
           {
-            action: 'tier.policy.updated.manager',
+            action: {
+              $in: ['manual.message', 'tier.policy.created.manager', 'tier.policy.updated.manager'],
+            },
             actor: req.user._id,
           },
         ],
@@ -163,6 +171,20 @@ const getManagerDashboard = async (req, res) => {
   const customerById = new Map(
     customers.map((customer) => [customer.customerId, customer])
   );
+  const validCustomerIds = new Set(customers.map((customer) => customer.customerId).filter(Boolean));
+  const validCustomerObjectIds = new Set(customers.map((customer) => String(customer._id)));
+  const bankAccounts = fetchedBankAccounts.filter((account) =>
+    validCustomerIds.has(account.customerId)
+  );
+  const hasExistingCustomer = (transaction) =>
+    validCustomerObjectIds.has(String(transaction.sender)) ||
+    validCustomerObjectIds.has(String(transaction.receiver)) ||
+    validCustomerObjectIds.has(String(transaction.sender?._id)) ||
+    validCustomerObjectIds.has(String(transaction.receiver?._id));
+  const visibleOdActivityTransactions = odActivityTransactions.filter(hasExistingCustomer);
+  const visiblePayoffTransactions = payoffTransactions.filter(hasExistingCustomer);
+  const visibleTransactions = allTransactions.filter(hasExistingCustomer);
+  const tierByName = new Map(tierPolicies.map((tier) => [tier.name, tier]));
   const accountsByCustomerId = bankAccounts.reduce((map, account) => {
     if (!map.has(account.customerId)) {
       map.set(account.customerId, []);
@@ -172,28 +194,19 @@ const getManagerDashboard = async (req, res) => {
     return map;
   }, new Map());
 
-  const overdraftCustomers = customers
-    .map((customer) => {
-      const accounts = accountsByCustomerId.get(customer.customerId) || [];
-      const limitCandidates = [
-        customer.account?.overdraftLimit,
-        ...(customer.accounts || []).map((account) => account.overdraftLimit),
-        ...accounts.map((account) => account.odLimit),
-      ];
-      const usedCandidates = [
-        customer.account?.overdraftUsed,
-        ...(customer.accounts || []).map((account) => account.overdraftUsed),
-        ...accounts.map((account) => account.odUsed),
-      ];
-      const totalLimit = Math.max(0, ...limitCandidates.map(toWholeRupees));
-      const used = Math.max(0, ...usedCandidates.map(toWholeRupees));
-      const available = Math.max(0, totalLimit - used);
-      const utilization = totalLimit > 0 ? Math.round((used / totalLimit) * 100) : 0;
-      const odAttempts = Math.max(
-        0,
-        ...accounts.map((account) => toWholeRupees(account.odCountThisMonth))
+  const overdraftCustomers = bankAccounts
+    .map((account) => {
+      const customer = customerById.get(account.customerId);
+      const accountRule = getAccountTypeOdRule(
+        tierByName.get(customer?.classification),
+        account.accountType
       );
-      const isBlocked = accounts.some((account) => account.odBlocked);
+      const limit = toWholeRupees(account.odLimit);
+      const used = toWholeRupees(account.odUsed);
+      const available = Math.max(0, limit - used);
+      const utilization = limit > 0 ? Math.round((used / limit) * 100) : 0;
+      const odAttempts = toWholeRupees(account.odCountThisMonth);
+      const isBlocked = Boolean(account.odBlocked);
       const risk =
         isBlocked || utilization >= 90
           ? 'critical'
@@ -204,20 +217,21 @@ const getManagerDashboard = async (req, res) => {
               : 'unused';
 
       return {
-        id: customer._id,
-        customerId: customer.customerId,
-        customer: customer.name,
-        email: customer.email,
-        classification: customer.classification || 'unassigned',
-        status: customer.status,
-        account: accounts[0]?.accountNumber || customer.account?.accountNumber,
-        accountType: accounts[0]?.accountType || customer.account?.accountType || 'Account',
-        accountCount: accounts.length || (customer.accounts || []).length || 1,
-        limit: totalLimit,
+        id: account._id,
+        customerId: account.customerId,
+        customer: customer?.name || account.customerId,
+        email: customer?.email,
+        classification: customer?.classification || 'unassigned',
+        status: customer?.status || account.accountStatus,
+        account: account.accountNumber,
+        accountType: account.accountType || 'Account',
+        accountCount: (accountsByCustomerId.get(account.customerId) || []).length || 1,
+        limit,
         used,
         available,
         utilization,
         odAttempts,
+        monthlyOdUses: accountRule?.monthlyOdUses ?? DEFAULT_MONTHLY_OD_USES,
         isBlocked,
         risk,
       };
@@ -267,7 +281,7 @@ const getManagerDashboard = async (req, res) => {
       risk: row.risk,
     }));
 
-  const recentOverdraftActivity = odActivityTransactions.map((transaction) => {
+  const recentOverdraftActivity = visibleOdActivityTransactions.map((transaction) => {
     const customer =
       customers.find((item) => String(item._id) === String(transaction.sender));
 
@@ -280,7 +294,7 @@ const getManagerDashboard = async (req, res) => {
       createdAt: transaction.createdAt,
     };
   });
-  const overdraftPayoffTransactions = payoffTransactions.map((transaction) => ({
+  const overdraftPayoffTransactions = visiblePayoffTransactions.map((transaction) => ({
     id: transaction.transactionId,
     customer: transaction.sender?.name || transaction.senderName,
     customerId: transaction.sender?.customerId,
@@ -292,23 +306,32 @@ const getManagerDashboard = async (req, res) => {
     createdAt: transaction.createdAt,
   }));
   const thirdOdEscalationsByCustomer = bankAccounts
-    .filter(
-      (account) =>
+    .filter((account) => {
+      const customer = customerById.get(account.customerId);
+      const accountRule = getAccountTypeOdRule(
+        tierByName.get(customer?.classification),
+        account.accountType
+      );
+      const monthlyOdUses = accountRule?.monthlyOdUses ?? DEFAULT_MONTHLY_OD_USES;
+
+      return (
         account.odCountMonthKey === currentMonthKey &&
-        toWholeRupees(account.odCountThisMonth) >= 3
-    )
+        toWholeRupees(account.odCountThisMonth) >= monthlyOdUses
+      );
+    })
     .reduce((map, account) => {
       if (!map.has(account.customerId)) {
         const customer = customerById.get(account.customerId);
         map.set(account.customerId, {
           id: `OD3-${account.customerId}`,
-          title: `${customer?.name || account.customerId} has used overdraft 3 times this month`,
+          title: `${customer?.name || account.customerId} ${account.accountType} account reached monthly overdraft use limit`,
           amount: account.odUsed || 0,
           severity: 'warning',
           time: 'Current month',
           metadata: {
             customerId: account.customerId,
             accountNumber: account.accountNumber,
+            accountType: account.accountType,
             odCountThisMonth: account.odCountThisMonth,
             odBlocked: account.odBlocked,
           },
@@ -359,7 +382,7 @@ const getManagerDashboard = async (req, res) => {
         metadata: log.metadata || {},
       })),
     ],
-    transactions: allTransactions.map((transaction) => ({
+    transactions: visibleTransactions.map((transaction) => ({
       id: transaction.transactionId,
       customer: transaction.sender?.name || transaction.senderName,
       customerId: transaction.sender?.customerId,

@@ -5,60 +5,12 @@ const Tier = require('../models/Tier');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { calculateOverdraftInterest } = require('../utils/overdraftInterest');
+const { syncCustomerAccounts } = require('../utils/customerAccounts');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 
-const getCustomerOverdraftUsed = (user, bankAccounts = []) => {
-  const values = [
-    user.account?.overdraftUsed,
-    ...(user.accounts || []).map((account) => account.overdraftUsed),
-    ...bankAccounts.map((account) => account.odUsed),
-  ].map(toWholeRupees);
-
-  return Math.max(...values, 0);
-};
-
-const toUserAccountSnapshot = (currentSnapshot, bankAccount, remainingOverdraft) => ({
-  ...(currentSnapshot.toObject?.() || currentSnapshot),
-  balance: toWholeRupees(bankAccount.walletBalance),
-  overdraftLimit: toWholeRupees(bankAccount.odLimit || currentSnapshot.overdraftLimit),
-  overdraftUsed: remainingOverdraft,
-  odStartedAt: remainingOverdraft > 0 ? bankAccount.odStartedAt || currentSnapshot.odStartedAt || null : null,
-  odCountThisMonth: bankAccount.odCountThisMonth || 0,
-  odBlocked: bankAccount.odBlocked || false,
-});
-
-const syncOverdraftSnapshots = (user, bankAccounts, remainingOverdraft) => {
-  const accountByNumber = new Map(
-    bankAccounts.map((account) => [account.accountNumber, account])
-  );
-
-  user.accounts = (user.accounts || []).map((account) => {
-    const bankAccount = accountByNumber.get(account.accountNumber);
-
-    return bankAccount
-      ? toUserAccountSnapshot(account, bankAccount, remainingOverdraft)
-      : {
-        ...(account.toObject?.() || account),
-        overdraftUsed: remainingOverdraft,
-        odStartedAt: remainingOverdraft > 0 ? account.odStartedAt || null : null,
-      };
-  });
-
-  if (user.account?.accountNumber) {
-    const bankAccount = accountByNumber.get(user.account.accountNumber);
-    user.account = bankAccount
-      ? toUserAccountSnapshot(user.account, bankAccount, remainingOverdraft)
-      : {
-        ...(user.account.toObject?.() || user.account),
-        overdraftUsed: remainingOverdraft,
-        odStartedAt: remainingOverdraft > 0 ? user.account.odStartedAt || null : null,
-      };
-  }
-};
-
 const payOffOverdraft = async (req, res) => {
-  const { accountNumber, amount } = req.body || {};
+  const { accountNumber, odAccountNumber, paymentAccountNumber, amount } = req.body || {};
   const requestedAmount = toWholeRupees(amount);
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -79,15 +31,20 @@ const payOffOverdraft = async (req, res) => {
       throw new Error('Active bank account not found');
     }
 
-    const overdraftUsed = getCustomerOverdraftUsed(user, bankAccounts);
+    const targetAccountNumber = odAccountNumber || accountNumber;
+    const overdraftAccount = targetAccountNumber
+      ? bankAccounts.find((account) => account.accountNumber === targetAccountNumber)
+      : bankAccounts.find((account) => toWholeRupees(account.odUsed) > 0);
+
+    if (!overdraftAccount) {
+      throw new Error('Selected overdraft account was not found');
+    }
+
+    const overdraftUsed = toWholeRupees(overdraftAccount.odUsed);
     const tier = await Tier.findOne({ name: user.classification }).session(session);
-    const activeOdAccount =
-      bankAccounts.find((account) => toWholeRupees(account.odUsed) > 0 && account.odStartedAt) ||
-      bankAccounts.find((account) => toWholeRupees(account.odUsed) > 0);
     const odStartedAt =
-      activeOdAccount?.odStartedAt ||
-      user.account?.odStartedAt ||
-      (user.accounts || []).find((account) => account.odStartedAt)?.odStartedAt ||
+      overdraftAccount.odStartedAt ||
+      user.accounts?.find((account) => account.accountNumber === overdraftAccount.accountNumber)?.odStartedAt ||
       new Date();
     const interest = calculateOverdraftInterest({
       principal: overdraftUsed,
@@ -108,11 +65,9 @@ const payOffOverdraft = async (req, res) => {
       throw new Error('Payoff amount cannot exceed the active overdraft due with interest');
     }
 
-    const paymentAccount = accountNumber
-      ? bankAccounts.find((account) => account.accountNumber === accountNumber)
-      : bankAccounts.find((account) => account.accountNumber === user.account?.accountNumber) ||
-      bankAccounts.find((account) => toWholeRupees(account.odUsed) > 0) ||
-      bankAccounts[0];
+    const paymentAccount = paymentAccountNumber
+      ? bankAccounts.find((account) => account.accountNumber === paymentAccountNumber)
+      : overdraftAccount;
 
     if (!paymentAccount) {
       throw new Error("Selected payoff account was not found");
@@ -131,16 +86,14 @@ const payOffOverdraft = async (req, res) => {
     paymentAccount.walletBalance = currentBalance - requestedAmount;
     paymentAccount.availableBalance = paymentAccount.walletBalance;
 
-    bankAccounts.forEach((account) => {
-      account.odUsed = remainingOverdraft;
-      account.odStartedAt = remainingOverdraft > 0 ? account.odStartedAt || odStartedAt : null;
-    });
-
-    syncOverdraftSnapshots(user, bankAccounts, remainingOverdraft);
+    overdraftAccount.odUsed = remainingOverdraft;
+    overdraftAccount.odStartedAt = remainingOverdraft > 0 ? overdraftAccount.odStartedAt || odStartedAt : null;
 
     await Promise.all([
-      ...bankAccounts.map((account) => account.save({ session })),
-      user.save({ session }),
+      paymentAccount.save({ session }),
+      paymentAccount.accountNumber === overdraftAccount.accountNumber
+        ? null
+        : overdraftAccount.save({ session }),
       Transaction.create(
         [
           {
@@ -150,19 +103,21 @@ const payOffOverdraft = async (req, res) => {
             senderName: user.name,
             receiverName: user.name,
             fromAccountNumber: paymentAccount.accountNumber,
-            toAccountNumber: paymentAccount.accountNumber,
+            toAccountNumber: overdraftAccount.accountNumber,
             amount: requestedAmount,
             remarks:
               remainingOverdraft > 0
-                ? `Partial overdraft payoff. Interest paid: ${interestPaid}. Principal paid: ${principalPayment}. Remaining principal due: ${remainingOverdraft}`
-                : `Overdraft payoff. Interest paid: ${interestPaid}`,
+                ? `Partial ${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}. Principal paid: ${principalPayment}. Remaining principal due: ${remainingOverdraft}`
+                : `${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}`,
             status: 'success',
             type: 'overdraft-payoff',
           },
         ],
         { session }
       ),
-    ]);
+    ].filter(Boolean));
+
+    await syncCustomerAccounts(user, { session });
 
     await session.commitTransaction();
 

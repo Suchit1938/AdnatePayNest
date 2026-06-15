@@ -24,15 +24,75 @@ const defaultTierForm = {
   dailyLimit: "",
   monthlyLimit: "",
   maxODLimit: "",
-  minBalance: "",
   penaltyAmount: "",
   interestRate: "",
   eligibility: "",
   reviewNotes: "",
+  accountTypeOdRules: [
+    { accountType: "Savings", odLimit: "", minOpeningBalance: "" },
+    { accountType: "Salary", odLimit: "", minOpeningBalance: "" },
+    { accountType: "Current", odLimit: "", minOpeningBalance: "" },
+  ],
 };
 
 const GRACE_PERIOD_DAYS = 3;
 const REVIEW_CYCLE = "Monthly";
+const ACCOUNT_TYPES = ["Savings", "Salary", "Current"];
+
+const normalizeAccountTypeOdRules = (rules = [], fallbackOdLimit = "") =>
+  ACCOUNT_TYPES.map((accountType) => {
+    const rule = rules.find((item) => item.accountType === accountType) || {};
+
+    return {
+      accountType,
+      odLimit: rule.odLimit === undefined ? fallbackOdLimit : rule.odLimit,
+      minOpeningBalance: rule.minOpeningBalance ?? "",
+    };
+  });
+
+const getDerivedMaxOdLimit = (form) =>
+  Math.max(
+    0,
+    ...normalizeAccountTypeOdRules(form.accountTypeOdRules, form.maxODLimit)
+      .map((rule) => Number(rule.odLimit || 0))
+  );
+
+const getDerivedMinBalance = (form) => {
+  const balances = normalizeAccountTypeOdRules(form.accountTypeOdRules, form.maxODLimit)
+    .map((rule) => Number(rule.minOpeningBalance || 0))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  return balances.length > 0 ? Math.min(...balances) : 0;
+};
+
+const getAccountRule = (tier, accountType) =>
+  normalizeAccountTypeOdRules(tier.accountTypeOdRules, tier.maxODLimit).find(
+    (rule) => rule.accountType === accountType
+  );
+
+const parseMonthlyInterestPercent = (value) => {
+  const match = String(value || "").match(/(\d+(?:\.\d+)?)/);
+
+  return match ? match[1] : "";
+};
+
+const formatPercentNumber = (value) => {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) return "";
+
+  return numericValue.toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  });
+};
+
+const formatMonthlyInterestRate = (value) => {
+  const percent = parseMonthlyInterestPercent(value);
+  const displayValue = formatPercentNumber(percent);
+
+  return displayValue ? `${displayValue}% monthly` : "";
+};
 
 const slugifyTierName = (value) =>
   String(value || "")
@@ -51,8 +111,6 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
     "perTxnLimit",
     "dailyLimit",
     "monthlyLimit",
-    "maxODLimit",
-    "minBalance",
     "penaltyAmount",
   ];
 
@@ -62,11 +120,35 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
     }
   });
 
+  if (
+    form.interestRate !== "" &&
+    (!Number.isFinite(Number(parseMonthlyInterestPercent(form.interestRate))) ||
+      Number(parseMonthlyInterestPercent(form.interestRate)) <= 0)
+  ) {
+    errors.interestRate = "Enter monthly OD interest as a percentage above 0.";
+  }
+
   numericFields.forEach((field) => {
     const value = Number(form[field]);
 
     if (form[field] === "" || !Number.isFinite(value) || value < 0) {
       errors[field] = "Enter a valid amount.";
+    }
+  });
+
+  normalizeAccountTypeOdRules(form.accountTypeOdRules, form.maxODLimit).forEach((rule) => {
+    if (
+      (!Number.isFinite(Number(rule.odLimit)) || Number(rule.odLimit) < 0)
+    ) {
+      errors[`accountTypeOdRules.${rule.accountType}.odLimit`] = "Enter a valid OD limit.";
+    }
+
+    if (
+      !Number.isFinite(Number(rule.minOpeningBalance)) ||
+      Number(rule.minOpeningBalance) < 0
+    ) {
+      errors[`accountTypeOdRules.${rule.accountType}.minOpeningBalance`] =
+        "Enter a valid minimum balance.";
     }
   });
 
@@ -107,6 +189,72 @@ const validateTierForm = (form, existingTiers = [], currentKey = "") => {
 const FieldError = ({ message }) =>
   message ? <p className="mt-1 text-sm font-semibold text-red-600">{message}</p> : null;
 
+const AccountTypeRulesEditor = ({ form, errors, onChange }) => {
+  const rules = normalizeAccountTypeOdRules(form.accountTypeOdRules, form.maxODLimit);
+
+  return (
+    <div className="md:col-span-2">
+      <div className="mb-3">
+        <p className="text-sm font-semibold text-slate-600">
+          Account Type Rules
+        </p>
+        <p className="mt-1 text-sm text-slate-500">
+          Set separate OD limits and minimum opening balances. Monthly OD usage is fixed at 3 across all account types.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {rules.map((rule) => (
+          <div
+            key={rule.accountType}
+            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-bold text-slate-900">{rule.accountType}</p>
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
+                Account rule
+              </span>
+            </div>
+            <label className="mt-4 block">
+              <span className="text-xs font-bold uppercase text-slate-500">
+                OD Limit
+              </span>
+              <input
+                type="number"
+                min="0"
+                value={rule.odLimit}
+                onChange={(event) =>
+                  onChange(rule.accountType, "odLimit", event.target.value)
+                }
+                className="input-field mt-1"
+              />
+              <FieldError
+                message={errors[`accountTypeOdRules.${rule.accountType}.odLimit`]}
+              />
+            </label>
+            <label className="mt-4 block">
+              <span className="text-xs font-bold uppercase text-slate-500">
+                Minimum Opening Balance
+              </span>
+              <input
+                type="number"
+                min="0"
+                value={rule.minOpeningBalance}
+                onChange={(event) =>
+                  onChange(rule.accountType, "minOpeningBalance", event.target.value)
+                }
+                className="input-field mt-1"
+              />
+              <FieldError
+                message={errors[`accountTypeOdRules.${rule.accountType}.minOpeningBalance`]}
+              />
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 function Classifications() {
   const toast = useToast();
   const [classificationRows, setClassificationRows] = useState([]);
@@ -135,10 +283,13 @@ function Classifications() {
       monthlyLimit: tier.monthlyLimit,
       maxODLimit: tier.maxODLimit,
       penaltyAmount: tier.penaltyAmount,
-      minBalance: tier.minBalance,
-      interestRate: tier.interestRate || tier.lateFeeRate,
+      interestRate: parseMonthlyInterestPercent(tier.interestRate || tier.lateFeeRate),
       eligibility: tier.eligibility,
       reviewNotes: tier.reviewNotes,
+      accountTypeOdRules: normalizeAccountTypeOdRules(
+        tier.accountTypeOdRules,
+        tier.maxODLimit
+      ),
     });
   };
 
@@ -180,6 +331,32 @@ function Classifications() {
     setCreateErrors(validateTierForm(nextForm, classificationRows));
   };
 
+  const updateEditAccountRule = (accountType, field, value) => {
+    const nextRules = normalizeAccountTypeOdRules(
+      editForm.accountTypeOdRules,
+      editForm.maxODLimit
+    ).map((rule) =>
+      rule.accountType === accountType ? { ...rule, [field]: value } : rule
+    );
+    const nextForm = { ...editForm, accountTypeOdRules: nextRules };
+
+    setEditForm(nextForm);
+    setEditErrors(validateTierForm(nextForm, classificationRows, editingTier?.key));
+  };
+
+  const updateCreateAccountRule = (accountType, field, value) => {
+    const nextRules = normalizeAccountTypeOdRules(
+      createForm.accountTypeOdRules,
+      createForm.maxODLimit
+    ).map((rule) =>
+      rule.accountType === accountType ? { ...rule, [field]: value } : rule
+    );
+    const nextForm = { ...createForm, accountTypeOdRules: nextRules };
+
+    setCreateForm(nextForm);
+    setCreateErrors(validateTierForm(nextForm, classificationRows));
+  };
+
   const saveNewTier = async (event) => {
     event.preventDefault();
 
@@ -193,6 +370,9 @@ function Classifications() {
 
     await api.post("/tiers", {
       ...createForm,
+      interestRate: formatMonthlyInterestRate(createForm.interestRate),
+      maxODLimit: getDerivedMaxOdLimit(createForm),
+      minBalance: getDerivedMinBalance(createForm),
       name: createForm.label,
     });
     const { data } = await api.get("/tiers");
@@ -213,7 +393,12 @@ function Classifications() {
       return;
     }
 
-    const { data: updateData } = await api.patch(`/tiers/${editingTier.key}`, editForm);
+    const { data: updateData } = await api.patch(`/tiers/${editingTier.key}`, {
+      ...editForm,
+      interestRate: formatMonthlyInterestRate(editForm.interestRate),
+      maxODLimit: getDerivedMaxOdLimit(editForm),
+      minBalance: getDerivedMinBalance(editForm),
+    });
     const { data } = await api.get("/tiers");
     setClassificationRows(data.tiers);
     const email = updateData.email;
@@ -312,7 +497,7 @@ function Classifications() {
                     {tier.label} Tier
                   </p>
                   <h2 className="mt-2 text-3xl font-bold">
-                    {formatCurrency(tier.maxODLimit)}
+                    {tier.customerCount} customers
                   </h2>
                 </div>
                 <div className="flex items-center gap-2">
@@ -338,7 +523,7 @@ function Classifications() {
 
               <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Transaction Limit</p>
+                  <p className="font-semibold">Per Transfer Limit</p>
                   <p className="mt-1">{formatCurrency(tier.perTxnLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
@@ -350,8 +535,8 @@ function Classifications() {
                   <p className="mt-1">{formatCurrency(tier.dailyLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Minimum Balance</p>
-                  <p className="mt-1">{formatCurrency(tier.minBalance)}</p>
+                  <p className="font-semibold">Monthly Limit</p>
+                  <p className="mt-1">{formatCurrency(tier.monthlyLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
                   <p className="font-semibold">Customers</p>
@@ -362,12 +547,29 @@ function Classifications() {
                   <p className="mt-1">{tier.odBlockedAccounts}</p>
                 </div>
               </div>
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {ACCOUNT_TYPES.map((accountType) => {
+                  const rule = getAccountRule(tier, accountType);
+
+                  return (
+                    <div key={accountType} className="rounded-lg bg-white/80 p-3 text-sm">
+                      <p className="font-bold">{accountType}</p>
+                      <p className="mt-1 text-slate-700">
+                        OD {formatCurrency(rule?.odLimit || 0)}
+                      </p>
+                      <p className="text-xs font-semibold text-slate-500">
+                        Min opening {formatCurrency(rule?.minOpeningBalance || 0)}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ))}
         </section>
 
-        <section className="table-shell">
-          <div className="flex items-center gap-3 border-b border-slate-100 p-6">
+        <section className="card-padded">
+          <div className="flex items-center gap-3">
             <BadgeIndianRupee className="text-blue-600" size={24} />
             <div>
               <h2 className="text-xl font-bold">Tier Policy Details</h2>
@@ -376,75 +578,64 @@ function Classifications() {
               </p>
             </div>
           </div>
-          <div className="border-b border-slate-100 bg-blue-50 px-6 py-4 text-sm font-semibold text-blue-800">
+          <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm font-semibold text-blue-800">
             Global overdraft policy: minimum 1-day interest, clear before month-end,{" "}
             {GRACE_PERIOD_DAYS}-day grace window, {REVIEW_CYCLE.toLowerCase()} review.
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left">
-              <thead className="table-head">
-                <tr>
-                  <th className="px-6 py-4">Tier</th>
-                  <th className="px-6 py-4">Transaction Limit</th>
-                  <th className="px-6 py-4">Overdraft</th>
-                  <th className="px-6 py-4">Interest & Penalty</th>
-                  <th className="px-6 py-4">Minimum Balance</th>
-                  <th className="px-6 py-4">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {classificationPagination.pageRows.map((tier) => (
-                  <tr key={tier.key} className="table-row">
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${getTierTone(tier.key).badge}`}>
-                        {tier.label}
-                      </span>
-                      <p className="text-sm text-slate-500">{tier.eligibility}</p>
-                    </td>
-                    <td className="px-6 py-4 font-semibold">
-                      {formatCurrency(tier.perTxnLimit)}
-                    </td>
-                    <td className="px-6 py-4 font-semibold">
-                      {formatCurrency(tier.maxODLimit)}
-                    </td>
-                    <td className="px-6 py-4">
-                      <p className="font-semibold">
-                        {formatCurrency(tier.penaltyAmount)}
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        Interest: {tier.interestRate || tier.lateFeeRate}
-                      </p>
-                    </td>
-                    <td className="px-6 py-4">
-                      {formatCurrency(tier.minBalance)}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(tier)}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                          aria-label={`Edit ${tier.label} tier`}
-                          title={`Edit ${tier.label} tier`}
-                        >
-                          <Edit3 size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteClassification(tier)}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-100 text-red-600 hover:bg-red-50"
-                          aria-label={`Delete ${tier.label} tier`}
-                          title={`Delete ${tier.label} tier`}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {classificationPagination.pageRows.map((tier) => (
+              <div key={tier.key} className="rounded-xl border border-slate-200 bg-white p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${getTierTone(tier.key).badge}`}>
+                      {tier.label}
+                    </span>
+                    <p className="mt-2 text-sm text-slate-500">{tier.eligibility || "No eligibility notes"}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(tier)}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      aria-label={`Edit ${tier.label} tier`}
+                      title={`Edit ${tier.label} tier`}
+                    >
+                      <Edit3 size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteClassification(tier)}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-100 text-red-600 hover:bg-red-50"
+                      aria-label={`Delete ${tier.label} tier`}
+                      title={`Delete ${tier.label} tier`}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Per Txn</p>
+                    <p className="mt-1 font-bold">{formatCurrency(tier.perTxnLimit)}</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Daily</p>
+                    <p className="mt-1 font-bold">{formatCurrency(tier.dailyLimit)}</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Penalty</p>
+                    <p className="mt-1 font-bold">{formatCurrency(tier.penaltyAmount)}</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Interest</p>
+                    <p className="mt-1 font-bold">
+                      {formatMonthlyInterestRate(tier.interestRate || tier.lateFeeRate)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
             <TablePagination {...classificationPagination} />
           </div>
         </section>
@@ -492,7 +683,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Transaction Limit
+                  Per Transfer Limit
                 </span>
                 <input
                   required
@@ -543,23 +734,6 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Overdraft Limit
-                </span>
-                <input
-                  required
-                  min="0"
-                  type="number"
-                  value={createForm.maxODLimit}
-                  onChange={(event) =>
-                    updateCreateForm("maxODLimit", event.target.value)
-                  }
-                  className="input-field"
-                />
-                <FieldError message={createErrors.maxODLimit} />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
                   Penalty Amount
                 </span>
                 <input
@@ -575,36 +749,27 @@ function Classifications() {
                 <FieldError message={createErrors.penaltyAmount} />
               </label>
 
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
-                  Minimum Balance
-                </span>
-                <input
-                  required
-                  min="0"
-                  type="number"
-                  value={createForm.minBalance}
-                  onChange={(event) =>
-                    updateCreateForm("minBalance", event.target.value)
-                  }
-                  className="input-field"
-                />
-                <FieldError message={createErrors.minBalance} />
-              </label>
-
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Interest Rate
+                  Monthly OD Interest (%)
                 </span>
                 <input
                   required
+                  min="0.01"
+                  step="0.01"
+                  type="number"
                   value={createForm.interestRate}
                   onChange={(event) =>
                     updateCreateForm("interestRate", event.target.value)
                   }
                   className="input-field"
-                  placeholder="1.5% monthly"
+                  placeholder="1.5"
                 />
+                {createForm.interestRate && (
+                  <p className="mt-2 text-xs font-semibold text-blue-700">
+                    Saved as {formatMonthlyInterestRate(createForm.interestRate)}
+                  </p>
+                )}
                 <FieldError message={createErrors.interestRate} />
               </label>
 
@@ -612,6 +777,12 @@ function Classifications() {
                 Fixed overdraft policy: minimum 1-day interest, clear before month-end,{" "}
                 {GRACE_PERIOD_DAYS}-day grace window, {REVIEW_CYCLE.toLowerCase()} review.
               </div>
+
+              <AccountTypeRulesEditor
+                form={createForm}
+                errors={createErrors}
+                onChange={updateCreateAccountRule}
+              />
 
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
@@ -701,7 +872,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Transaction Limit
+                  Per Transfer Limit
                 </span>
                 <input
                   required
@@ -752,21 +923,6 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Overdraft Limit
-                </span>
-                <input
-                  required
-                  min="0"
-                  type="number"
-                  value={editForm.maxODLimit}
-                  onChange={(event) => updateEditForm("maxODLimit", event.target.value)}
-                  className="input-field"
-                />
-                <FieldError message={editErrors.maxODLimit} />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
                   Penalty Amount
                 </span>
                 <input
@@ -782,36 +938,27 @@ function Classifications() {
                 <FieldError message={editErrors.penaltyAmount} />
               </label>
 
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-600">
-                  Minimum Balance
-                </span>
-                <input
-                  required
-                  min="0"
-                  type="number"
-                  value={editForm.minBalance}
-                  onChange={(event) =>
-                    updateEditForm("minBalance", event.target.value)
-                  }
-                  className="input-field"
-                />
-                <FieldError message={editErrors.minBalance} />
-              </label>
-
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Interest Rate
+                  Monthly OD Interest (%)
                 </span>
                 <input
                   required
+                  min="0.01"
+                  step="0.01"
+                  type="number"
                   value={editForm.interestRate}
                   onChange={(event) =>
                     updateEditForm("interestRate", event.target.value)
                   }
                   className="input-field"
-                  placeholder="1.5% monthly"
+                  placeholder="1.5"
                 />
+                {editForm.interestRate && (
+                  <p className="mt-2 text-xs font-semibold text-blue-700">
+                    Saved as {formatMonthlyInterestRate(editForm.interestRate)}
+                  </p>
+                )}
                 <FieldError message={editErrors.interestRate} />
               </label>
 
@@ -819,6 +966,12 @@ function Classifications() {
                 Fixed overdraft policy: minimum 1-day interest, clear before month-end,{" "}
                 {GRACE_PERIOD_DAYS}-day grace window, {REVIEW_CYCLE.toLowerCase()} review.
               </div>
+
+              <AccountTypeRulesEditor
+                form={editForm}
+                errors={editErrors}
+                onChange={updateEditAccountRule}
+              />
 
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">

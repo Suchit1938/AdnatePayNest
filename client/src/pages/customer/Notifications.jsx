@@ -51,7 +51,7 @@ const Notifications = () => {
             icon={Bell}
             accent="bg-blue-500"
             iconTone="bg-blue-50 text-blue-600"
-            badge={{ text: "From database", tone: "neutral" }}
+            badge={{ text: "Account updates", tone: "neutral" }}
           />
           <StatsCard
             title="Action Required"
