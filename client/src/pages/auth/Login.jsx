@@ -3,8 +3,17 @@ import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, KeyRound, Lock, LogIn, Mail, X } from "lucide-react";
 
 import api from "../../api/axios";
+import brandLogo from "../../assets/brand/logo.png";
 import { useToast } from "../../components/ui/useToast";
 import { useAuth } from "../../context/useAuth";
+
+const emailPattern = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+const emailErrorMessage = "Enter a valid email address.";
+
+const getEmailError = (value) => {
+  const normalizedEmail = value.trim().toLowerCase();
+  return normalizedEmail && !emailPattern.test(normalizedEmail) ? emailErrorMessage : "";
+};
 
 function Login() {
   const toast = useToast();
@@ -12,6 +21,7 @@ function Login() {
   const { login } = useAuth();
 
   const [email, setEmail] = useState("");
+  const [emailError, setEmailError] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -22,6 +32,7 @@ function Login() {
     newPassword: "",
     confirmPassword: "",
   });
+  const [forgotEmailError, setForgotEmailError] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState({
     login: false,
@@ -47,12 +58,29 @@ function Login() {
     localStorage.setItem("adnate-recent-emails", JSON.stringify(updatedEmails));
   };
 
+  const updateLoginEmail = (value) => {
+    setEmail(value);
+    setError("");
+    setEmailError(getEmailError(value));
+  };
+
   const handleLogin = async (event) => {
     event.preventDefault();
     setError("");
 
+    const normalizedEmail = email.trim().toLowerCase();
+    const nextEmailError = getEmailError(email);
+
+    if (nextEmailError || !normalizedEmail) {
+      const errorMessage = nextEmailError || "Email is required.";
+      setEmailError(errorMessage);
+      setError(errorMessage);
+      toast.warning(errorMessage);
+      return;
+    }
+
     try {
-      const user = await login(email, password);
+      const user = await login(normalizedEmail, password);
       saveRecentEmail(user.email);
 
       if (user.role === "admin") {
@@ -70,6 +98,10 @@ function Login() {
   };
 
   const updateForgotForm = (field, value) => {
+    if (field === "email") {
+      setForgotEmailError(getEmailError(value));
+    }
+
     setForgotForm((current) => ({ ...current, [field]: value }));
   };
 
@@ -89,17 +121,30 @@ function Login() {
       newPassword: "",
       confirmPassword: "",
     });
+    setForgotEmailError(getEmailError(email));
   };
 
   const sendForgotOtp = async (event) => {
     event.preventDefault();
+
+    const normalizedEmail = forgotForm.email.trim().toLowerCase();
+    const nextForgotEmailError = getEmailError(forgotForm.email);
+
+    if (nextForgotEmailError || !normalizedEmail) {
+      const errorMessage = nextForgotEmailError || "Registered email is required.";
+      setForgotEmailError(errorMessage);
+      toast.warning(errorMessage);
+      return;
+    }
+
     setForgotLoading(true);
 
     try {
       await api.post("/auth/forgot-password/send-otp", {
-        email: forgotForm.email.trim().toLowerCase(),
+        email: normalizedEmail,
       });
       toast.success("OTP sent to your registered email.");
+      updateForgotForm("email", normalizedEmail);
       setForgotStep("reset");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to send OTP.");
@@ -144,13 +189,15 @@ function Login() {
             <div className="relative overflow-hidden rounded-xl border border-white/10 bg-bank-sidebar p-6 text-white sm:p-8">
               <div className="flex h-full min-h-[360px] items-center justify-center">
                 <div className="text-center">
-                  <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-xl bg-bank-accent text-xl font-bold shadow-lg ring-1 ring-white/20">
-                    AP
-                  </div>
-                  <h1 className="text-5xl font-bold leading-tight tracking-tight sm:text-6xl">
+                  <img
+                    src={brandLogo}
+                    alt="AdnatePayNest logo"
+                    className="mx-auto mb-6 h-28 w-28 rounded-full bg-white object-cover shadow-lg ring-4 ring-white/20 sm:h-32 sm:w-32"
+                  />
+                  <h1 className="break-words text-4xl font-bold leading-tight tracking-tight sm:text-5xl lg:text-6xl">
                     AdnatePayNest
                   </h1>
-                  <p className="mt-5 text-lg italic text-blue-100 sm:text-2xl">
+                  <p className="mt-5 text-base italic text-blue-100 sm:text-xl lg:text-2xl">
                     Our Technology, Your Trust
                   </p>
                 </div>
@@ -177,12 +224,16 @@ function Login() {
                       type="email"
                       placeholder="Enter Email ID"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(event) => updateLoginEmail(event.target.value)}
                       autoComplete="email"
                       list="recent-login-emails"
-                      className="input-field !pl-11"
+                      className={`input-field !pl-11 ${
+                        emailError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : ""
+                      }`}
+                      aria-invalid={Boolean(emailError)}
                     />
                   </div>
+                  {emailError && <p className="mt-2 text-xs font-semibold text-red-600">{emailError}</p>}
                 </label>
 
                 <datalist id="recent-login-emails">
@@ -276,10 +327,16 @@ function Login() {
                   type="email"
                   value={forgotForm.email}
                   onChange={(event) => updateForgotForm("email", event.target.value)}
-                  className="input-field"
+                  className={`input-field ${
+                    forgotEmailError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : ""
+                  }`}
                   placeholder="customer@example.com"
+                  aria-invalid={Boolean(forgotEmailError)}
                   required
                 />
+                {forgotEmailError && (
+                  <p className="mt-2 text-xs font-semibold text-red-600">{forgotEmailError}</p>
+                )}
               </label>
 
               {forgotStep === "reset" && (

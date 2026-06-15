@@ -10,10 +10,11 @@ const Beneficiaries = () => {
   const toast = useToast();
   const [beneficiaries, setBeneficiaries] = useState([]);
   const [formData, setFormData] = useState({
-    name: "",
     account: "",
   });
+  const [verifiedPayee, setVerifiedPayee] = useState(null);
   const [message, setMessage] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -29,30 +30,60 @@ const Beneficiaries = () => {
   const handleChange = (event) => {
     const { name, value } = event.target;
     setFormData((current) => ({ ...current, [name]: value }));
+    setVerifiedPayee(null);
+    setMessage("");
   };
 
-  const addBeneficiary = async (event) => {
+  const verifyBeneficiary = async (event) => {
     event.preventDefault();
     setMessage("");
 
-    if (!formData.name || !formData.account) {
-      setMessage("Enter beneficiary name and account number.");
-      toast.warning("Enter beneficiary name and account number.");
+    if (!formData.account) {
+      setMessage("Enter beneficiary account number.");
+      toast.warning("Enter beneficiary account number.");
+      return;
+    }
+
+    try {
+      setIsVerifying(true);
+      const { data } = await api.post("/users/beneficiaries/verify", {
+        account: formData.account,
+      });
+
+      setVerifiedPayee(data.beneficiary);
+      setMessage(data.message || "Payee verified. Confirm to save this payee.");
+      toast.success(data.message || "Payee verified.");
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || "Unable to verify payee.";
+      setVerifiedPayee(null);
+      setMessage(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const addBeneficiary = async () => {
+    setMessage("");
+
+    if (!verifiedPayee) {
+      setMessage("Verify payee details before saving.");
+      toast.warning("Verify payee details before saving.");
       return;
     }
 
     try {
       setIsSaving(true);
       const { data } = await api.post("/users/beneficiaries", {
-        name: formData.name,
-        account: formData.account,
+        account: verifiedPayee.accountNumber,
+        confirmed: true,
       });
 
       setBeneficiaries(data.beneficiaries || []);
       setFormData({
-        name: "",
         account: "",
       });
+      setVerifiedPayee(null);
       setMessage(data.message || "Beneficiary added.");
       toast.success(data.message || "Beneficiary added.");
     } catch (error) {
@@ -91,19 +122,8 @@ const Beneficiaries = () => {
         {message && <div className="alert-info">{message}</div>}
 
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <form onSubmit={addBeneficiary} className="card-padded">
+          <form onSubmit={verifyBeneficiary} className="card-padded">
             <h2 className="text-xl font-bold text-slate-900">Add Payee</h2>
-
-          <label className="label-field mt-5">
-            Name
-            <input
-              name="name"
-              value={formData.name}
-              onChange={handleChange}
-              className="input-field"
-              placeholder="Full name"
-            />
-          </label>
 
           <label className="label-field mt-4">
             Account Number
@@ -116,12 +136,37 @@ const Beneficiaries = () => {
             />
           </label>
 
+          {verifiedPayee && (
+            <div className="mt-5 rounded-lg border border-emerald-100 bg-emerald-50 p-4">
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">
+                Verified Payee
+              </p>
+              <p className="mt-2 text-base font-bold text-slate-950">{verifiedPayee.name}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                {verifiedPayee.customerId} | {verifiedPayee.accountType || "Account"}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {verifiedPayee.bankName || BANK_NAME} - {verifiedPayee.maskedAccountNumber}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">IFSC {verifiedPayee.ifsc}</p>
+            </div>
+          )}
+
           <button
             type="submit"
             className="btn-primary mt-6 w-full"
-            disabled={isSaving}
+            disabled={isVerifying || isSaving}
           >
-            {isSaving ? "Adding..." : "Add Beneficiary"}
+            {isVerifying ? "Verifying..." : "Verify Payee"}
+          </button>
+
+          <button
+            type="button"
+            onClick={addBeneficiary}
+            className="btn-primary mt-3 w-full"
+            disabled={!verifiedPayee || isSaving}
+          >
+            {isSaving ? "Saving..." : "Confirm Add Payee"}
           </button>
         </form>
 

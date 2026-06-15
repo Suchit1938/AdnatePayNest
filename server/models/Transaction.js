@@ -48,6 +48,11 @@ const transactionSchema = new mongoose.Schema(
       enum: ['success', 'pending', 'failed'],
       default: 'success',
     },
+    failureReason: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     type: {
       type: String,
       default: 'bank-transfer',

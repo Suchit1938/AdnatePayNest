@@ -4,17 +4,18 @@ const SectionCard = ({
   icon: Icon,
   children,
   className = "",
+  ...sectionProps
 }) => (
-  <section className={`card-padded ${className}`.trim()}>
+  <section className={`card-padded ${className}`.trim()} {...sectionProps}>
     {(title || subtitle || Icon) && (
-      <div className="mb-5 flex items-start gap-3">
+      <div className="mb-5 flex min-w-0 items-start gap-3">
         {Icon && (
-          <div className="rounded-lg bg-bank-surface p-2.5 text-bank-eyebrow">
+          <div className="shrink-0 rounded-lg bg-bank-surface p-2.5 text-bank-eyebrow">
             <Icon size={20} strokeWidth={2} />
           </div>
         )}
-        <div className="min-w-0">
-          {title && <h2 className="text-xl font-bold text-slate-900">{title}</h2>}
+        <div className="min-w-0 flex-1">
+          {title && <h2 className="break-words text-lg font-bold text-slate-900 sm:text-xl">{title}</h2>}
           {subtitle && <p className="mt-1 text-sm leading-6 text-slate-500">{subtitle}</p>}
         </div>
       </div>

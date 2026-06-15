@@ -16,6 +16,7 @@ const createToken = (user) =>
   );
 
 const OTP_EXPIRY_MINUTES = 10;
+const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
@@ -35,11 +36,13 @@ This OTP expires in ${OTP_EXPIRY_MINUTES} minutes.
 Regards,
 Adnate PayNest`,
     html: `
-      <p>Hello ${user.name},</p>
-      <p>Your OTP for ${purpose} is:</p>
-      <p style="font-size:24px;font-weight:700;letter-spacing:4px;">${otp}</p>
-      <p>This OTP expires in ${OTP_EXPIRY_MINUTES} minutes.</p>
-      <p>Regards,<br />Adnate PayNest</p>
+      <div style="font-family:Arial,sans-serif;color:#0f172a;">
+        <p>Hello ${user.name},</p>
+        <p>Your OTP for ${purpose} is:</p>
+        <p style="font-size:24px;font-weight:700;letter-spacing:4px;">${otp}</p>
+        <p>This OTP expires in ${OTP_EXPIRY_MINUTES} minutes.</p>
+        <p>Regards,<br />Adnate PayNest</p>
+      </div>
     `,
   });
 
@@ -108,30 +111,36 @@ const forgotPasswordSendOtp = async (req, res) => {
     return res.status(400).json({ message: 'Email is required' });
   }
 
+  if (!EMAIL_PATTERN.test(email)) {
+    return res.status(400).json({ message: 'Enter a valid email address' });
+  }
+
   const user = await User.findOne({ email }).select(
     '+passwordResetOtpHash +passwordResetOtpExpiresAt +passwordResetOtpAttempts'
   );
 
-  if (user) {
-    const otp = generateOtp();
-    user.passwordResetOtpHash = await hashOtp(otp);
-    user.passwordResetOtpExpiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000);
-    user.passwordResetOtpAttempts = 0;
-    await user.save();
-
-    const delivery = await sendOtpEmail({
-      user,
-      otp,
-      subject: 'Reset your Adnate PayNest password',
-      purpose: 'password reset',
-    });
-
-    if (!delivery?.sent) {
-      return res.status(500).json({ message: delivery?.message || 'Unable to send OTP email' });
-    }
+  if (!user) {
+    return res.status(404).json({ message: 'Email not found. Please enter your registered email.' });
   }
 
-  res.json({ message: 'If this email exists, an OTP has been sent.' });
+  const otp = generateOtp();
+  user.passwordResetOtpHash = await hashOtp(otp);
+  user.passwordResetOtpExpiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000);
+  user.passwordResetOtpAttempts = 0;
+  await user.save();
+
+  const delivery = await sendOtpEmail({
+    user,
+    otp,
+    subject: 'Reset your Adnate PayNest password',
+    purpose: 'password reset',
+  });
+
+  if (!delivery?.sent) {
+    return res.status(500).json({ message: delivery?.message || 'Unable to send OTP email' });
+  }
+
+  res.json({ message: 'OTP sent to your registered email.' });
 };
 
 const forgotPasswordReset = async (req, res) => {
@@ -189,10 +198,12 @@ If you did not request this change, contact support immediately.
 Regards,
 Adnate PayNest`,
     html: `
-      <p>Hello ${user.name},</p>
-      <p>Your password was reset successfully.</p>
-      <p>If you did not request this change, contact support immediately.</p>
-      <p>Regards,<br />Adnate PayNest</p>
+      <div style="font-family:Arial,sans-serif;color:#0f172a;">
+        <p>Hello ${user.name},</p>
+        <p>Your password was reset successfully.</p>
+        <p>If you did not request this change, contact support immediately.</p>
+        <p>Regards,<br />Adnate PayNest</p>
+      </div>
     `,
   });
 
@@ -282,10 +293,12 @@ If you did not make this change, contact support immediately.
 Regards,
 Adnate PayNest`,
     html: `
-      <p>Hello ${user.name},</p>
-      <p>Your password was changed successfully.</p>
-      <p>If you did not make this change, contact support immediately.</p>
-      <p>Regards,<br />Adnate PayNest</p>
+      <div style="font-family:Arial,sans-serif;color:#0f172a;">
+        <p>Hello ${user.name},</p>
+        <p>Your password was changed successfully.</p>
+        <p>If you did not make this change, contact support immediately.</p>
+        <p>Regards,<br />Adnate PayNest</p>
+      </div>
     `,
   });
 

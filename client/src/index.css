@@ -31,11 +31,11 @@ body {
 
 @layer components {
   .page-title {
-    @apply text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl;
+    @apply break-words text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl lg:text-4xl;
   }
 
   .page-subtitle {
-    @apply mt-2 max-w-3xl text-base leading-relaxed text-slate-600;
+    @apply mt-2 max-w-3xl text-sm leading-relaxed text-slate-600 sm:text-base;
   }
 
   .eyebrow {
@@ -47,15 +47,15 @@ body {
   }
 
   .card-padded {
-    @apply rounded-xl border border-bank-card-border bg-white p-6 shadow-sm;
+    @apply rounded-xl border border-bank-card-border bg-white p-4 shadow-sm sm:p-6;
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-bank-accent px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-bank-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bank-accent active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-bank-accent px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-bank-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bank-accent active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 sm:py-3;
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-bank-card-border bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-bank-accent/40 hover:bg-bank-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bank-accent;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-bank-card-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-bank-accent/40 hover:bg-bank-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bank-accent sm:px-5 sm:py-3;
   }
 
   .btn-danger-soft {
@@ -63,7 +63,7 @@ body {
   }
 
   .input-field {
-    @apply mt-2 w-full rounded-lg border border-bank-card-border bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-bank-accent focus:ring-4 focus:ring-bank-accent/15 disabled:cursor-not-allowed disabled:bg-bank-surface disabled:text-slate-500;
+    @apply mt-2 w-full rounded-lg border border-bank-card-border bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-bank-accent focus:ring-4 focus:ring-bank-accent/15 disabled:cursor-not-allowed disabled:bg-bank-surface disabled:text-slate-500 sm:px-4 sm:py-3 sm:text-base;
   }
 
   .label-field {
@@ -79,7 +79,7 @@ body {
   }
 
   .table-shell {
-    @apply overflow-hidden rounded-xl border border-bank-card-border bg-white shadow-sm;
+    @apply overflow-x-auto rounded-xl border border-bank-card-border bg-white shadow-sm;
   }
 
   .table-head {
@@ -123,7 +123,7 @@ body {
   }
 
   .metric-tile {
-    @apply rounded-lg border p-5;
+    @apply rounded-lg border p-4 sm:p-5;
   }
 
   .metric-grid {
@@ -139,7 +139,7 @@ body {
   }
 
   .activity-item {
-    @apply flex items-start gap-3 rounded-lg border border-bank-card-border bg-bank-surface p-4 transition hover:border-bank-accent/30 hover:bg-white;
+    @apply flex flex-col items-start gap-3 rounded-lg border border-bank-card-border bg-bank-surface p-4 transition hover:border-bank-accent/30 hover:bg-white sm:flex-row;
   }
 
   .section-split {
@@ -148,5 +148,18 @@ body {
 
   .section-split-main {
     @apply lg:col-span-2;
+  }
+}
+
+@layer base {
+  .table-shell table {
+    min-width: 720px;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    max-width: 100%;
   }
 }

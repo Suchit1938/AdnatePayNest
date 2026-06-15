@@ -1289,7 +1289,19 @@ const Customers = ({ managementMode = "users" }) => {
         }
       }
 
-      showFormToast(`${editForm.name} updated.`, "success");
+      if (editForm.type === "customer" && data.email?.sent === false) {
+        showFormToast(
+          `${editForm.name} updated, but the customer email was not sent. ${data.email.message || ""}`.trim(),
+          "warning"
+        );
+      } else {
+        showFormToast(
+          editForm.type === "customer" && data.email?.sent
+            ? `${editForm.name} updated. Customer email sent.`
+            : `${editForm.name} updated.`,
+          "success"
+        );
+      }
       setEditForm(null);
       setEditErrors({});
     } catch (error) {

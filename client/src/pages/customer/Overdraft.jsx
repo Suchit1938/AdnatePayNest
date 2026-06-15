@@ -4,11 +4,13 @@ import {
   CircleDollarSign,
   CreditCard,
   Landmark,
+  ShieldCheck,
   Wallet,
 } from "lucide-react";
 
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
+import ChartTooltip from "../../components/ui/ChartTooltip";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
@@ -87,7 +89,9 @@ const Overdraft = () => {
     accounts.find((account) => account.accountNumber === effectivePaymentAccountNumber) || odAccount;
   const accountRule = getAccountRule(tierPolicy, odAccount?.accountType);
   const interestRate = tierPolicy?.interestRate || tierPolicy?.lateFeeRate || "";
+  const tierRules = tierPolicy?.accountTypeOdRules || [];
   const accountLimit = Number(odAccount?.overdraftLimit || accountRule?.odLimit || 0);
+  const selectedOpeningBalance = Number(accountRule?.minOpeningBalance || tierPolicy?.minBalance || 0);
   const accountUsed = Number(odAccount?.overdraftUsed || 0);
   const accountAvailable = Math.max(0, accountLimit - accountUsed);
   const monthlyOdUses = Number(accountRule?.monthlyOdUses ?? odAccount?.odMonthlyUseLimit ?? 3);
@@ -255,7 +259,8 @@ const Overdraft = () => {
                     {isBlocked ? "Blocked" : account.used > 0 ? "Active OD" : "Available"}
                   </span>
                 </div>
-                <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div className="group relative mt-5 rounded-full outline-none" tabIndex={0}>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                   <div
                     className={`h-full rounded-full ${
                       account.percent >= 90
@@ -271,6 +276,13 @@ const Overdraft = () => {
                           : "0%",
                     }}
                   />
+                </div>
+                <ChartTooltip
+                  label={`${account.accountType} OD Usage`}
+                  value={`${account.percent}% used`}
+                  detail={`${formatCurrency(account.used)} used of ${formatCurrency(account.limit)} limit | ${account.odCountThisMonth || 0} uses this month`}
+                  className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+                />
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div>
@@ -296,6 +308,86 @@ const Overdraft = () => {
             );
           })}
         </section>
+
+        <SectionCard
+          id="tier-policy"
+          title="Your Tier Policy"
+          subtitle="Current limits and charges for your tier."
+          icon={ShieldCheck}
+        >
+          <div className="rounded-xl border border-bank-card-border bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold capitalize ${getTierTone(tierPolicy?.label || user?.classification).badge}`}>
+                  {tierPolicy?.label || user?.classification || "Standard"} tier
+                </span>
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                  {odAccount?.accountType || "Selected"} account
+                </span>
+              </div>
+              <p className="text-sm font-bold text-slate-950">
+                OD {formatCurrency(accountLimit)}
+              </p>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
+              {[
+                ["Per Transfer", formatCurrency(tierPolicy?.perTxnLimit || 0)],
+                ["Daily", formatCurrency(tierPolicy?.dailyLimit || 0)],
+                ["Monthly", formatCurrency(tierPolicy?.monthlyLimit || 0)],
+                ["Uses", `${monthlyOdUses}/month`],
+                ["Opening", formatCurrency(selectedOpeningBalance)],
+                ["Interest", interestRate || "No interest"],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg bg-bank-surface p-3">
+                  <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+                  <p className="mt-1 break-words text-sm font-bold text-slate-950">{value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-2 lg:grid-cols-3">
+              {tierRules.map((rule) => {
+                const isCurrentAccountType = rule.accountType === odAccount?.accountType;
+
+                return (
+                  <div
+                    key={rule.accountType}
+                    className={`rounded-lg border px-3 py-2 ${
+                      isCurrentAccountType
+                        ? "border-blue-200 bg-blue-50"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-bold text-slate-950">{rule.accountType}</p>
+                      {isCurrentAccountType && (
+                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-blue-700">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs font-semibold leading-5 text-slate-600">
+                      OD {formatCurrency(rule.odLimit || 0)} | Opening{" "}
+                      {formatCurrency(rule.minOpeningBalance || 0)} | {rule.monthlyOdUses || 3} uses/month
+                    </p>
+                  </div>
+                );
+              })}
+
+              {tierRules.length === 0 && (
+                <p className="rounded-lg bg-bank-surface p-3 text-sm font-semibold text-slate-500">
+                  Tier policy rules are not available yet.
+                </p>
+              )}
+            </div>
+
+            <p className="mt-3 text-xs font-semibold leading-5 text-slate-500">
+              Penalty: {formatCurrency(tierPolicy?.penaltyAmount || 0)}. Interest is estimated
+              while overdraft is active.
+            </p>
+          </div>
+        </SectionCard>
 
         <section className="section-split">
           <SectionCard
@@ -424,22 +516,6 @@ const Overdraft = () => {
             >
               {isPaying ? "Paying..." : `Pay ${formatCurrency(effectivePayoffAmount || 0)}`}
             </button>
-          </SectionCard>
-
-          <SectionCard title="Policy Notes" subtitle="Account-specific overdraft rules" icon={AlertTriangle}>
-            <div className="space-y-3 text-sm font-semibold text-slate-600">
-              <p>
-                The selected {odAccount?.accountType || "account"} account has its own OD limit,
-                usage counter, blocked status, and payoff balance.
-              </p>
-              <p>
-                Monthly OD usage resets at the start of each month. Interest is charged for at
-                least 1 day whenever OD is used.
-              </p>
-              <p>
-                Your other accounts keep their own separate OD availability and usage count.
-              </p>
-            </div>
           </SectionCard>
         </section>
       </PageContent>

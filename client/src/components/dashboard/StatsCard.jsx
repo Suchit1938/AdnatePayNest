@@ -18,14 +18,14 @@ const StatsCard = ({
 
   if (!isRich) {
     return (
-      <div className="group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <div className="group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6">
         <div className="absolute inset-x-0 top-0 h-1 bg-bank-accent" />
 
         <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
           {title}
         </h3>
 
-        <p className="mt-3 text-3xl font-bold tracking-tight text-slate-900">{value}</p>
+        <p className="mt-3 break-words text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{value}</p>
       </div>
     );
   }
@@ -33,11 +33,11 @@ const StatsCard = ({
   const FooterIcon = footer?.icon;
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
+    <div className="group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6">
       <div className={`absolute inset-x-0 top-0 h-1 ${accent}`} />
 
-      <div className="flex items-center gap-4">
-        <div className={`rounded-lg p-3 shadow-sm ${iconTone}`}>
+      <div className="flex items-center gap-3 sm:gap-4">
+        <div className={`shrink-0 rounded-lg p-2.5 shadow-sm sm:p-3 ${iconTone}`}>
           <Icon size={22} strokeWidth={2} />
         </div>
 
@@ -45,7 +45,7 @@ const StatsCard = ({
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
             {title}
           </p>
-          <p className="mt-1 truncate text-3xl font-bold tracking-tight text-slate-950">{value}</p>
+          <p className="mt-1 break-words text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{value}</p>
         </div>
       </div>
 

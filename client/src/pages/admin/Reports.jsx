@@ -118,12 +118,6 @@ const isWithinDateRange = (value, range) => {
   return true;
 };
 
-const formatApprovalRisk = (value) => {
-  const risk = String(value || "low").trim().toLowerCase();
-
-  return risk ? `${risk.charAt(0).toUpperCase()}${risk.slice(1)} Risk` : "Low Risk";
-};
-
 const maskAccountNumber = (value) => {
   const accountNumber = String(value || "").trim();
 
@@ -328,21 +322,6 @@ const HorizontalBarChart = ({ rows, valueFormatter = (value) => value, detailFor
         );
       })}
     </div>
-  );
-};
-
-const RiskBadge = ({ risk }) => {
-  const toneByRisk = {
-    high: "bg-red-50 text-red-700 ring-1 ring-red-100",
-    medium: "bg-amber-50 text-amber-700 ring-1 ring-amber-100",
-    low: "bg-blue-50 text-blue-700 ring-1 ring-blue-100",
-  };
-  const normalizedRisk = String(risk || "low").toLowerCase();
-
-  return (
-    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${toneByRisk[normalizedRisk] || toneByRisk.low}`}>
-      {formatApprovalRisk(normalizedRisk)}
-    </span>
   );
 };
 
@@ -965,7 +944,6 @@ const AdminReports = () => {
     "From Account": approval.fromAccountDisplay || approval.account || "Not available",
     "To Account": approval.toAccountDisplay || approval.toAccount || "Not available",
     "Type": approval.type || "bank-transfer",
-    "Risk": formatApprovalRisk(approval.risk),
     "Amount": formatCurrency(approval.amount || 0),
     "Status": formatStatus(approval.status),
     "Requested On": formatReportDate(approval.requestedOn),
@@ -985,9 +963,10 @@ const AdminReports = () => {
       )
         .map(([status, count]) => `${status}: ${count}`)
         .join(" | ") || "No approvals",
-      Route: "Customer, manager, account route, risk, status, and decision details",
+      Route: "Customer, manager, account route, status, and decision details",
       Amount: "",
       Status: "",
+      Reason: "",
     },
     ...reportData.approvalDetailRows.map((approval) => ({
       "Approval ID": approval.id || "Not available",
@@ -996,13 +975,12 @@ const AdminReports = () => {
       Route: [
         `From ${approval.fromAccountDisplay || approval.account || "Not available"}`,
         `To ${approval.toAccountDisplay || approval.toAccount || "Not available"}`,
-        formatApprovalRisk(approval.risk),
-        approval.rejectionReason ? `Reason: ${approval.rejectionReason}` : "",
       ]
         .filter(Boolean)
         .join(" | "),
       Amount: formatCurrency(approval.amount || 0),
       Status: formatStatus(approval.status),
+      Reason: approval.rejectionReason || "",
     })),
   ];
   const customerCsvRows = reportData.customerRows.map((customer) => ({
@@ -1081,7 +1059,7 @@ const AdminReports = () => {
         <PageHeader
           eyebrow="Admin / Reports"
           title="Reports & Analytics"
-          subtitle="Operational reporting for transfers, overdraft risk, approval workflow, and customer accounts."
+          subtitle="Operational reporting for transfers, overdraft monitoring, approval workflow, and customer accounts."
         />
 
         <div className="flex flex-wrap gap-2 rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
@@ -1210,7 +1188,7 @@ const AdminReports = () => {
             <SectionHeader
               icon={AlertTriangle}
               title="Transfer Review Register"
-              subtitle="All transfer records sorted by amount for audit, approval, and risk review."
+              subtitle="All transfer records sorted by amount for audit and approval review."
               exportLabel="Export Transfer Register"
               exportName="transfer-review-register"
               exportRows={transferRegisterRows}
@@ -1413,7 +1391,7 @@ const AdminReports = () => {
                 exportRows={approvalCsvRows}
                 exportPdfRows={approvalPdfRows}
                 exportPdfOptions={{
-                  headers: ["Approval ID", "Customer", "Manager", "Route", "Amount", "Status"],
+                  headers: ["Approval ID", "Customer", "Manager", "Route", "Amount", "Status", "Reason"],
                   subtitle: `Approval Report | Generated on ${formatReportDate(new Date())}`,
                 }}
               />
@@ -1425,43 +1403,43 @@ const AdminReports = () => {
                 <SectionHeader
                   icon={FileBarChart}
                   title="Approval Detail Register"
-                  subtitle="Request-level approval details with customer, manager, account route, risk, and decision status."
+                  subtitle="Request-level approval details with customer, manager, account route, status, and decision notes."
                   className="mb-0"
                 />
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1040px] text-left">
+                <table className="w-full min-w-[1240px] table-fixed text-left">
                   <thead className="table-head">
                     <tr>
-                      <th className="px-5 py-4">Approval</th>
-                      <th className="px-5 py-4">Customer & Manager</th>
-                      <th className="px-5 py-4">Account Route</th>
-                      <th className="px-5 py-4">Risk</th>
-                      <th className="px-5 py-4">Amount</th>
-                      <th className="px-5 py-4">Status</th>
+                      <th className="w-[14%] px-5 py-4">Request</th>
+                      <th className="w-[20%] px-5 py-4">Customer & Manager</th>
+                      <th className="w-[25%] px-5 py-4">Account Route</th>
+                      <th className="w-[13%] px-5 py-4">Amount</th>
+                      <th className="w-[14%] px-5 py-4">Decision</th>
+                      <th className="w-[14%] px-5 py-4">Reason</th>
                     </tr>
                   </thead>
                   <tbody>
                     {approvalPagination.pageRows.map((approval) => (
                       <tr key={approval.id} className="table-row align-top">
                         <td className="px-5 py-4">
-                          <p className="font-bold text-slate-950">{approval.id}</p>
+                          <p className="break-words font-bold text-slate-950">{approval.id}</p>
                           <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
                             {approval.type || "bank-transfer"}
                           </p>
-                          <p className="mt-2 text-xs font-semibold text-slate-500">
+                          <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
                             Requested {formatReportDate(approval.requestedOn)}
                           </p>
                         </td>
                         <td className="px-5 py-4">
-                          <p className="font-semibold text-slate-900">
+                          <p className="break-words font-semibold text-slate-900">
                             {approval.customer || "Customer not available"}
                           </p>
-                          <p className="mt-1 text-sm text-slate-500">
+                          <p className="mt-2 break-words text-sm leading-5 text-slate-500">
                             Manager: {approval.manager || "Unassigned"}
                           </p>
                           {approval.managerEmployeeId && (
-                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                            <p className="mt-1 break-words text-xs font-semibold text-slate-400">
                               {approval.managerEmployeeId}
                             </p>
                           )}
@@ -1483,23 +1461,28 @@ const AdminReports = () => {
                           </div>
                         </td>
                         <td className="px-5 py-4">
-                          <RiskBadge risk={approval.risk} />
-                        </td>
-                        <td className="px-5 py-4 font-bold text-slate-950">
-                          {formatCurrency(approval.amount || 0)}
+                          <p className="break-words text-lg font-bold text-slate-950">
+                            {formatCurrency(approval.amount || 0)}
+                          </p>
                         </td>
                         <td className="px-5 py-4">
                           <StatusBadge status={approval.status} />
-                          <p className="mt-2 text-xs font-semibold text-slate-500">
+                          <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
                             {approval.reviewedAt
                               ? `Reviewed ${formatReportDate(approval.reviewedAt)}`
                               : "Not reviewed yet"}
                           </p>
-                          {approval.rejectionReason && (
-                            <p className="mt-2 max-w-xs break-words rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold leading-5 text-red-700">
-                              {approval.rejectionReason}
-                            </p>
-                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          <p
+                            className={`break-words rounded-lg px-3 py-2 text-xs font-semibold leading-5 ${
+                              approval.rejectionReason
+                                ? "bg-red-50 text-red-700"
+                                : "bg-slate-50 text-slate-500"
+                            }`}
+                          >
+                            {approval.rejectionReason || "No rejection reason"}
+                          </p>
                         </td>
                       </tr>
                     ))}

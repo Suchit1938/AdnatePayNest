@@ -6,8 +6,10 @@ const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { calculateOverdraftInterest } = require('../utils/overdraftInterest');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
+const { writeSystemLog } = require('../utils/systemLog');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
+const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
 
 const payOffOverdraft = async (req, res) => {
   const { accountNumber, odAccountNumber, paymentAccountNumber, amount } = req.body || {};
@@ -94,28 +96,60 @@ const payOffOverdraft = async (req, res) => {
       paymentAccount.accountNumber === overdraftAccount.accountNumber
         ? null
         : overdraftAccount.save({ session }),
-      Transaction.create(
-        [
-          {
-            transactionId: `ODPAY${Date.now()}`,
-            sender: user._id,
-            receiver: user._id,
-            senderName: user.name,
-            receiverName: user.name,
-            fromAccountNumber: paymentAccount.accountNumber,
-            toAccountNumber: overdraftAccount.accountNumber,
-            amount: requestedAmount,
-            remarks:
-              remainingOverdraft > 0
-                ? `Partial ${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}. Principal paid: ${principalPayment}. Remaining principal due: ${remainingOverdraft}`
-                : `${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}`,
-            status: 'success',
-            type: 'overdraft-payoff',
-          },
-        ],
-        { session }
-      ),
     ].filter(Boolean));
+
+    const [transaction] = await Transaction.create(
+      [
+        {
+          transactionId: `ODPAY${Date.now()}`,
+          sender: user._id,
+          receiver: user._id,
+          senderName: user.name,
+          receiverName: user.name,
+          fromAccountNumber: paymentAccount.accountNumber,
+          toAccountNumber: overdraftAccount.accountNumber,
+          amount: requestedAmount,
+          remarks:
+            remainingOverdraft > 0
+              ? `Partial ${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}. Principal paid: ${principalPayment}. Remaining principal due: ${remainingOverdraft}`
+              : `${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}`,
+          status: 'success',
+          type: 'overdraft-payoff',
+        },
+      ],
+      { session }
+    );
+
+    await writeSystemLog(
+      {
+        action: remainingOverdraft > 0 ? 'overdraft.payoff.partial' : 'overdraft.payoff.completed',
+        message:
+          remainingOverdraft > 0
+            ? `${user.name} paid ${formatMoney(requestedAmount)} toward ${overdraftAccount.accountType} overdraft. Remaining principal due is ${formatMoney(remainingOverdraft)}.`
+            : `${user.name} fully paid off ${overdraftAccount.accountType} overdraft with ${formatMoney(requestedAmount)}.`,
+        actor: user._id,
+        actorName: user.name,
+        entityType: 'Transaction',
+        entityId: transaction.transactionId,
+        severity: remainingOverdraft > 0 ? 'warning' : 'success',
+        metadata: {
+          transactionId: transaction.transactionId,
+          customerId: user.customerId,
+          customerName: user.name,
+          paymentAccountNumber: paymentAccount.accountNumber,
+          overdraftAccountNumber: overdraftAccount.accountNumber,
+          accountType: overdraftAccount.accountType,
+          paidAmount: requestedAmount,
+          interestAmount: interest.interestAmount,
+          interestPaid,
+          interestDays: interest.interestDays,
+          principalPaid: principalPayment,
+          remainingOverdraft,
+          totalDue,
+        },
+      },
+      { session }
+    );
 
     await syncCustomerAccounts(user, { session });
 
@@ -133,6 +167,7 @@ const payOffOverdraft = async (req, res) => {
       principalPaid: principalPayment,
       totalDue,
       remainingOverdraft,
+      transaction,
       balance: paymentAccount.walletBalance,
       account: user.account,
       accounts: user.accounts,

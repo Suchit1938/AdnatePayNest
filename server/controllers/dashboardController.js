@@ -116,6 +116,7 @@ const getManagerDashboard = async (req, res) => {
     payoffTransactions,
     escalationLogs,
     notificationLogs,
+    tierDecisionLogs,
   ] =
     await Promise.all([
       User.find({ role: 'customer' }).select(
@@ -166,6 +167,12 @@ const getManagerDashboard = async (req, res) => {
       })
         .sort({ createdAt: -1 })
         .limit(20),
+      SystemLog.find({
+        action: 'tier.policy.updated.manager',
+        'metadata.updatedById': req.user._id,
+      })
+        .sort({ createdAt: -1 })
+        .limit(50),
     ]);
 
   const customerById = new Map(
@@ -392,6 +399,7 @@ const getManagerDashboard = async (req, res) => {
       type: transaction.type,
       amount: transaction.amount,
       status: transaction.status,
+      failureReason: transaction.failureReason || '',
       remarks: transaction.remarks,
       createdAt: transaction.createdAt,
     })),
@@ -406,7 +414,20 @@ const getManagerDashboard = async (req, res) => {
       action: log.action,
       amount: log.metadata?.amount || 0,
       time: log.createdAt ? new Date(log.createdAt).toLocaleString() : 'Recently',
+      createdAt: log.createdAt,
       metadata: log.metadata || {},
+    })),
+    tierDecisionHistory: tierDecisionLogs.map((log) => ({
+      id: log._id,
+      action: log.action,
+      message: log.message,
+      tierName: log.metadata?.tierName || log.entityId,
+      tierLabel: log.metadata?.tierLabel || log.entityId,
+      customerCount: log.metadata?.customerCount || 0,
+      changes: log.metadata?.changes || [],
+      severity: log.severity,
+      createdAt: log.createdAt,
+      time: log.createdAt ? new Date(log.createdAt).toLocaleString() : 'Recently',
     })),
   });
 };

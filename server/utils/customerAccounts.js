@@ -13,6 +13,16 @@ const normalizeAccountType = (value) =>
 const firstDefined = (...values) =>
   values.find((value) => value !== undefined && value !== null);
 
+const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
+
+const getCurrentMonthOdCount = (account) =>
+  account.odCountMonthKey === getCurrentMonthKey()
+    ? toWholeRupees(account.odCountThisMonth)
+    : 0;
+
+const isCurrentMonthOdBlocked = (account) =>
+  account.odCountMonthKey === getCurrentMonthKey() && Boolean(account.odBlocked);
+
 const isLegacySingleAccountSnapshot = (user, snapshot) =>
   user.account?.accountNumber === snapshot.accountNumber &&
   !(user.accounts || []).some(
@@ -67,9 +77,9 @@ const buildAccountSnapshot = (user, bankAccount, tier) => {
     overdraftLimit: toWholeRupees(firstDefined(bankAccount.odLimit, existingAccount.overdraftLimit)),
     overdraftUsed: toWholeRupees(firstDefined(bankAccount.odUsed, existingAccount.overdraftUsed)),
     odStartedAt: bankAccount.odStartedAt || existingAccount.odStartedAt || null,
-    odCountThisMonth: toWholeRupees(bankAccount.odCountThisMonth),
+    odCountThisMonth: getCurrentMonthOdCount(bankAccount),
     odMonthlyUseLimit: toWholeRupees(odRule.monthlyOdUses),
-    odBlocked: bankAccount.odBlocked || false,
+    odBlocked: isCurrentMonthOdBlocked(bankAccount),
     accountStatus: bankAccount.accountStatus,
     accountOpenedAt: bankAccount.accountOpenedAt || bankAccount.createdAt,
   };

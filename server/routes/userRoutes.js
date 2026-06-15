@@ -12,6 +12,7 @@ const {
   updateMyProfile,
   updateUser,
   updateUserStatus,
+  verifyBeneficiary,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
 const { authorize } = require('../middleware/roleMiddleware');
@@ -23,6 +24,7 @@ router.get('/customers', protect, authorize('admin', 'manager'), getCustomers);
 router.get('/me', protect, getMyProfile);
 router.patch('/me', protect, updateMyProfile);
 router.get('/beneficiaries', protect, authorize('customer'), getBeneficiaries);
+router.post('/beneficiaries/verify', protect, authorize('customer'), verifyBeneficiary);
 router.post('/beneficiaries', protect, authorize('customer'), addBeneficiary);
 router.delete('/beneficiaries/:id', protect, authorize('customer'), removeBeneficiary);
 router.post('/', protect, authorize('admin'), createUser);

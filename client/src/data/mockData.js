@@ -364,5 +364,7 @@ export const statementEntries = transactions.map((transaction) => ({
 export const formatCurrency = (amount) =>
   `INR ${Number(amount).toLocaleString("en-IN")}`;
 
-export const maskAccountNumber = (accountNumber) =>
-  `XXXX XXXX ${String(accountNumber).slice(-4)}`;
+export const maskAccountNumber = (accountNumber) => {
+  const value = String(accountNumber || "").trim();
+  return value ? `XXXX XXXX ${value.slice(-4)}` : "Not assigned";
+};

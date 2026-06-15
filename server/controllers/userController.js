@@ -352,6 +352,85 @@ const buildHtmlDetails = (details) =>
     )
     .join('');
 
+const buildChangeRows = (before, after, fields) =>
+  fields
+    .map(({ key, label }) => {
+      const previousValue = before?.[key] ?? '';
+      const nextValue = after?.[key] ?? '';
+
+      if (String(previousValue) === String(nextValue)) {
+        return null;
+      }
+
+      return [label, previousValue || 'Not provided', nextValue || 'Not provided'];
+    })
+    .filter(Boolean);
+
+const sendCustomerUpdateEmail = async ({ customer, changes, updatedBy }) => {
+  if (!customer?.email || changes.length === 0) return null;
+
+  const changedLines = changes
+    .map(([label, previousValue, nextValue]) => `${label}: ${previousValue} -> ${nextValue}`)
+    .join('\n');
+  const htmlRows = changes
+    .map(
+      ([label, previousValue, nextValue]) => `
+        <tr>
+          <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:700;">${escapeHtml(label)}</td>
+          <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#64748b;">${escapeHtml(previousValue)}</td>
+          <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:700;">${escapeHtml(nextValue)}</td>
+        </tr>`
+    )
+    .join('');
+
+  return sendEmail({
+    to: customer.email,
+    subject: 'Your AdnatePayNest customer details were updated',
+    text: `Dear ${customer.name},
+
+Your AdnatePayNest customer profile details were updated by ${updatedBy || 'the bank administrator'}.
+
+Customer ID: ${customer.customerId}
+
+Updated details:
+${changedLines}
+
+If you requested this change, no further action is required. If any detail looks incorrect, please contact AdnatePayNest support immediately.
+
+Regards,
+Team AdnatePayNest
+Our Technology, Your Trust`,
+    html: `
+      <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;">
+        <div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+          <div style="background:#0f172a;color:#ffffff;padding:18px 22px;">
+            <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#bfdbfe;text-align:center;">Adnate PayNest</p>
+            <h1 style="margin:6px 0 0;font-size:22px;line-height:1.3;">Customer profile updated</h1>
+          </div>
+          <div style="padding:22px;">
+            <p>Dear ${escapeHtml(customer.name)},</p>
+            <p>Your AdnatePayNest customer profile details were updated by <strong>${escapeHtml(updatedBy || 'the bank administrator')}</strong>.</p>
+            <p><strong>Customer ID:</strong> ${escapeHtml(customer.customerId)}</p>
+            <table role="presentation" style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin:18px 0;">
+              <thead>
+                <tr style="background:#f8fafc;">
+                  <th style="padding:10px;text-align:left;color:#475569;">Field</th>
+                  <th style="padding:10px;text-align:left;color:#475569;">Previous</th>
+                  <th style="padding:10px;text-align:left;color:#475569;">Updated</th>
+                </tr>
+              </thead>
+              <tbody>${htmlRows}</tbody>
+            </table>
+            <p>If you requested this change, no further action is required.</p>
+            <p>If any detail looks incorrect, please contact AdnatePayNest support immediately.</p>
+            <p>Regards,<br /><strong>Team AdnatePayNest</strong><br />Our Technology, Your Trust</p>
+          </div>
+        </div>
+      </div>
+    `,
+  });
+};
+
 const buildAccountTypeOdDetails = (tier) =>
   getAccountTypeOdRules(tier).map((rule) => [
     `${rule.accountType} Account OD`,
@@ -922,7 +1001,7 @@ Our Technology, Your Trust`,
         <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;">
           <div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
             <div style="background:#0f172a;color:#ffffff;padding:18px 22px;">
-              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#bfdbfe;">Adnate PayNest</p>
+              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#bfdbfe;text-align:center;">Adnate PayNest</p>
               <h1 style="margin:6px 0 0;font-size:22px;line-height:1.3;">Your account has been created</h1>
             </div>
             <div style="padding:22px;">
@@ -1178,6 +1257,19 @@ const updateUser = async (req, res) => {
   const allowedStatuses = ['active', 'inactive', 'suspended'];
   const trimValue = (value) => String(value || '').trim();
   let requestedStatus;
+  const originalCustomerDetails =
+    user.role === 'customer'
+      ? {
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        dob: user.dob ? new Date(user.dob).toISOString().slice(0, 10) : '',
+        classification: user.classification,
+        address: user.address,
+        accountStatus: user.account?.accountStatus || user.accounts?.[0]?.accountStatus || '',
+        status: user.status,
+      }
+      : null;
 
   if (req.body.status !== undefined) {
     if (!allowedStatuses.includes(req.body.status)) {
@@ -1350,13 +1442,50 @@ const updateUser = async (req, res) => {
     return res.status(error.statusCode || 400).json({ message: error.message });
   }
 
-  res.json({ user: serializeUser(user), managerReplacement });
+  let emailDelivery = null;
+
+  if (user.role === 'customer') {
+    const updatedCustomerDetails = {
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      dob: user.dob ? new Date(user.dob).toISOString().slice(0, 10) : '',
+      classification: user.classification,
+      address: user.address,
+      accountStatus: user.account?.accountStatus || user.accounts?.[0]?.accountStatus || '',
+      status: user.status,
+    };
+    const changes = buildChangeRows(originalCustomerDetails, updatedCustomerDetails, [
+      { key: 'name', label: 'Full Name' },
+      { key: 'email', label: 'Email Address' },
+      { key: 'phone', label: 'Mobile Number' },
+      { key: 'dob', label: 'Date of Birth' },
+      { key: 'classification', label: 'Customer Tier' },
+      { key: 'accountStatus', label: 'Account Status' },
+      { key: 'status', label: 'Profile Status' },
+      { key: 'address', label: 'Address' },
+    ]);
+    const delivery = await sendCustomerUpdateEmail({
+      customer: user,
+      changes,
+      updatedBy: req.user?.name,
+    });
+
+    if (delivery) {
+      emailDelivery = delivery.sent
+        ? { sent: true, message: 'Customer update email sent.' }
+        : { sent: false, message: delivery.message || 'Customer update email was not sent.' };
+    }
+  }
+
+  res.json({ user: serializeUser(user), managerReplacement, email: emailDelivery });
 };
 
 module.exports = {
   getUsers,
   getCustomers,
   getBeneficiaries,
+  verifyBeneficiary,
   addBeneficiary,
   removeBeneficiary,
   createUser,

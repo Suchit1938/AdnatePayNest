@@ -2,10 +2,13 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import api from "../../api/axios";
 import EmptyState from "../../components/ui/EmptyState";
 import {
+  ArrowRight,
   BarChart3,
   Bell,
+  CalendarClock,
   Check,
   CircleDollarSign,
+  Clock,
   CreditCard,
   Edit3,
   Gauge,
@@ -15,6 +18,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  ReceiptText,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -26,6 +30,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 
 import StatsCard from "../../components/dashboard/StatsCard";
+import ChartTooltip from "../../components/ui/ChartTooltip";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
@@ -42,6 +47,7 @@ const statusStyles = {
   pending: "bg-amber-50 text-amber-700",
   approved: "bg-emerald-50 text-emerald-700",
   rejected: "bg-red-50 text-red-700",
+  updated: "bg-blue-50 text-blue-700",
 };
 
 const odRiskStyles = {
@@ -135,6 +141,16 @@ const getDefaultRejectionReason = (approval) =>
     approval.amount
   )} was rejected because it does not meet the approval policy requirements.`;
 
+const formatDateTime = (value) => {
+  if (!value) return "Recently";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Recently";
+
+  return date.toLocaleString();
+};
+
 function ManagerDashboard() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -151,6 +167,8 @@ function ManagerDashboard() {
   const [odCustomerFilter, setOdCustomerFilter] = useState("attention");
   const [odCustomerSearch, setOdCustomerSearch] = useState("");
   const [odMonitoringTab, setOdMonitoringTab] = useState("cases");
+  const [transactionStatusFilter, setTransactionStatusFilter] = useState("all");
+  const [transactionSearch, setTransactionSearch] = useState("");
   const [businessRules, setBusinessRules] = useState({
     managerTierPermissions: tierPermissionDefaults,
   });
@@ -179,6 +197,7 @@ function ManagerDashboard() {
     escalations: [],
     transactions: [],
     notifications: [],
+    tierDecisionHistory: [],
   });
 
   const loadDashboard = useCallback(() => {
@@ -215,9 +234,61 @@ function ManagerDashboard() {
   const pendingApprovals = approvals.filter(
     (approval) => approval.status === "pending"
   );
+  const pendingApprovalsByAmount = [...pendingApprovals].sort(
+    (left, right) => Number(right.amount || 0) - Number(left.amount || 0)
+  );
+  const topPendingApprovals = pendingApprovalsByAmount.slice(0, 3);
+  const pendingApprovalValue = pendingApprovals.reduce(
+    (sum, approval) => sum + Number(approval.amount || 0),
+    0
+  );
   const approvalHistory = approvals.filter((approval) =>
     ["approved", "rejected"].includes(approval.status)
   );
+  const tierDecisionHistory = useMemo(
+    () => dashboardData.tierDecisionHistory || [],
+    [dashboardData.tierDecisionHistory]
+  );
+  const decisionHistory = useMemo(() => {
+    const approvalRows = approvalHistory.map((approval) => ({
+      id: `approval-${approval.id}`,
+      displayId: approval.id,
+      subject: approval.customer || "Customer",
+      type: approval.type,
+      amount: formatCurrency(approval.amount),
+      entity: maskAccountNumber(approval.account),
+      reviewedAt: approval.reviewedAt || approval.updatedAt,
+      status: approval.status,
+      detail: approval.rejectionReason || "Transfer request approved.",
+    }));
+    const tierRows = tierDecisionHistory.map((decision) => {
+      const changes = Array.isArray(decision.changes) ? decision.changes : [];
+      const changeSummary =
+        changes.length > 0
+          ? changes
+              .slice(0, 3)
+              .map((change) => `${change.label || change.field}: ${change.from} to ${change.to}`)
+              .join("; ")
+          : decision.message;
+      const extraCount = Math.max(0, changes.length - 3);
+
+      return {
+        id: `tier-${decision.id}`,
+        displayId: decision.tierName || decision.id,
+        subject: `${decision.tierLabel || "Tier"} Policy`,
+        type: "Tier policy edit",
+        amount: `${decision.customerCount || 0} affected customer(s)`,
+        entity: "Tier",
+        reviewedAt: decision.createdAt,
+        status: "updated",
+        detail: extraCount > 0 ? `${changeSummary}; ${extraCount} more change(s).` : changeSummary,
+      };
+    });
+
+    return [...approvalRows, ...tierRows].sort(
+      (left, right) => new Date(right.reviewedAt || 0) - new Date(left.reviewedAt || 0)
+    );
+  }, [approvalHistory, tierDecisionHistory]);
   const totalOdLimit = dashboardData.stats.totalOdLimit;
   const utilizedOd = dashboardData.stats.utilizedOd;
   const odPercent = dashboardData.stats.odPercent;
@@ -234,12 +305,117 @@ function ManagerDashboard() {
     ...(businessRules.managerTierPermissions || {}),
   };
   const canEditAnyTierField = Object.values(managerTierPermissions).some(Boolean);
+  const tierPermissionLabels = [
+    ["perTxnLimit", "Per transfer"],
+    ["dailyLimit", "Daily"],
+    ["monthlyLimit", "Monthly"],
+    ["accountTypeOdRules", "Account OD rules"],
+    ["penaltyAmount", "Penalty"],
+    ["interestRate", "Interest"],
+  ];
+  const editableTierFieldCount = tierPermissionLabels.filter(
+    ([field]) => managerTierPermissions[field]
+  ).length;
   const recentOverdraftActivity = dashboardData.recentOverdraftActivity || [];
   const overdraftPayoffTransactions = dashboardData.overdraftPayoffTransactions || [];
   const escalations = dashboardData.escalations || [];
   const transactions = dashboardData.transactions;
+  const transactionSummary = useMemo(() => {
+    const successful = transactions.filter((transaction) =>
+      ["success", "completed"].includes(String(transaction.status).toLowerCase())
+    );
+    const pending = transactions.filter(
+      (transaction) => String(transaction.status).toLowerCase() === "pending"
+    );
+    const failed = transactions.filter(
+      (transaction) => String(transaction.status).toLowerCase() === "failed"
+    );
+    const payoff = transactions.filter((transaction) => transaction.type === "overdraft-payoff");
+
+    return {
+      totalValue: transactions.reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0),
+      successfulCount: successful.length,
+      pendingCount: pending.length,
+      failedCount: failed.length,
+      payoffCount: payoff.length,
+    };
+  }, [transactions]);
+  const transactionStatusRows = useMemo(
+    () => [
+      {
+        key: "success",
+        label: "Successful",
+        value: transactionSummary.successfulCount,
+        bar: "bg-emerald-500",
+        tone: "text-emerald-700 bg-emerald-50",
+      },
+      {
+        key: "pending",
+        label: "Pending",
+        value: transactionSummary.pendingCount,
+        bar: "bg-amber-500",
+        tone: "text-amber-700 bg-amber-50",
+      },
+      {
+        key: "failed",
+        label: "Failed",
+        value: transactionSummary.failedCount,
+        bar: "bg-red-500",
+        tone: "text-red-700 bg-red-50",
+      },
+    ],
+    [transactionSummary.failedCount, transactionSummary.pendingCount, transactionSummary.successfulCount]
+  );
+  const transactionTypeRows = useMemo(() => {
+    const totals = transactions.reduce((map, transaction) => {
+      const key = transaction.type || "bank-transfer";
+      const current = map.get(key) || { key, count: 0, amount: 0 };
+
+      current.count += 1;
+      current.amount += Number(transaction.amount || 0);
+      map.set(key, current);
+      return map;
+    }, new Map());
+
+    return Array.from(totals.values()).sort((left, right) => right.amount - left.amount);
+  }, [transactions]);
+  const recentTransactions = transactions.slice(0, 4);
+  const filteredTransactions = useMemo(() => {
+    const query = transactionSearch.trim().toLowerCase();
+
+    return transactions.filter((transaction) => {
+      const status = String(transaction.status || "").toLowerCase();
+      const matchesStatus =
+        transactionStatusFilter === "all" ||
+        status === transactionStatusFilter ||
+        (transactionStatusFilter === "success" && status === "completed");
+
+      if (!matchesStatus) return false;
+      if (!query) return true;
+
+      return [
+        transaction.id,
+        transaction.customer,
+        transaction.customerId,
+        transaction.receiver,
+        transaction.fromAccountNumber,
+        transaction.toAccountNumber,
+        transaction.type,
+        transaction.remarks,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [transactionSearch, transactionStatusFilter, transactions]);
   const notifications = dashboardData.notifications || [];
   const managerProfile = dashboardData.profile;
+  const todayKey = new Date().toDateString();
+  const decisionsToday = decisionHistory.filter((decision) => {
+    const decisionDate = new Date(decision.reviewedAt || 0);
+
+    return !Number.isNaN(decisionDate.getTime()) && decisionDate.toDateString() === todayKey;
+  }).length;
+  const recentDecisions = decisionHistory.slice(0, 4);
   const approvalEscalations = pendingApprovals.map((approval) => ({
     id: `approval-${approval.id}`,
     title: `${approval.customer || "Customer"} transfer needs manager approval`,
@@ -304,20 +480,21 @@ function ManagerDashboard() {
     });
   }, [odCustomerFilter, odCustomerSearch, overdraftCustomers]);
 
-  const visibleApprovalQueue = pendingApprovals;
+  const visibleApprovalQueue = pendingApprovalsByAmount;
   const approvalPagination = usePaginatedRows(visibleApprovalQueue);
-  const approvalHistoryPagination = usePaginatedRows(approvalHistory);
+  const decisionHistoryPagination = usePaginatedRows(decisionHistory);
   const overdraftCustomerPagination = usePaginatedRows(filteredOverdraftCustomers);
   const overdraftPayoffPagination = usePaginatedRows(overdraftPayoffTransactions);
-  const transactionPagination = usePaginatedRows(transactions);
+  const transactionPagination = usePaginatedRows(filteredTransactions);
   const recentOverdraftActivityPagination = usePaginatedRows(recentOverdraftActivity);
   const escalationPagination = usePaginatedRows(displayedEscalations);
   const notificationPagination = usePaginatedRows(notifications);
   const pageTitle = {
     dashboard: "Manager Dashboard",
     approvals: "Approval Queue",
-    "approval-history": "Approval History",
+    "approval-history": "Decision History",
     overdraft: "Overdraft Monitoring",
+    policies: "Tier Policies",
     escalations: "Escalations",
     transactions: "Transaction Monitoring",
     notifications: "Notifications",
@@ -487,53 +664,78 @@ function ManagerDashboard() {
 
   const approvalTable = (
     <section className="table-shell">
-      <div className="flex items-center justify-between border-b border-slate-100 p-6">
+      <div className="flex flex-col gap-4 border-b border-slate-100 p-6 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-xl font-bold">Pending Approvals</h2>
           <p className="text-sm text-slate-500">
-            Review transfer and beneficiary requests before release.
+            Highest value requests appear first so urgent transfer decisions are easy to find.
           </p>
         </div>
-        <span className="rounded-full bg-red-50 px-3 py-1 text-sm font-semibold text-red-700">
-          {pendingApprovals.length} pending
-        </span>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-amber-50 px-3 py-1 text-sm font-semibold text-amber-700">
+            {pendingApprovals.length} pending
+          </span>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
+            {formatCurrency(pendingApprovalValue)} waiting
+          </span>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
         {approvalMessage && <div className="alert-success mx-6 mt-6">{approvalMessage}</div>}
         {approvalError && <div className="alert-error mx-6 mt-6">{approvalError}</div>}
-        <table className="w-full min-w-[860px] text-left">
+        <table className="w-full min-w-[1040px] table-fixed text-left">
           <thead className="table-head">
             <tr>
-              <th className="px-6 py-4">Request ID</th>
-              <th className="px-6 py-4">Customer</th>
-              <th className="px-6 py-4">Type</th>
-              <th className="px-6 py-4">Amount</th>
-              <th className="px-6 py-4">Account No.</th>
-              <th className="px-6 py-4">Requested On</th>
-              <th className="px-6 py-4">Status</th>
-              <th className="px-6 py-4">Action</th>
+              <th className="w-[17%] px-6 py-4">Request</th>
+              <th className="w-[22%] px-6 py-4">Customer</th>
+              <th className="w-[18%] px-6 py-4">Account</th>
+              <th className="w-[15%] px-6 py-4">Amount</th>
+              <th className="w-[12%] px-6 py-4">Status</th>
+              <th className="w-[16%] px-6 py-4">Action</th>
             </tr>
           </thead>
           <tbody>
             {visibleApprovalQueue.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-6 py-8">
+                <td colSpan={6} className="px-6 py-8">
                   <EmptyState message="No transfer requests are waiting for your decision." />
                 </td>
               </tr>
             )}
             {approvalPagination.pageRows.map((approval) => (
               <Fragment key={approval.id}>
-                <tr className="table-row">
-                  <td className="px-6 py-4 font-semibold">{approval.id}</td>
-                  <td className="px-6 py-4">{approval.customer}</td>
-                  <td className="px-6 py-4">{approval.type}</td>
-                  <td className="px-6 py-4 font-semibold">
-                    {formatCurrency(approval.amount)}
+                <tr className="table-row align-top">
+                  <td className="px-6 py-4">
+                    <p className="break-words font-bold text-slate-950">{approval.id}</p>
+                    <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                      {transactionTypeLabels[approval.type] || approval.type || "Transfer"}
+                    </p>
+                    <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
+                      Requested {formatDateTime(approval.requestedOn)}
+                    </p>
                   </td>
-                  <td className="px-6 py-4">{maskAccountNumber(approval.account)}</td>
-                  <td className="px-6 py-4">{approval.requestedOn}</td>
+                  <td className="px-6 py-4">
+                    <p className="break-words font-semibold text-slate-900">
+                      {approval.customer || "Customer"}
+                    </p>
+                    <p className="mt-2 text-xs font-semibold text-slate-500">
+                      Waiting for manager decision
+                    </p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="rounded-lg bg-bank-surface px-3 py-2">
+                      <p className="text-xs font-bold uppercase text-slate-500">From</p>
+                      <p className="mt-1 break-words font-semibold text-slate-900">
+                        {maskAccountNumber(approval.account)}
+                      </p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="break-words text-lg font-bold text-slate-950">
+                      {formatCurrency(approval.amount)}
+                    </p>
+                  </td>
                   <td className="px-6 py-4">
                     <span
                       className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ${statusStyles[approval.status]}`}
@@ -547,31 +749,33 @@ function ManagerDashboard() {
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
+                    <div className="grid gap-2">
                       <button
                         type="button"
                         onClick={() => updateApproval(approval.id, "approved")}
                         disabled={approval.status !== "pending"}
-                        className="rounded-lg border border-emerald-200 p-2 text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
                         aria-label={`Approve ${approval.id}`}
                       >
                         <Check size={16} />
+                        Approve
                       </button>
                       <button
                         type="button"
                         onClick={() => openRejectReview(approval)}
                         disabled={approval.status !== "pending"}
-                        className="rounded-lg border border-red-200 p-2 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
                         aria-label={`Reject ${approval.id}`}
                       >
                         <X size={16} />
+                        Reject
                       </button>
                     </div>
                   </td>
                 </tr>
                 {rejectionReview?.id === approval.id && (
                   <tr className="border-b border-red-100 bg-red-50/50">
-                    <td colSpan={8} className="px-6 py-5">
+                    <td colSpan={6} className="px-6 py-5">
                       <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
                         <label className="label-field">
                           Rejection Reason
@@ -614,13 +818,13 @@ function ManagerDashboard() {
     <section className="table-shell">
       <div className="flex items-center justify-between border-b border-slate-100 p-6">
         <div>
-          <h2 className="text-xl font-bold">Approval History</h2>
+          <h2 className="text-xl font-bold">Decision History</h2>
           <p className="text-sm text-slate-500">
-            Completed approval decisions for transfers reviewed by managers.
+            Completed transfer decisions and tier policy edits reviewed by this manager.
           </p>
         </div>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
-          {approvalHistory.length} reviewed
+          {decisionHistory.length} recorded
         </span>
       </div>
 
@@ -628,49 +832,47 @@ function ManagerDashboard() {
         <table className="w-full min-w-[920px] text-left">
           <thead className="table-head">
             <tr>
-              <th className="px-6 py-4">Request ID</th>
-              <th className="px-6 py-4">Customer</th>
+              <th className="px-6 py-4">Decision ID</th>
+              <th className="px-6 py-4">Subject</th>
               <th className="px-6 py-4">Type</th>
-              <th className="px-6 py-4">Amount</th>
-              <th className="px-6 py-4">Account No.</th>
+              <th className="px-6 py-4">Amount / Impact</th>
+              <th className="px-6 py-4">Entity</th>
               <th className="px-6 py-4">Reviewed On</th>
               <th className="px-6 py-4">Status</th>
-              <th className="px-6 py-4">Reason</th>
+              <th className="px-6 py-4">Details</th>
             </tr>
           </thead>
           <tbody>
-            {approvalHistory.length === 0 && (
+            {decisionHistory.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No reviewed approval requests are available." />
+                  <EmptyState message="No manager decisions are available yet." />
                 </td>
               </tr>
             )}
-            {approvalHistoryPagination.pageRows.map((approval) => (
-              <tr key={approval.id} className="table-row">
-                <td className="px-6 py-4 font-semibold">{approval.id}</td>
-                <td className="px-6 py-4">{approval.customer}</td>
-                <td className="px-6 py-4">{approval.type}</td>
-                <td className="px-6 py-4 font-semibold">
-                  {formatCurrency(approval.amount)}
-                </td>
-                <td className="px-6 py-4">{maskAccountNumber(approval.account)}</td>
-                <td className="px-6 py-4">{approval.reviewedAt || approval.updatedAt}</td>
+            {decisionHistoryPagination.pageRows.map((decision) => (
+              <tr key={decision.id} className="table-row">
+                <td className="px-6 py-4 font-semibold">{decision.displayId}</td>
+                <td className="px-6 py-4">{decision.subject}</td>
+                <td className="px-6 py-4">{decision.type}</td>
+                <td className="px-6 py-4 font-semibold">{decision.amount}</td>
+                <td className="px-6 py-4">{decision.entity}</td>
+                <td className="px-6 py-4">{decision.reviewedAt || "-"}</td>
                 <td className="px-6 py-4">
                   <span
-                    className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ${statusStyles[approval.status]}`}
+                    className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ${statusStyles[decision.status]}`}
                   >
-                    {approval.status}
+                    {decision.status}
                   </span>
                 </td>
                 <td className="max-w-xs px-6 py-4 text-sm text-slate-600">
-                  {approval.rejectionReason || "-"}
+                  {decision.detail || "-"}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <TablePagination {...approvalHistoryPagination} />
+        <TablePagination {...decisionHistoryPagination} />
       </div>
     </section>
   );
@@ -820,8 +1022,9 @@ function ManagerDashboard() {
     <SectionCard title="OD Utilization" subtitle="Sanctioned limit versus active usage" icon={Gauge}>
       <div className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-center">
         <div className="flex justify-center">
+          <div className="group relative h-48 w-48 rounded-full outline-none" tabIndex={0}>
           <div
-            className="grid h-48 w-48 place-items-center rounded-full shadow-inner"
+            className="grid h-full w-full place-items-center rounded-full shadow-inner"
             style={{
               background: `conic-gradient(#2563eb 0 ${clampPercent(
                 odPercent
@@ -834,6 +1037,13 @@ function ManagerDashboard() {
                 <p className="text-xs font-semibold uppercase text-slate-500">Used</p>
               </div>
             </div>
+          </div>
+          <ChartTooltip
+            label="OD Utilization"
+            value={`${odPercent}% used`}
+            detail={`${formatCurrency(utilizedOd)} used of ${formatCurrency(totalOdLimit)} sanctioned limit`}
+            className="left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 group-hover:block group-focus:block"
+          />
           </div>
         </div>
         <div className="metric-grid">
@@ -860,7 +1070,7 @@ function ManagerDashboard() {
           const width = Math.max(6, Math.round((Number(item.used || 0) / maxOdUsed) * 100));
 
           return (
-            <div key={`${item.customer}-${item.used}`} className="space-y-2">
+            <div key={`${item.customer}-${item.used}`} className="group relative space-y-2 rounded-lg outline-none" tabIndex={0}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-semibold text-slate-900">{item.customer}</p>
@@ -878,6 +1088,12 @@ function ManagerDashboard() {
                   style={{ width: item.used > 0 ? `${width}%` : "0%" }}
                 />
               </div>
+              <ChartTooltip
+                label={item.customer}
+                value={`${item.utilization}% utilized`}
+                detail={`${formatCurrency(item.used)} used of ${formatCurrency(item.limit)} limit`}
+                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+              />
             </div>
           );
         })}
@@ -896,7 +1112,7 @@ function ManagerDashboard() {
           const width = Math.max(4, Math.round((Number(item.value || 0) / totalRiskCount) * 100));
 
           return (
-            <div key={item.label} className="space-y-2">
+            <div key={item.label} className="group relative space-y-2 rounded-lg outline-none" tabIndex={0}>
               <div className="flex items-center justify-between gap-3">
                 <span className={`rounded-full px-3 py-1 text-xs font-semibold ${risk.soft}`}>
                   {risk.label}
@@ -909,6 +1125,12 @@ function ManagerDashboard() {
                   style={{ width: Number(item.value || 0) > 0 ? `${width}%` : "0%" }}
                 />
               </div>
+              <ChartTooltip
+                label={risk.label}
+                value={`${item.value} customer${Number(item.value) === 1 ? "" : "s"}`}
+                detail={`${width}% of current OD risk distribution`}
+                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+              />
             </div>
           );
         })}
@@ -926,7 +1148,7 @@ function ManagerDashboard() {
           const width = Math.max(6, Math.round((Number(item.value || 0) / maxExposure) * 100));
 
           return (
-            <div key={item.label} className="space-y-2">
+            <div key={item.label} className="group relative space-y-2 rounded-lg outline-none" tabIndex={0}>
               <div className="flex items-center justify-between gap-3">
                 <p className="font-semibold text-slate-900">{item.label}</p>
                 <p className="text-sm font-bold text-slate-900">{formatCurrency(item.value)}</p>
@@ -937,6 +1159,12 @@ function ManagerDashboard() {
                   style={{ width: Number(item.value || 0) > 0 ? `${width}%` : "0%" }}
                 />
               </div>
+              <ChartTooltip
+                label={item.label}
+                value={formatCurrency(item.value)}
+                detail={`${width}% of highest account-type exposure`}
+                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+              />
             </div>
           );
         })}
@@ -946,57 +1174,123 @@ function ManagerDashboard() {
 
   const tierPolicyDetails = (
     <SectionCard
-      title="Tier Policy Details"
+      title="Tier Policies"
       subtitle={
         canEditAnyTierField
-          ? "Admin has allowed selected policy fields for manager edits."
-          : "Admin-defined limits used while monitoring account-level OD exposure."
+          ? "Review policy limits and update only the fields enabled by admin."
+          : "Review admin-defined tier limits. Editing is currently locked for managers."
       }
       icon={ShieldCheck}
     >
+      <div className="mb-5 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_auto] xl:items-center">
+        <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-slate-950">
+                {editableTierFieldCount} of {tierPermissionLabels.length} fields editable
+              </p>
+              <p className="mt-1 text-sm text-slate-500">
+                Admin controls these permissions from Business Rules.
+              </p>
+            </div>
+            <span
+              className={`inline-flex w-fit items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold ${
+                canEditAnyTierField
+                  ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
+                  : "bg-slate-100 text-slate-500 ring-1 ring-slate-200"
+              }`}
+            >
+              <SlidersHorizontal size={16} />
+              {canEditAnyTierField ? "Manager edits enabled" : "Manager edits locked"}
+            </span>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {tierPermissionLabels.map(([field, label]) => {
+              const isAllowed = managerTierPermissions[field];
+
+              return (
+                <span
+                  key={field}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
+                    isAllowed
+                      ? "bg-blue-50 text-blue-700 ring-1 ring-blue-100"
+                      : "bg-white text-slate-500 ring-1 ring-slate-200"
+                  }`}
+                >
+                  {isAllowed ? <Check size={13} /> : <X size={13} />}
+                  {label}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+        <div className="rounded-xl border border-bank-card-border bg-white p-4 xl:min-w-52">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+            Policies
+          </p>
+          <p className="mt-1 text-3xl font-bold text-slate-950">{tierPolicies.length}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-500">Available for review</p>
+        </div>
+      </div>
+
       {tierPolicies.length === 0 && (
         <EmptyState message="No tier policies are available for manager review." />
       )}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
         {tierPolicies.map((tier) => (
-          <div key={tier.key} className="rounded-xl border border-bank-card-border bg-white p-5">
-            <div className="flex items-start justify-between gap-3">
+          <div
+            key={tier.key}
+            className={`rounded-xl border bg-white p-5 shadow-sm ${getTierTone(tier.key).card}`}
+          >
+            <div className="flex items-start justify-between gap-4">
               <div>
                 <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${getTierTone(tier.key).badge}`}>
-                  {tier.label}
+                  {tier.label} Tier
                 </span>
-                <p className="mt-3 text-sm font-semibold text-slate-500">
-                  Txn {formatCurrency(tier.perTxnLimit)} / Daily {formatCurrency(tier.dailyLimit)}
+                <p className="mt-3 text-sm leading-6 text-slate-600">
+                  Transaction, overdraft, penalty, and account-opening rules for this tier.
                 </p>
               </div>
-              <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                {tier.interestRate || "No interest"}
-              </span>
+              <button
+                type="button"
+                onClick={() => openTierEdit(tier)}
+                disabled={!canEditAnyTierField}
+                className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold ${
+                  canEditAnyTierField
+                    ? "border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                    : "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
+                }`}
+              >
+                <Edit3 size={15} />
+                Edit
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => openTierEdit(tier)}
-              disabled={!canEditAnyTierField}
-              className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold ${
-                canEditAnyTierField
-                  ? "border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  : "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
-              }`}
-            >
-              <Edit3 size={15} />
-              {canEditAnyTierField ? "Edit allowed fields" : "Edit locked by admin"}
-            </button>
+
+            <div className="mt-5 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+              {[
+                ["Per transfer", formatCurrency(tier.perTxnLimit)],
+                ["Daily limit", formatCurrency(tier.dailyLimit)],
+                ["Monthly limit", formatCurrency(tier.monthlyLimit)],
+                ["Interest", tier.interestRate || "No interest"],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-slate-100 bg-white/80 p-3">
+                  <p className="font-semibold text-slate-500">{label}</p>
+                  <p className="mt-1 break-words font-bold text-slate-950">{value}</p>
+                </div>
+              ))}
+            </div>
+
             <div className="mt-4 grid grid-cols-1 gap-2">
               {(tier.accountTypeOdRules || []).map((rule) => (
                 <div
                   key={`${tier.key}-${rule.accountType}`}
-                  className="rounded-lg border border-slate-100 bg-slate-50 p-3"
+                  className="rounded-lg border border-slate-100 bg-white/80 p-3"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <p className="font-bold text-slate-900">{rule.accountType}</p>
-                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
-                      Account rule
-                    </span>
+                    <p className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">
+                      3 uses/month
+                    </p>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
                     <div>
@@ -1006,12 +1300,6 @@ function ManagerDashboard() {
                       </p>
                     </div>
                     <div>
-                      <p className="font-semibold text-slate-500">Uses</p>
-                      <p className="font-bold text-slate-900">
-                        3/month
-                      </p>
-                    </div>
-                    <div className="col-span-2">
                       <p className="font-semibold text-slate-500">Minimum Opening Balance</p>
                       <p className="font-bold text-slate-900">
                         {formatCurrency(rule.minOpeningBalance || 0)}
@@ -1022,11 +1310,11 @@ function ManagerDashboard() {
               ))}
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-              <div className="rounded-lg bg-blue-50 p-3 text-blue-800">
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-blue-800">
                 <p className="font-semibold">Penalty</p>
                 <p className="font-bold">{formatCurrency(tier.penaltyAmount)}</p>
               </div>
-              <div className="rounded-lg bg-slate-50 p-3 text-slate-700">
+              <div className="rounded-lg border border-slate-100 bg-white/80 p-3 text-slate-700">
                 <p className="font-semibold">Updated</p>
                 <p className="font-bold">
                   {tier.updatedAt ? new Date(tier.updatedAt).toLocaleDateString() : "-"}
@@ -1137,13 +1425,21 @@ function ManagerDashboard() {
                 <span className="font-semibold text-slate-600">Limit usage</span>
                 <span className="font-bold text-slate-950">{usagePercent}%</span>
               </div>
-              <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
+              <div className="group relative mt-2 rounded-full outline-none" tabIndex={0}>
+              <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
                 <div
                   className={`h-full rounded-full ${risk.bar}`}
                   style={{
                     width: usagePercent > 0 ? `${Math.max(4, usagePercent)}%` : "0%",
                   }}
                 />
+              </div>
+              <ChartTooltip
+                label={`${customer.customer} Limit Usage`}
+                value={`${usagePercent}% used`}
+                detail={`${formatCurrency(customer.used)} used of ${formatCurrency(customer.limit)} limit | ${customer.odAttempts || 0} uses`}
+                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+              />
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <MetricTile label="Limit" value={formatCurrency(customer.limit)} />
@@ -1277,7 +1573,6 @@ function ManagerDashboard() {
     { key: "cases", label: "Customer Cases", count: filteredOverdraftCustomers.length },
     { key: "overview", label: "Risk Overview", count: overdraftRisk.length + overdraftExposureByType.length },
     { key: "payoffs", label: "Payoffs", count: overdraftPayoffTransactions.length },
-    { key: "policies", label: "Tier Policies", count: tierPolicies.length },
     { key: "activity", label: "Recent Activity", count: recentOverdraftActivity.length },
   ];
 
@@ -1296,7 +1591,6 @@ function ManagerDashboard() {
       </div>
     ),
     payoffs: odPayoffTransactionsTable,
-    policies: tierPolicyDetails,
     activity: odRecentActivity,
   };
 
@@ -1395,88 +1689,319 @@ function ManagerDashboard() {
   );
 
   const transactionsSection = (
-    <section className="table-shell">
-      <div className="flex items-center justify-between border-b border-slate-100 p-6">
-        <div>
-          <h2 className="text-xl font-bold">Transaction Monitoring</h2>
-          <p className="text-sm text-slate-500">
-            All customer transactions, including overdraft payoff payments.
-          </p>
-        </div>
-        <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
-          {transactions.length} transactions
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[1120px] text-left">
-          <thead className="table-head">
-            <tr>
-              <th className="px-6 py-4">Txn ID</th>
-              <th className="px-6 py-4">Customer</th>
-              <th className="px-6 py-4">Receiver</th>
-              <th className="px-6 py-4">Type</th>
-              <th className="px-6 py-4">Amount</th>
-              <th className="px-6 py-4">Account</th>
-              <th className="px-6 py-4">Date</th>
-              <th className="px-6 py-4">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {transactions.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No customer transactions are available for review." />
-                </td>
-              </tr>
-            )}
-            {transactionPagination.pageRows.map((transaction) => (
-              <tr key={transaction.id} className="table-row">
-                <td className="px-6 py-4 font-semibold">{transaction.id}</td>
-                <td className="px-6 py-4">
-                  <p className="font-semibold text-slate-900">{transaction.customer}</p>
-                  <p className="text-xs text-slate-500">{transaction.customerId || "Customer"}</p>
-                </td>
-                <td className="px-6 py-4">{transaction.receiver}</td>
-                <td className="px-6 py-4">
+    <div className="space-y-6">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatsCard
+          title="Transaction Value"
+          value={formatCurrency(transactionSummary.totalValue)}
+          icon={ReceiptText}
+          accent="bg-blue-500"
+          iconTone="bg-blue-50 text-blue-600"
+          footer={{ text: `${transactions.length} total transaction${transactions.length === 1 ? "" : "s"}` }}
+        />
+        <StatsCard
+          title="Successful"
+          value={transactionSummary.successfulCount}
+          icon={Check}
+          accent="bg-emerald-500"
+          iconTone="bg-emerald-50 text-emerald-600"
+          badge={{ text: "Completed", tone: "success" }}
+        />
+        <StatsCard
+          title="Pending"
+          value={transactionSummary.pendingCount}
+          icon={Clock}
+          accent="bg-amber-500"
+          iconTone="bg-amber-50 text-amber-600"
+          badge={{
+            text: transactionSummary.pendingCount > 0 ? "Needs tracking" : "Clear",
+            tone: transactionSummary.pendingCount > 0 ? "warning" : "success",
+          }}
+        />
+        <StatsCard
+          title="OD Payoffs"
+          value={transactionSummary.payoffCount}
+          icon={CircleDollarSign}
+          accent="bg-violet-500"
+          iconTone="bg-violet-50 text-violet-600"
+          badge={{ text: `${transactionSummary.failedCount} failed`, tone: transactionSummary.failedCount > 0 ? "warning" : "success" }}
+        />
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <SectionCard
+          title="Transaction Health"
+          subtitle="Status split for the latest customer transaction register."
+          icon={BarChart3}
+        >
+          <div className="space-y-4">
+            {transactionStatusRows.map((row) => {
+              const width = transactions.length > 0 ? Math.max(6, Math.round((row.value / transactions.length) * 100)) : 0;
+
+              return (
+                <button
+                  key={row.key}
+                  type="button"
+                  onClick={() => setTransactionStatusFilter(row.key)}
+                  className="group relative block w-full rounded-xl border border-bank-card-border bg-white p-4 text-left transition hover:border-blue-200 hover:bg-blue-50/40"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-bold text-slate-900">{row.label}</span>
+                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${row.tone}`}>
+                      {row.value}
+                    </span>
+                  </div>
+                  <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={`h-full rounded-full ${row.bar}`}
+                      style={{ width: row.value > 0 ? `${width}%` : "0%" }}
+                    />
+                  </div>
+                  <ChartTooltip
+                    label={row.label}
+                    value={`${row.value} transaction${row.value === 1 ? "" : "s"}`}
+                    detail={`${width}% of latest customer transaction register`}
+                    className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Transfer Mix"
+          subtitle="Value and count by transaction type for quick reconciliation."
+          icon={ReceiptText}
+        >
+          {transactionTypeRows.length === 0 ? (
+            <EmptyState message="No transaction mix is available yet." />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {transactionTypeRows.map((row) => (
+                <div key={row.key} className="rounded-xl border border-bank-card-border bg-white p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-words font-bold text-slate-950">
+                        {transactionTypeLabels[row.key] || row.key}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-500">
+                        {row.count} transaction{row.count === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-bank-surface px-3 py-1 text-xs font-bold text-bank-eyebrow">
+                      Type
+                    </span>
+                  </div>
+                  <p className="mt-4 break-words text-xl font-bold text-slate-950">
+                    {formatCurrency(row.amount)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      </section>
+
+      <SectionCard
+        title="Latest Transaction Activity"
+        subtitle="Most recent customer movements before filtering the register below."
+        icon={Clock}
+      >
+        {recentTransactions.length === 0 ? (
+          <EmptyState message="No recent transaction activity is available." />
+        ) : (
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            {recentTransactions.map((transaction) => (
+              <div
+                key={transaction.id}
+                className="flex flex-col gap-3 rounded-xl border border-bank-card-border bg-white p-4 sm:flex-row sm:items-start sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <p className="break-words font-bold text-slate-950">{transaction.id}</p>
+                  <p className="mt-1 break-words text-sm font-semibold text-slate-600">
+                    {transaction.customer || "Customer"} to {transaction.receiver || "Receiver"}
+                  </p>
+                  <p className="mt-2 text-xs font-semibold text-slate-500">
+                    {formatDateTime(transaction.createdAt)}
+                  </p>
+                </div>
+                <div className="shrink-0 sm:text-right">
+                  <p className="font-bold text-slate-950">{formatCurrency(transaction.amount)}</p>
                   <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      transaction.type === "overdraft-payoff"
-                        ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
-                        : "bg-slate-100 text-slate-700 ring-1 ring-slate-200"
-                    }`}
-                  >
-                    {transactionTypeLabels[transaction.type] || transaction.type}
-                  </span>
-                  {transaction.remarks && (
-                    <p className="mt-2 max-w-52 text-xs text-slate-500">{transaction.remarks}</p>
-                  )}
-                </td>
-                <td className="px-6 py-4 font-semibold">{formatCurrency(transaction.amount)}</td>
-                <td className="px-6 py-4 text-sm text-slate-600">
-                  <p>From {maskAccountNumber(transaction.fromAccountNumber)}</p>
-                  <p>To {maskAccountNumber(transaction.toAccountNumber)}</p>
-                </td>
-                <td className="px-6 py-4">
-                  {transaction.createdAt
-                    ? new Date(transaction.createdAt).toLocaleString()
-                    : "Recently"}
-                </td>
-                <td className="px-6 py-4">
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${
+                    className={`mt-2 inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${
                       transactionStatusStyles[transaction.status] || transactionStatusStyles.pending
                     }`}
                   >
                     {getTransactionStatusLabel(transaction.status)}
                   </span>
-                </td>
-              </tr>
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
-        <TablePagination {...transactionPagination} />
-      </div>
-    </section>
+          </div>
+        )}
+      </SectionCard>
+
+      <section className="table-shell">
+        <div className="border-b border-slate-100 p-6">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <h2 className="text-xl font-bold">Transaction Register</h2>
+              <p className="text-sm text-slate-500">
+                Search, filter, and review customer money movement with account route and outcome notes.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { key: "all", label: "All", count: transactions.length },
+                { key: "success", label: "Successful", count: transactionSummary.successfulCount },
+                { key: "pending", label: "Pending", count: transactionSummary.pendingCount },
+                { key: "failed", label: "Failed", count: transactionSummary.failedCount },
+              ].map((filter) => (
+                <button
+                  key={filter.key}
+                  type="button"
+                  onClick={() => setTransactionStatusFilter(filter.key)}
+                  className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold transition ${
+                    transactionStatusFilter === filter.key
+                      ? "bg-bank-accent text-white shadow-sm"
+                      : "border border-bank-card-border bg-white text-slate-600 hover:bg-bank-surface"
+                  }`}
+                >
+                  <span>{filter.label}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs ${
+                      transactionStatusFilter === filter.key
+                        ? "bg-white/20 text-white"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {filter.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+            <label className="relative block">
+              <span className="sr-only">Search transactions</span>
+              <Search
+                size={17}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              />
+              <input
+                value={transactionSearch}
+                onChange={(event) => setTransactionSearch(event.target.value)}
+                placeholder="Search by transaction ID, customer, account, receiver, or remarks"
+                className="input-field pl-10"
+              />
+            </label>
+            <span className="rounded-full bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">
+              {filteredTransactions.length} shown
+            </span>
+          </div>
+        </div>
+
+        <div className="overflow-hidden">
+          <table className="w-full table-fixed text-left">
+            <thead className="table-head">
+              <tr>
+                <th className="w-[26%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Transfer</th>
+                <th className="w-[31%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Route</th>
+                <th className="w-[16%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Amount</th>
+                <th className="w-[14%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Status</th>
+                <th className="w-[13%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredTransactions.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8">
+                    <EmptyState message="No customer transactions match this view." />
+                  </td>
+                </tr>
+              )}
+              {transactionPagination.pageRows.map((transaction) => (
+                <tr key={transaction.id} className="border-b border-slate-100 align-middle last:border-b-0">
+                  <td className="px-3 py-8 sm:px-5 lg:px-8">
+                    <p className="break-words text-lg font-bold text-slate-950">
+                      {transaction.id}
+                    </p>
+                    <p className="mt-3 break-words text-xs font-bold uppercase tracking-[0.04em] text-slate-400">
+                      {String(transaction.type || "transfer").toUpperCase()}
+                    </p>
+                    {transaction.remarks && (
+                      <p className="mt-3 break-words text-xs font-semibold leading-5 text-slate-500">
+                        {transaction.remarks}
+                      </p>
+                    )}
+                  </td>
+                  <td className="px-3 py-8 sm:px-5 lg:px-8">
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.04em] text-slate-500">
+                          From
+                        </p>
+                        <p className="mt-1 break-words text-lg font-bold text-slate-950">
+                          {transaction.customer || "Customer"}
+                        </p>
+                        <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                          Account / {maskAccountNumber(transaction.fromAccountNumber)}
+                        </p>
+                      </div>
+                      <div className="w-fit max-w-full rounded-lg bg-blue-50 px-4 py-3">
+                        <p className="text-xs font-bold uppercase tracking-[0.04em] text-slate-500">
+                          To
+                        </p>
+                        <p className="mt-1 break-words text-lg font-bold text-slate-950">
+                          {transaction.receiver || "Receiver"}
+                        </p>
+                        <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                          Account / {maskAccountNumber(transaction.toAccountNumber)}
+                        </p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-8 sm:px-5 lg:px-8">
+                    <p className="break-words text-lg font-bold text-slate-950">
+                      {formatCurrency(transaction.amount)}
+                    </p>
+                  </td>
+                  <td className="px-3 py-8 sm:px-5 lg:px-8">
+                    <span
+                      className={`inline-flex rounded-full px-4 py-2 text-sm font-bold capitalize ${
+                        transactionStatusStyles[transaction.status] || transactionStatusStyles.pending
+                      }`}
+                    >
+                      {getTransactionStatusLabel(transaction.status)}
+                    </span>
+                    {transaction.failureReason && (
+                      <p className="mt-3 break-words rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold leading-5 text-red-700">
+                        Reason: {transaction.failureReason}
+                      </p>
+                    )}
+                    {!transaction.failureReason && transaction.status === "pending" && (
+                      <p className="mt-3 break-words rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-700">
+                        Waiting for approval or processing.
+                      </p>
+                    )}
+                  </td>
+                  <td className="px-3 py-8 sm:px-5 lg:px-8">
+                    <p className="break-words text-lg font-semibold text-slate-950">
+                      {transaction.createdAt
+                        ? new Date(transaction.createdAt).toISOString().slice(0, 10)
+                        : "Recently"}
+                    </p>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <TablePagination {...transactionPagination} />
+        </div>
+      </section>
+    </div>
   );
 
   const notificationsSection = (
@@ -1546,7 +2071,7 @@ function ManagerDashboard() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <MetricTile label="Pending" value={pendingApprovals.length} tone={pendingApprovals.length > 0 ? "warning" : "success"} />
             <MetricTile label="OD Alerts" value={displayedEscalations.filter((item) => item.metadata?.odCountThisMonth).length} tone="warning" />
-            <MetricTile label="Reviewed" value={approvalHistory.length} tone="accent" />
+            <MetricTile label="Decisions" value={decisionHistory.length} tone="accent" />
           </div>
         </div>
       </section>
@@ -1642,16 +2167,277 @@ function ManagerDashboard() {
     </div>
   );
 
+  const dashboardWorkbench = (
+    <div className="space-y-6">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatsCard
+          title="Pending Decisions"
+          value={pendingApprovals.length}
+          icon={ListChecks}
+          accent="bg-violet-500"
+          iconTone="bg-violet-50 text-violet-600"
+          badge={{
+            text: pendingApprovals.length > 0 ? "Needs review" : "Queue clear",
+            tone: pendingApprovals.length > 0 ? "warning" : "success",
+          }}
+          footer={{ text: `${formatCurrency(pendingApprovalValue)} total waiting` }}
+        />
+        <StatsCard
+          title="Transactions Today"
+          value={dashboardData.stats.transactionsToday || 0}
+          icon={ReceiptText}
+          accent="bg-blue-500"
+          iconTone="bg-blue-50 text-blue-600"
+          badge={{ text: "Live activity", tone: "neutral" }}
+        />
+        <StatsCard
+          title="OD Attention"
+          value={odCustomerSummary.attentionCount}
+          icon={CircleDollarSign}
+          accent="bg-amber-500"
+          iconTone="bg-amber-50 text-amber-600"
+          footer={{ text: `${formatCurrency(utilizedOd)} utilized OD` }}
+        />
+        <StatsCard
+          title="Decisions Today"
+          value={decisionsToday}
+          icon={CalendarClock}
+          accent="bg-emerald-500"
+          iconTone="bg-emerald-50 text-emerald-600"
+          badge={{ text: "Recorded actions", tone: "success" }}
+        />
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <SectionCard
+          title="Priority Approval Queue"
+          subtitle="Review the largest pending transfers first, then continue to the full queue."
+          icon={ListChecks}
+        >
+          {approvalMessage && <div className="alert-success mb-4">{approvalMessage}</div>}
+          {approvalError && <div className="alert-error mb-4">{approvalError}</div>}
+          {topPendingApprovals.length === 0 ? (
+            <EmptyState message="No transfer approvals are waiting right now." />
+          ) : (
+            <div className="space-y-3">
+              {topPendingApprovals.map((approval) => (
+                <div
+                  key={approval.id}
+                  className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm"
+                >
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700">
+                          Pending
+                        </span>
+                        <span className="break-words text-sm font-bold text-slate-500">
+                          {approval.id}
+                        </span>
+                      </div>
+                      <p className="mt-3 break-words text-lg font-bold text-slate-950">
+                        {approval.customer || "Customer"}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-500">
+                        {transactionTypeLabels[approval.type] || approval.type || "Transfer"} from{" "}
+                        {maskAccountNumber(approval.account)}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-slate-500">
+                        Requested {formatDateTime(approval.requestedOn)}
+                      </p>
+                    </div>
+                    <div className="shrink-0 lg:text-right">
+                      <p className="text-2xl font-bold text-slate-950">
+                        {formatCurrency(approval.amount)}
+                      </p>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => updateApproval(approval.id, "approved")}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700"
+                        >
+                          <Check size={16} />
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openRejectReview(approval)}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-100"
+                        >
+                          <X size={16} />
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  {rejectionReview?.id === approval.id && (
+                    <div className="mt-4 rounded-xl border border-red-100 bg-red-50/70 p-4">
+                      <label className="label-field">
+                        Rejection Reason
+                        <textarea
+                          value={rejectionReview.reason}
+                          onChange={(event) => updateRejectionReason(event.target.value)}
+                          className="input-field mt-2 min-h-24 resize-y bg-white"
+                        />
+                      </label>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => confirmRejection(approval.id)}
+                          className="btn-danger-soft"
+                        >
+                          Confirm Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRejectionReview(null)}
+                          className="btn-secondary"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => navigate("/manager/approvals")}
+                className="btn-secondary mt-2 justify-center"
+              >
+                View Full Approval Queue
+                <ArrowRight size={17} />
+              </button>
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Operations Watch"
+          subtitle="A quick view of items that usually need same-day follow-up."
+          icon={Gauge}
+        >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <MetricTile label="Active OD Accounts" value={odCustomerSummary.activeCount} tone="accent" />
+            <MetricTile label="Blocked OD" value={odCustomerSummary.blockedCount} tone={odCustomerSummary.blockedCount > 0 ? "danger" : "success"} />
+            <MetricTile label="Alerts" value={notifications.length} tone={notifications.length > 0 ? "warning" : "success"} />
+            <MetricTile label="Policies" value={tierPolicies.length} tone="default" />
+          </div>
+          <div className="mt-4 grid gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/manager/overdraft")}
+              className="inline-flex items-center justify-between rounded-lg border border-bank-card-border bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-bank-surface"
+            >
+              Review overdraft accounts
+              <ArrowRight size={17} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/manager/policies")}
+              className="inline-flex items-center justify-between rounded-lg border border-bank-card-border bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-bank-surface"
+            >
+              Check tier policies
+              <ArrowRight size={17} />
+            </button>
+          </div>
+        </SectionCard>
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <SectionCard
+          title="Recent Decisions"
+          subtitle="Latest approvals, rejections, and policy edits completed by the manager."
+          icon={ShieldCheck}
+        >
+          {recentDecisions.length === 0 ? (
+            <EmptyState message="No completed decisions are available yet." />
+          ) : (
+            <div className="space-y-3">
+              {recentDecisions.map((decision) => (
+                <div
+                  key={decision.id}
+                  className="flex flex-col gap-3 rounded-xl border border-bank-card-border bg-white p-4 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="break-words font-bold text-slate-950">{decision.subject}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-500">{decision.type}</p>
+                    <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
+                      {decision.detail}
+                    </p>
+                  </div>
+                  <div className="shrink-0 sm:text-right">
+                    <span
+                      className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${
+                        statusStyles[decision.status] || statusStyles.updated
+                      }`}
+                    >
+                      {decision.status}
+                    </span>
+                    <p className="mt-2 text-xs font-semibold text-slate-500">
+                      {formatDateTime(decision.reviewedAt)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => navigate("/manager/approval-history")}
+                className="btn-secondary mt-2 justify-center"
+              >
+                Open Decision History
+                <ArrowRight size={17} />
+              </button>
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Latest Alerts"
+          subtitle="Recent account and operational notifications for the manager."
+          icon={Bell}
+        >
+          {notifications.length === 0 ? (
+            <EmptyState message="No alerts are available right now." />
+          ) : (
+            <div className="space-y-3">
+              {notifications.slice(0, 4).map((notification) => (
+                <div
+                  key={notification.id || notification.message}
+                  className={`rounded-xl border p-4 ${
+                    notificationToneStyles[notification.type] || notificationToneStyles.info
+                  }`}
+                >
+                  <p className="break-words font-bold text-slate-950">{notification.title}</p>
+                  <p className="mt-1 break-words text-sm leading-6 text-slate-600">
+                    {notification.message}
+                  </p>
+                  <p className="mt-2 text-xs font-semibold text-slate-500">
+                    {notification.time}
+                  </p>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => navigate("/manager/notifications")}
+                className="btn-secondary mt-2 justify-center"
+              >
+                View All Alerts
+                <ArrowRight size={17} />
+              </button>
+            </div>
+          )}
+        </SectionCard>
+      </section>
+    </div>
+  );
+
   const contentBySection = {
-    dashboard: (
-      <>
-        {approvalTable}
-        {escalationSection}
-      </>
-    ),
+    dashboard: dashboardWorkbench,
     approvals: approvalTable,
     "approval-history": approvalHistoryTable,
     overdraft: odSection,
+    policies: tierPolicyDetails,
     escalations: escalationSection,
     transactions: transactionsSection,
     notifications: notificationsSection,
@@ -1663,8 +2449,8 @@ function ManagerDashboard() {
       <PageContent>
         <PageHeader
           eyebrow={section === "dashboard" ? "Manager Control Panel" : undefined}
-          title={section === "dashboard" ? "Branch Operations" : pageTitle}
-          subtitle="Monitor approvals, overdraft risk, customer activity, and branch alerts."
+          title={section === "dashboard" ? "Manager Operations" : pageTitle}
+          subtitle="Monitor approvals, overdraft activity, customer activity, and alerts."
         >
           <div className="stat-chip flex items-center gap-3 px-4 py-3">
             <button
@@ -1689,7 +2475,7 @@ function ManagerDashboard() {
           </button>
         </PageHeader>
 
-        {!["approval-history", "overdraft", "profile"].includes(section) && (
+        {!["dashboard", "approval-history", "overdraft", "policies", "profile"].includes(section) && (
           <div className="stat-grid">
             <StatsCard
               title="Pending Approvals"

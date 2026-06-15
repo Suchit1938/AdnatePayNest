@@ -12,6 +12,91 @@ const { writeSystemLog } = require('../utils/systemLog');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
+const maskAccount = (value) => {
+  const account = String(value || '');
+  if (account.length <= 4) return account;
+  return `XXXX${account.slice(-4)}`;
+};
+
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const sendDetailedTransferEmail = async ({
+  to,
+  subject,
+  greetingName,
+  intro,
+  amountLabel,
+  amount,
+  details,
+  balanceRows,
+}) => {
+  if (!to) return null;
+
+  const detailLines = details.filter(Boolean);
+  const balanceLines = balanceRows.filter(Boolean);
+  const text = [
+    `Hello ${greetingName},`,
+    intro,
+    `${amountLabel}: ${formatMoney(amount)}`,
+    '',
+    'Transaction details:',
+    ...detailLines.map((line) => `- ${line.label}: ${line.value}`),
+    '',
+    'Balance tracking:',
+    ...balanceLines.map((line) => `- ${line.label}: ${line.value}`),
+    '',
+    'Regards,',
+    'Adnate PayNest',
+  ].join('\n');
+
+  const makeRows = (rows) =>
+    rows
+      .map(
+        (line) => `
+          <tr>
+            <td style="padding:8px 10px;color:#64748b;border-bottom:1px solid #e2e8f0;">${escapeHtml(line.label)}</td>
+            <td style="padding:8px 10px;color:#0f172a;font-weight:700;border-bottom:1px solid #e2e8f0;">${escapeHtml(line.value)}</td>
+          </tr>`
+      )
+      .join('');
+
+  return sendEmail({
+    to,
+    subject,
+    text,
+    html: `
+      <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:22px;color:#0f172a;">
+        <div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+          <div style="background:#0f172a;color:#ffffff;padding:18px 22px;">
+            <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#bfdbfe;">AdnatePayNest Transaction Alert</p>
+            <h1 style="margin:8px 0 0;font-size:22px;line-height:1.3;">${escapeHtml(subject)}</h1>
+          </div>
+          <div style="padding:22px;">
+            <p style="margin:0 0 10px;">Hello ${escapeHtml(greetingName)},</p>
+            <p style="margin:0 0 16px;color:#334155;line-height:1.6;">${escapeHtml(intro)}</p>
+            <div style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin:18px 0;">
+              <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#047857;font-weight:700;">${escapeHtml(amountLabel)}</div>
+              <div style="font-size:28px;line-height:1.25;color:#047857;font-weight:800;margin-top:4px;">${escapeHtml(formatMoney(amount))}</div>
+            </div>
+            <h2 style="font-size:16px;margin:20px 0 8px;color:#0f172a;">Transaction Details</h2>
+            <table role="presentation" style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">${makeRows(detailLines)}</table>
+            <h2 style="font-size:16px;margin:22px 0 8px;color:#0f172a;">Balance Tracking</h2>
+            <table role="presentation" style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">${makeRows(balanceLines)}</table>
+            <p style="margin:18px 0 0;color:#475569;line-height:1.6;">This balance view is specific to your account for this transaction.</p>
+            <p style="margin:18px 0 0;">Regards,<br /><strong>Team AdnatePayNest</strong></p>
+          </div>
+        </div>
+      </div>
+    `,
+  });
+};
+
 const sendApprovalDecisionEmail = async ({ customer, approval, transaction, status, rejectionReason, managerName }) => {
   if (!customer?.email) return null;
 
@@ -37,9 +122,76 @@ const sendApprovalDecisionEmail = async ({ customer, approval, transaction, stat
     html: `${lines.map((line) => `<p>${line}</p>`).join('')}<p>Regards,<br />Adnate PayNest</p>`,
   });
 };
+
+const sendApprovedTransferEmails = async ({ transaction, approval, managerName, executionSummary }) => {
+  const [sender, receiver] = await Promise.all([
+    User.findById(transaction.sender).select('name email'),
+    User.findById(transaction.receiver).select('name email'),
+  ]);
+
+  return Promise.all([
+    sender?.email
+      ? sendDetailedTransferEmail({
+        to: sender.email,
+        subject: 'Transfer approved and completed',
+        greetingName: sender.name,
+        intro: `Your transfer to ${transaction.receiverName} was approved by ${managerName} and completed successfully.`,
+        amountLabel: 'Amount Debited',
+        amount: transaction.amount,
+        details: [
+          { label: 'Transaction ID', value: transaction.transactionId },
+          { label: 'Approval ID', value: approval.requestId },
+          { label: 'Reviewed by', value: managerName },
+          { label: 'Receiver', value: transaction.receiverName },
+          { label: 'From account', value: maskAccount(transaction.fromAccountNumber) },
+          { label: 'To account', value: maskAccount(transaction.toAccountNumber) },
+          { label: 'Remarks', value: transaction.remarks || 'Bank transfer' },
+        ],
+        balanceRows: [
+          { label: 'Opening wallet balance', value: formatMoney(executionSummary?.senderOpeningBalance) },
+          { label: 'Amount debited', value: `- ${formatMoney(transaction.amount)}` },
+          executionSummary?.overdraftNeeded > 0
+            ? { label: 'Overdraft used in this transfer', value: formatMoney(executionSummary.overdraftNeeded) }
+            : null,
+          { label: 'Closing wallet balance', value: formatMoney(executionSummary?.senderClosingBalance) },
+          { label: 'Total overdraft outstanding', value: formatMoney(executionSummary?.senderOverdraftUsed) },
+        ],
+      })
+      : null,
+    receiver?.email
+      ? sendDetailedTransferEmail({
+        to: receiver.email,
+        subject: 'Amount credited to your account',
+        greetingName: receiver.name,
+        intro: `You have received a credit from ${transaction.senderName}.`,
+        amountLabel: 'Amount Credited',
+        amount: transaction.amount,
+        details: [
+          { label: 'Transaction ID', value: transaction.transactionId },
+          { label: 'Approval ID', value: approval.requestId },
+          { label: 'Sender', value: transaction.senderName },
+          { label: 'From account', value: maskAccount(transaction.fromAccountNumber) },
+          { label: 'Credited account', value: maskAccount(transaction.toAccountNumber) },
+          { label: 'Remarks', value: transaction.remarks || 'Bank transfer' },
+        ],
+        balanceRows: [
+          { label: 'Opening wallet balance', value: formatMoney(executionSummary?.receiverOpeningBalance) },
+          { label: 'Amount credited', value: `+ ${formatMoney(transaction.amount)}` },
+          { label: 'Closing wallet balance', value: formatMoney(executionSummary?.receiverClosingBalance) },
+        ],
+      })
+      : null,
+  ]);
+};
 const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
 const firstDefined = (...values) =>
   values.find((value) => value !== undefined && value !== null);
+const getCurrentMonthOdCount = (bankAccount) =>
+  bankAccount.odCountMonthKey === getCurrentMonthKey()
+    ? toWholeRupees(bankAccount.odCountThisMonth)
+    : 0;
+const isCurrentMonthOdBlocked = (bankAccount) =>
+  bankAccount.odCountMonthKey === getCurrentMonthKey() && Boolean(bankAccount.odBlocked);
 
 const refreshMonthlyOverdraftCounter = (bankAccount) => {
   const currentMonthKey = getCurrentMonthKey();
@@ -76,8 +228,8 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
     overdraftLimit: firstDefined(bankAccount.odLimit, user.account?.overdraftLimit, 0),
     overdraftUsed: firstDefined(bankAccount.odUsed, 0),
     odStartedAt: bankAccount.odStartedAt || null,
-    odCountThisMonth: bankAccount.odCountThisMonth || 0,
-    odBlocked: bankAccount.odBlocked || false,
+    odCountThisMonth: getCurrentMonthOdCount(bankAccount),
+    odBlocked: isCurrentMonthOdBlocked(bankAccount),
   };
 
   user.accounts = (user.accounts || []).map((account) =>
@@ -91,9 +243,9 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
 const serializeApproval = (approval) => ({
   id: approval.requestId,
   customer: approval.customer?.name,
-  manager: approval.assignedManager?.name,
-  managerEmail: approval.assignedManager?.email,
-  managerEmployeeId: approval.assignedManager?.employeeId,
+  manager: approval.assignedManager?.name || approval.reviewedBy?.name,
+  managerEmail: approval.assignedManager?.email || approval.reviewedBy?.email,
+  managerEmployeeId: approval.assignedManager?.employeeId || approval.reviewedBy?.employeeId,
   amount: approval.amount,
   account:
     approval.transaction?.fromAccountNumber ||
@@ -160,6 +312,8 @@ const executePendingTransaction = async (transaction, session) => {
   const overdraftUsed = toWholeRupees(senderBankAccount.odUsed);
   const overdraftAvailable = Math.max(0, overdraftLimit - overdraftUsed);
   const overdraftNeeded = Math.max(0, transferAmount - currentBalance);
+  const senderOpeningBalance = currentBalance;
+  const receiverOpeningBalance = toWholeRupees(receiverBankAccount.walletBalance);
 
   if (overdraftNeeded > 0) {
     refreshMonthlyOverdraftCounter(senderBankAccount);
@@ -191,8 +345,7 @@ const executePendingTransaction = async (transaction, session) => {
     senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= monthlyOdUses;
   }
 
-  receiverBankAccount.walletBalance =
-    toWholeRupees(receiverBankAccount.walletBalance) + transferAmount;
+  receiverBankAccount.walletBalance = receiverOpeningBalance + transferAmount;
   receiverBankAccount.availableBalance =
     toWholeRupees(receiverBankAccount.availableBalance) + transferAmount;
 
@@ -208,7 +361,7 @@ const executePendingTransaction = async (transaction, session) => {
     await writeSystemLog(
       {
         action: 'overdraft.third_attempt',
-        message: `${sender.name} has used overdraft ${senderBankAccount.odCountThisMonth} times this month. Monthly OD usage is now blocked until next month.`,
+        message: `${sender.name} has used overdraft ${senderBankAccount.odCountThisMonth} times this month on ${senderBankAccount.accountType} account. Monthly OD usage is now blocked until next month.`,
         actor: sender._id,
         actorName: sender.name,
         entityType: 'Transaction',
@@ -226,6 +379,29 @@ const executePendingTransaction = async (transaction, session) => {
       },
       { session }
     );
+  } else if (overdraftNeeded > 0) {
+    await writeSystemLog(
+      {
+        action: 'overdraft.used',
+        message: `${sender.name} used ${formatMoney(overdraftNeeded)} overdraft from ${senderBankAccount.accountType} account for manager-approved transfer ${transaction.transactionId}. OD usage count this month: ${senderBankAccount.odCountThisMonth}.`,
+        actor: sender._id,
+        actorName: sender.name,
+        entityType: 'Transaction',
+        entityId: transaction.transactionId,
+        severity: 'warning',
+        metadata: {
+          customerId: sender.customerId,
+          amount: transferAmount,
+          overdraftUsed: nextOverdraftUsed,
+          overdraftNeeded,
+          accountType: senderBankAccount.accountType,
+          accountNumber: senderBankAccount.accountNumber,
+          odCountThisMonth: senderBankAccount.odCountThisMonth,
+          source: 'manager-approved-transfer',
+        },
+      },
+      { session }
+    );
   }
 
   await Promise.all([
@@ -235,6 +411,15 @@ const executePendingTransaction = async (transaction, session) => {
   await sender.save({ session });
   await receiver.save({ session });
   await transaction.save({ session });
+
+  return {
+    senderOpeningBalance,
+    senderClosingBalance: senderBankAccount.walletBalance,
+    senderOverdraftUsed: senderBankAccount.odUsed,
+    receiverOpeningBalance,
+    receiverClosingBalance: receiverBankAccount.walletBalance,
+    overdraftNeeded,
+  };
 };
 
 const getApprovals = async (req, res) => {
@@ -245,6 +430,7 @@ const getApprovals = async (req, res) => {
   const approvals = await Approval.find(filter)
     .populate('customer', 'name account')
     .populate('assignedManager', 'name email employeeId')
+    .populate('reviewedBy', 'name email employeeId')
     .populate('transaction', 'fromAccountNumber toAccountNumber type')
     .sort({ createdAt: -1 });
 
@@ -310,6 +496,7 @@ const updateApproval = async (req, res) => {
     }
 
     const transaction = approval.transaction;
+    let executionSummary = null;
 
     if (!transaction || transaction.status !== 'pending') {
       throw new Error('Pending transaction not found for this approval');
@@ -318,9 +505,10 @@ const updateApproval = async (req, res) => {
     let customer = await User.findById(approval.customer).session(session);
 
     if (status === 'approved') {
-      await executePendingTransaction(transaction, session);
+      executionSummary = await executePendingTransaction(transaction, session);
     } else {
       transaction.status = 'failed';
+      transaction.failureReason = rejectionReason;
       await transaction.save({ session });
       if (customer) {
         customer.pendingRequests = Math.max(0, toWholeRupees(customer.pendingRequests) - 1);
@@ -380,18 +568,28 @@ const updateApproval = async (req, res) => {
 
     await session.commitTransaction();
 
-    await sendApprovalDecisionEmail({
-      customer,
-      approval,
-      transaction,
-      status,
-      rejectionReason,
-      managerName: req.user.name,
-    });
+    if (status === 'approved') {
+      await sendApprovedTransferEmails({
+        transaction,
+        approval,
+        managerName: req.user.name,
+        executionSummary,
+      });
+    } else {
+      await sendApprovalDecisionEmail({
+        customer,
+        approval,
+        transaction,
+        status,
+        rejectionReason,
+        managerName: req.user.name,
+      });
+    }
 
     const responseApproval = await Approval.findById(approval._id)
       .populate('customer', 'name account')
       .populate('assignedManager', 'name email employeeId')
+      .populate('reviewedBy', 'name email employeeId')
       .populate('transaction', 'fromAccountNumber toAccountNumber type');
 
     res.json({

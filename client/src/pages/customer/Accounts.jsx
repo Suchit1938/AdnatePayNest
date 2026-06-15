@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
+import ChartTooltip from "../../components/ui/ChartTooltip";
 import EmptyState from "../../components/ui/EmptyState";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
@@ -242,7 +243,8 @@ const Accounts = () => {
                   {account?.odBlocked ? "OD blocked" : accountOdUsed > 0 ? "OD active" : "OD available"}
                 </span>
               </div>
-              <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
+              <div className="group relative mt-4 rounded-full outline-none" tabIndex={0}>
+              <div className="h-2 overflow-hidden rounded-full bg-white">
                 <div
                   className={`h-full rounded-full ${
                     accountOdPercent >= 90
@@ -258,6 +260,13 @@ const Accounts = () => {
                         : "0%",
                   }}
                 />
+              </div>
+              <ChartTooltip
+                label="Account OD Usage"
+                value={`${accountOdPercent}% used`}
+                detail={`${formatCurrency(accountOdUsed)} used of ${formatCurrency(accountOdLimit)} limit`}
+                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+              />
               </div>
             </div>
           </SectionCard>

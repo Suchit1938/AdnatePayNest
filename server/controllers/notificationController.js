@@ -9,6 +9,9 @@ const titlesByAction = {
   'customer.created': 'New Customer Registered',
   'manual.message': 'Message From Admin',
   'manual.message.admin': 'Manual Message Sent',
+  'overdraft.payoff.completed': 'Overdraft Paid Off',
+  'overdraft.payoff.partial': 'Overdraft Payoff Posted',
+  'overdraft.used': 'Overdraft Used',
   'overdraft.third_attempt': 'Third OD Attempt Reached',
   'tier.policy.created.manager': 'New Tier Policy Added',
   'tier.policy.updated.admin': 'Manager Updated Tier Policy',
@@ -60,6 +63,8 @@ const getNotifications = async (req, res) => {
     'business.rules.updated',
     'customer.created',
     'manual.message.admin',
+    'overdraft.payoff.completed',
+    'overdraft.payoff.partial',
     'overdraft.third_attempt',
     'tier.policy.updated.admin',
   ];

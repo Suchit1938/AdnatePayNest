@@ -2,13 +2,16 @@ import {
   ArrowLeftRight,
   Clock,
   CreditCard,
+  ExternalLink,
   Landmark,
   ShieldCheck,
   Wallet,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import DashboardLayout from "../../layouts/DashboardLayout";
 import StatsCard from "../../components/dashboard/StatsCard";
+import ChartTooltip from "../../components/ui/ChartTooltip";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
@@ -19,6 +22,7 @@ import { getCustomerAccounts, getCustomerOverdraftSummary } from "../../utils/ov
 import { getTierTone } from "../../utils/ui";
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const accounts = getCustomerAccounts(user);
   const totalBalance = accounts.reduce(
@@ -120,7 +124,11 @@ const Dashboard = () => {
                   balance > 0 ? Math.max(6, Math.round((balance / highestBalance) * 100)) : 0;
 
                 return (
-                  <div key={account.accountNumber || account.accountType}>
+                  <div
+                    key={account.accountNumber || account.accountType}
+                    className="group relative rounded-lg outline-none"
+                    tabIndex={0}
+                  >
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <div>
                         <p className="font-semibold text-slate-900">
@@ -140,6 +148,12 @@ const Dashboard = () => {
                         style={{ width: `${width}%` }}
                       />
                     </div>
+                    <ChartTooltip
+                      label={`${account.accountType || "Savings"} Account`}
+                      value={formatCurrency(balance)}
+                      detail={`${maskAccountNumber(account.accountNumber)} | ${width}% of highest linked balance`}
+                      className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
+                    />
                   </div>
                 );
               })}
@@ -157,18 +171,26 @@ const Dashboard = () => {
             subtitle="Current tier based facility"
             icon={ShieldCheck}
           >
-            <div
-              className="mx-auto grid h-44 w-44 place-items-center rounded-full"
-              style={{
-                background: `conic-gradient(#f59e0b 0 ${overdraftPercent}%, #e0eef9 ${overdraftPercent}% 100%)`,
-              }}
-            >
+            <div className="group relative mx-auto h-44 w-44 rounded-full outline-none" tabIndex={0}>
+              <div
+                className="grid h-full w-full place-items-center rounded-full"
+                style={{
+                  background: `conic-gradient(#f59e0b 0 ${overdraftPercent}%, #e0eef9 ${overdraftPercent}% 100%)`,
+                }}
+              >
               <div className="grid h-28 w-28 place-items-center rounded-full bg-white text-center">
                 <div>
                   <p className="text-3xl font-bold text-slate-900">{overdraftPercent}%</p>
                   <p className="text-xs font-semibold uppercase text-slate-500">Used</p>
                 </div>
               </div>
+              </div>
+              <ChartTooltip
+                label="Overdraft Health"
+                value={`${overdraftPercent}% used`}
+                detail={`${formatCurrency(overdraftUsed)} used of ${formatCurrency(overdraftLimit)} limit`}
+                className="left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 group-hover:block group-focus:block"
+              />
             </div>
 
             <div className="mt-6 space-y-3">
@@ -189,21 +211,21 @@ const Dashboard = () => {
               <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
                 Tier
               </p>
-              <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-sm font-bold capitalize ${getTierTone(user?.classification).badge}`}>
-                {user?.classification || "Standard"}
-              </span>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold capitalize ${getTierTone(user?.classification).badge}`}>
+                  {user?.classification || "Standard"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigate("/overdraft#tier-policy")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100"
+                >
+                  View tier details
+                  <ExternalLink size={13} />
+                </button>
+              </div>
             </div>
             <MetricTile label="Status" value={user?.status || "active"} tone="success" />
-            <MetricTile
-              label="Primary Account"
-              value={maskAccountNumber(user?.account?.accountNumber)}
-            />
-            <MetricTile label="Transfer Count" value={user?.totalTransfers || 0} tone="accent" />
-            <MetricTile
-              label="Available Facility"
-              value={formatCurrency(availableOverdraft)}
-              tone="success"
-            />
           </div>
         </SectionCard>
       </PageContent>
