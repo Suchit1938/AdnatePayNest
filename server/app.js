@@ -20,7 +20,7 @@ const app = express();
 
 const allowedOrigins = [
     'http://localhost:5173',
-    'https://your-frontend-name.vercel.app',
+    'https://adnate-pay-nest.vercel.app',
 ];
 
 app.use(cors({
