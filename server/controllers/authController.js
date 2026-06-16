@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { sendEmail } = require('../utils/email');
+const { isValidEmail, normalizeEmail } = require('../utils/emailValidation');
 
 const createToken = (user) =>
   jwt.sign(
@@ -16,9 +17,7 @@ const createToken = (user) =>
   );
 
 const OTP_EXPIRY_MINUTES = 10;
-const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
-const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 const hashOtp = (otp) => bcrypt.hash(otp, 10);
 const isOtpExpired = (expiresAt) => !expiresAt || new Date(expiresAt).getTime() < Date.now();
@@ -111,7 +110,7 @@ const forgotPasswordSendOtp = async (req, res) => {
     return res.status(400).json({ message: 'Email is required' });
   }
 
-  if (!EMAIL_PATTERN.test(email)) {
+  if (!isValidEmail(email)) {
     return res.status(400).json({ message: 'Enter a valid email address' });
   }
 

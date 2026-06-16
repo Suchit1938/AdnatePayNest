@@ -21,6 +21,7 @@ import TablePagination from "../../components/ui/TablePagination";
 import { useToast } from "../../components/ui/useToast";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
+import { isValidEmail } from "../../utils/emailValidation";
 import { formatCurrency, maskAccountNumber } from "../../utils/format";
 import { getTierTone } from "../../utils/ui";
 
@@ -66,7 +67,6 @@ const getAccountTypeRule = (tier, accountType) =>
   (tier?.accountTypeOdRules || []).find((rule) => rule.accountType === accountType);
 
 const validationPatterns = {
-  email: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/,
   phone: /^[6-9]\d{9}$/,
   panNumber: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
   aadhaarNumber: /^\d{12}$/,
@@ -116,7 +116,7 @@ const validateField = (field, value) => {
         ? ""
         : "Name must contain only letters and spaces.";
     case "email":
-      return validationPatterns.email.test(trimmedValue.toLowerCase())
+      return isValidEmail(trimmedValue)
         ? ""
         : "Enter a valid email address.";
     case "phone":
@@ -597,7 +597,7 @@ const Customers = ({ managementMode = "users" }) => {
       return;
     }
 
-    if (!validationPatterns.email.test(normalizedEmail)) {
+    if (!isValidEmail(normalizedEmail)) {
       showFormToast("Enter a valid email address.", "warning");
       return;
     }
@@ -1149,7 +1149,7 @@ const Customers = ({ managementMode = "users" }) => {
         }
 
         if (field === "email") {
-          nextErrors.email = validationPatterns.email.test(trimmedValue.toLowerCase())
+          nextErrors.email = isValidEmail(trimmedValue)
             ? ""
             : "Enter a valid email address.";
         }
@@ -1188,7 +1188,7 @@ const Customers = ({ managementMode = "users" }) => {
         errors.fullName = "Name must contain only letters and spaces.";
       }
 
-      if (!validationPatterns.email.test(String(editForm.email || "").trim().toLowerCase())) {
+      if (!isValidEmail(editForm.email)) {
         errors.email = "Enter a valid email address.";
       }
 

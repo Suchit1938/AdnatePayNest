@@ -13,6 +13,7 @@ const {
 const { getAccountTypeOdRule, getAccountTypeOdRules } = require('../utils/accountTypeOdPolicy');
 const Counter = require('../models/Counter');
 const { sendEmail } = require('../utils/email');
+const { isValidEmail } = require('../utils/emailValidation');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const DEFAULT_BANK_IFSC = process.env.BANK_IFSC || 'ADNT0281237';
@@ -279,7 +280,6 @@ const deactivateManagerAccess = async ({ manager, status }) => {
 
 
 const validationPatterns = {
-  email: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/,
   phone: /^[6-9]\d{9}$/,
   panNumber: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
   aadhaarNumber: /^\d{12}$/,
@@ -738,7 +738,7 @@ const createUser = async (req, res) => {
     });
   }
 
-  if (!validationPatterns.email.test(normalizedEmail)) {
+  if (!isValidEmail(normalizedEmail)) {
     return res.status(400).json({
       message: 'Enter a valid email address',
     });
@@ -1304,7 +1304,7 @@ const updateUser = async (req, res) => {
     if (req.body.email !== undefined) {
       const email = trimValue(req.body.email).toLowerCase();
 
-      if (!validationPatterns.email.test(email)) {
+      if (!isValidEmail(email)) {
         return res.status(400).json({
           message: 'Enter a valid email address',
         });

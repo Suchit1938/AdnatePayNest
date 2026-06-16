@@ -6,13 +6,13 @@ import api from "../../api/axios";
 import brandLogo from "../../assets/brand/logo.png";
 import { useToast } from "../../components/ui/useToast";
 import { useAuth } from "../../context/useAuth";
+import { isValidEmail } from "../../utils/emailValidation";
 
-const emailPattern = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const emailErrorMessage = "Enter a valid email address.";
 
 const getEmailError = (value) => {
   const normalizedEmail = value.trim().toLowerCase();
-  return normalizedEmail && !emailPattern.test(normalizedEmail) ? emailErrorMessage : "";
+  return normalizedEmail && !isValidEmail(normalizedEmail) ? emailErrorMessage : "";
 };
 
 function Login() {
