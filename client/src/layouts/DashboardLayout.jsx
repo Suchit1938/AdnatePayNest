@@ -6,7 +6,7 @@ const DashboardLayout = ({ children }) => {
       <Sidebar />
 
       <main className="min-h-screen overflow-y-auto bg-bank-surface pb-24 lg:ml-64 lg:pb-0">
-        <div className="mx-auto max-w-[1400px] px-3 py-4 sm:px-5 sm:py-6 lg:p-8">
+        <div className="mx-auto w-full max-w-[1680px] px-3 py-4 sm:px-5 sm:py-6 lg:p-8">
           {children}
         </div>
       </main>

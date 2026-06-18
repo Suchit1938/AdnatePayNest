@@ -284,7 +284,6 @@ const Profile = () => {
         <SectionCard
           title="Personal Details"
           subtitle="Review verified identity details and update your contact information."
-          className="max-w-5xl"
         >
           <form onSubmit={saveProfile}>
             {message && (
@@ -337,7 +336,6 @@ const Profile = () => {
         <SectionCard
           title="Change Password"
           subtitle="Verify the password change with an OTP sent to your registered email."
-          className="max-w-5xl"
         >
           <form
             onSubmit={passwordStep === "details" ? sendPasswordOtp : verifyPasswordOtp}

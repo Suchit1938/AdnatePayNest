@@ -306,7 +306,6 @@ const TransferFunds = () => {
               ? "Move funds instantly between your own accounts"
               : "Send funds to a saved beneficiary"
           }
-          className="max-w-2xl"
         >
           {message && <div className="alert-success mb-6">{message}</div>}
           {error && <div className="alert-error mb-6">{error}</div>}
@@ -345,7 +344,7 @@ const TransferFunds = () => {
           </div>
 
           {transferMode === "beneficiary" ? (
-            <form onSubmit={submitTransfer}>
+            <form onSubmit={submitTransfer} className="grid grid-cols-1 gap-x-5 gap-y-5 lg:grid-cols-2">
 
         <label className="label-field">
           From Account
@@ -373,7 +372,7 @@ const TransferFunds = () => {
         </label>
 
         {selectedFromAccount && (
-          <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+          <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 lg:col-span-2">
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <p className="font-semibold">Balance</p>
@@ -405,7 +404,7 @@ const TransferFunds = () => {
           </div>
         )}
 
-        <label className="label-field mt-5">
+        <label className="label-field">
           Beneficiary
           <select
             name="beneficiaryId"
@@ -425,7 +424,7 @@ const TransferFunds = () => {
           </select>
         </label>
 
-        <label className="label-field mt-5">
+        <label className="label-field">
           Beneficiary Account
           <select
             name="toAccountNumber"
@@ -445,7 +444,7 @@ const TransferFunds = () => {
           </select>
         </label>
 
-        <label className="label-field mt-5">
+        <label className="label-field">
           Amount
           <input
             name="amount"
@@ -458,7 +457,7 @@ const TransferFunds = () => {
           />
         </label>
 
-        <label className="label-field mt-5">
+        <label className="label-field lg:col-span-2">
           Remarks
           <input
             name="remarks"
@@ -471,16 +470,16 @@ const TransferFunds = () => {
 
             <button
               type="submit"
-              className="btn-primary mt-6"
+              className="btn-primary w-full lg:col-span-2 lg:w-fit"
               disabled={beneficiaries.length === 0}
             >
               Send Transfer Request
             </button>
           </form>
           ) : (
-            <form onSubmit={submitOwnTransfer}>
+            <form onSubmit={submitOwnTransfer} className="grid grid-cols-1 gap-x-5 gap-y-5 lg:grid-cols-2">
               {userAccounts.length < 2 && (
-                <div className="alert-error mb-6">
+                <div className="alert-error lg:col-span-2">
                   You need at least two accounts to transfer money between your own accounts.
                 </div>
               )}
@@ -503,7 +502,7 @@ const TransferFunds = () => {
                 </select>
               </label>
 
-              <label className="label-field mt-5">
+              <label className="label-field">
                 To Account
                 <select
                   name="toAccountNumber"
@@ -523,7 +522,7 @@ const TransferFunds = () => {
                 </select>
               </label>
 
-              <label className="label-field mt-5">
+              <label className="label-field">
                 Amount
                 <input
                   name="amount"
@@ -538,7 +537,7 @@ const TransferFunds = () => {
               </label>
 
               {selectedOwnFromAccount && selectedOwnToAccount && ownTransferAmount > 0 && (
-                <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 lg:col-span-2">
                   <p className="font-bold">Transfer Preview</p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div>
@@ -562,7 +561,7 @@ const TransferFunds = () => {
                 </div>
               )}
 
-              <label className="label-field mt-5">
+              <label className="label-field">
                 Remarks
                 <input
                   name="remarks"
@@ -576,7 +575,7 @@ const TransferFunds = () => {
 
               <button
                 type="submit"
-                className="btn-primary mt-6"
+                className="btn-primary w-full lg:col-span-2 lg:w-fit"
                 disabled={userAccounts.length < 2}
               >
                 Transfer Between Own Accounts

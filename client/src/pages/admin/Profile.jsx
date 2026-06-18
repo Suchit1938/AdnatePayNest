@@ -180,7 +180,6 @@ const AdminProfile = () => {
         <SectionCard
           title="Admin Profile Details"
           subtitle="Manage contact details while protected identity fields stay fixed."
-          className="max-w-5xl"
         >
           <form onSubmit={saveProfile}>
             {message && (

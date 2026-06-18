@@ -119,7 +119,7 @@ const Sidebar = () => {
         </div>
       )}
 
-      <nav className="mt-4 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2">
+      <nav className="app-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2">
         <ul className="flex flex-col gap-1">
           {navItems.map(({ label, path, icon: Icon }) => (
             <li key={label}>
@@ -155,7 +155,7 @@ const Sidebar = () => {
       </div>
     </aside>
     <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-bank-card-border bg-white/95 px-2 py-2 shadow-2xl shadow-slate-900/15 backdrop-blur lg:hidden">
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+      <div className="app-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
         {navItems.map(({ label, path, icon: Icon }) => (
           <NavLink
             key={label}

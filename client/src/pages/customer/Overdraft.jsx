@@ -481,9 +481,8 @@ const Overdraft = () => {
           </div>
         </SectionCard>
 
-        <section className="section-split">
+        <section>
           <SectionCard
-            className="section-split-main"
             title={`${odAccount?.accountType || "Selected"} Account Payoff`}
             subtitle="Pay interest first, then reduce the selected account's OD principal"
             icon={CreditCard}
