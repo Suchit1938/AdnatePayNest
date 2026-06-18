@@ -228,6 +228,7 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
     overdraftLimit: firstDefined(bankAccount.odLimit, user.account?.overdraftLimit, 0),
     overdraftUsed: firstDefined(bankAccount.odUsed, 0),
     odStartedAt: bankAccount.odStartedAt || null,
+    odDrawdowns: bankAccount.odDrawdowns || [],
     odCountThisMonth: getCurrentMonthOdCount(bankAccount),
     odBlocked: isCurrentMonthOdBlocked(bankAccount),
   };
@@ -339,7 +340,12 @@ const executePendingTransaction = async (transaction, session) => {
   senderBankAccount.odUsed = nextOverdraftUsed;
 
   if (overdraftNeeded > 0) {
-    senderBankAccount.odStartedAt = senderBankAccount.odStartedAt || new Date();
+    const usedAt = new Date();
+    senderBankAccount.odStartedAt = senderBankAccount.odStartedAt || usedAt;
+    senderBankAccount.odDrawdowns = [
+      ...(senderBankAccount.odDrawdowns || []),
+      { amount: overdraftNeeded, usedAt },
+    ];
     senderBankAccount.odCountThisMonth = toWholeRupees(senderBankAccount.odCountThisMonth) + 1;
     senderBankAccount.odCountMonthKey = getCurrentMonthKey();
     senderBankAccount.odBlocked = senderBankAccount.odCountThisMonth >= monthlyOdUses;

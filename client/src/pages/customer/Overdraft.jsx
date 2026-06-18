@@ -41,9 +41,14 @@ const getInterestDays = (startedAt) => {
 const calculateInterest = (principal, interestRate, startedAt) => {
   const amount = Math.max(0, Number(principal || 0));
   const rate = parseMonthlyInterestRate(interestRate);
+  const drawdownEntries = [];
 
   if (amount <= 0 || rate <= 0) {
-    return { interestAmount: 0, interestDays: amount > 0 ? getInterestDays(startedAt) : 0 };
+    return {
+      interestAmount: 0,
+      interestDays: amount > 0 ? getInterestDays(startedAt) : 0,
+      drawdowns: drawdownEntries,
+    };
   }
 
   const interestDays = getInterestDays(startedAt);
@@ -51,6 +56,86 @@ const calculateInterest = (principal, interestRate, startedAt) => {
   return {
     interestAmount: Math.ceil(amount * rate * (interestDays / 30)),
     interestDays,
+    drawdowns: [
+      {
+        amount,
+        usedAt: startedAt,
+        interestDays,
+        interestAmount: Math.ceil(amount * rate * (interestDays / 30)),
+      },
+    ],
+  };
+};
+
+const normalizeDrawdowns = (drawdowns, principal, startedAt) => {
+  const entries = (drawdowns || [])
+    .map((entry) => ({
+      amount: Math.max(0, Number(entry.amount || 0)),
+      usedAt: entry.usedAt || startedAt,
+    }))
+    .filter((entry) => entry.amount > 0);
+  const entryTotal = entries.reduce((sum, entry) => sum + entry.amount, 0);
+  const currentPrincipal = Math.max(0, Number(principal || 0));
+
+  if (entryTotal === currentPrincipal) return entries;
+
+  if (entryTotal > currentPrincipal) {
+    let remaining = currentPrincipal;
+
+    return entries
+      .map((entry) => {
+        const amount = Math.min(entry.amount, remaining);
+        remaining -= amount;
+        return { ...entry, amount };
+      })
+      .filter((entry) => entry.amount > 0);
+  }
+
+  if (currentPrincipal > entryTotal) {
+    return [
+      ...entries,
+      {
+        amount: currentPrincipal - entryTotal,
+        usedAt: startedAt,
+      },
+    ];
+  }
+
+  return entries;
+};
+
+const calculateDrawdownInterest = (principal, interestRate, startedAt, drawdowns) => {
+  const entries = normalizeDrawdowns(drawdowns, principal, startedAt);
+  const rate = parseMonthlyInterestRate(interestRate);
+
+  if (entries.length === 0 || rate <= 0) {
+    return {
+      interestAmount: 0,
+      interestDays: entries.length
+        ? Math.max(...entries.map((entry) => getInterestDays(entry.usedAt)))
+        : 0,
+      drawdowns: entries.map((entry) => ({
+        ...entry,
+        interestDays: getInterestDays(entry.usedAt),
+        interestAmount: 0,
+      })),
+    };
+  }
+
+  const interestRows = entries.map((entry) => {
+    const interestDays = getInterestDays(entry.usedAt);
+
+    return {
+      ...entry,
+      interestDays,
+      interestAmount: Math.ceil(entry.amount * rate * (interestDays / 30)),
+    };
+  });
+
+  return {
+    interestAmount: interestRows.reduce((sum, entry) => sum + entry.interestAmount, 0),
+    interestDays: Math.max(...interestRows.map((entry) => entry.interestDays)),
+    drawdowns: interestRows,
   };
 };
 
@@ -95,7 +180,14 @@ const Overdraft = () => {
   const accountUsed = Number(odAccount?.overdraftUsed || 0);
   const accountAvailable = Math.max(0, accountLimit - accountUsed);
   const monthlyOdUses = Number(accountRule?.monthlyOdUses ?? odAccount?.odMonthlyUseLimit ?? 3);
-  const interest = calculateInterest(accountUsed, interestRate, odAccount?.odStartedAt);
+  const interest = odAccount?.odDrawdowns?.length
+    ? calculateDrawdownInterest(
+      accountUsed,
+      interestRate,
+      odAccount?.odStartedAt,
+      odAccount.odDrawdowns
+    )
+    : calculateInterest(accountUsed, interestRate, odAccount?.odStartedAt);
   const totalDueNow = accountUsed + interest.interestAmount;
   const effectivePayoffAmount = Number(payoffAmount || totalDueNow);
   const paymentBalance = Number(paymentAccount?.balance || 0);
@@ -425,6 +517,81 @@ const Overdraft = () => {
               />
             </div>
 
+            <div className="mt-6 rounded-xl border border-blue-100 bg-blue-50 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-bold uppercase text-blue-700">
+                    Payoff Calculation
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-600">
+                    Total payable = OD used + accrued interest
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white px-4 py-3 text-right shadow-sm ring-1 ring-blue-100">
+                  <p className="text-xs font-bold uppercase text-slate-500">Total Due Today</p>
+                  <p className="mt-1 text-xl font-bold text-slate-950">
+                    {formatCurrency(totalDueNow)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="rounded-lg bg-white p-4 ring-1 ring-blue-100">
+                  <p className="text-xs font-bold uppercase text-slate-500">OD Principal</p>
+                  <p className="mt-1 text-lg font-bold text-slate-950">
+                    {formatCurrency(accountUsed)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white p-4 ring-1 ring-blue-100">
+                  <p className="text-xs font-bold uppercase text-slate-500">
+                    Accrued Interest
+                  </p>
+                  <p className="mt-1 text-lg font-bold text-amber-700">
+                    {formatCurrency(interest.interestAmount)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white p-4 ring-1 ring-blue-100">
+                  <p className="text-xs font-bold uppercase text-slate-500">Active Days</p>
+                  <p className="mt-1 text-lg font-bold text-slate-950">
+                    {interest.interestDays} day{interest.interestDays === 1 ? "" : "s"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-lg bg-white p-4 text-sm font-semibold leading-6 text-slate-600 ring-1 ring-blue-100">
+                Interest is calculated for each OD use separately. Same-day OD still counts as
+                1 day. Payments clear interest first, then reduce OD principal.
+              </div>
+
+              {interest.drawdowns.length > 0 && (
+                <div className="mt-4 overflow-hidden rounded-lg bg-white ring-1 ring-blue-100">
+                  {interest.drawdowns.map((entry, index) => (
+                    <div
+                      key={`${entry.usedAt || "od"}-${index}`}
+                      className={`grid grid-cols-1 gap-2 px-4 py-3 text-sm md:grid-cols-4 ${
+                        index === interest.drawdowns.length - 1
+                          ? ""
+                          : "border-b border-blue-100"
+                      }`}
+                    >
+                      <span className="font-bold text-slate-950">
+                        {formatCurrency(entry.amount)}
+                      </span>
+                      <span className="font-semibold text-slate-600">
+                        {entry.interestDays} day{entry.interestDays === 1 ? "" : "s"}
+                      </span>
+                      <span className="font-semibold text-slate-600">
+                        {interestRate || "monthly rate"} x {entry.interestDays}/30
+                      </span>
+                      <span className="font-bold text-amber-700 md:text-right">
+                        {formatCurrency(entry.interestAmount)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="mt-6 rounded-xl border border-bank-card-border bg-bank-surface p-5">
               <label className="label-field">
                 Pay From Account
@@ -496,6 +663,16 @@ const Overdraft = () => {
             </div>
 
             <div className="metric-grid mt-5">
+              <MetricTile
+                label="Payment Clears Interest"
+                value={formatCurrency(interestPaidEstimate)}
+                tone={interestPaidEstimate > 0 ? "warning" : "default"}
+              />
+              <MetricTile
+                label="Payment Reduces OD"
+                value={formatCurrency(principalPaidEstimate)}
+                tone={principalPaidEstimate > 0 ? "success" : "default"}
+              />
               <MetricTile
                 label="Remaining OD After Payment"
                 value={formatCurrency(remainingAfterPayment)}

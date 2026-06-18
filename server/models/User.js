@@ -49,6 +49,22 @@ const accountSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    odDrawdowns: {
+      type: [
+        {
+          amount: {
+            type: Number,
+            required: true,
+            min: 0,
+          },
+          usedAt: {
+            type: Date,
+            default: Date.now,
+          },
+        },
+      ],
+      default: [],
+    },
     odCountThisMonth: {
       type: Number,
       default: 0,

@@ -196,7 +196,7 @@ const Accounts = () => {
             <div className="metric-grid-3 mt-8">
               <MetricTile
                 label="Available Balance"
-                value={formatCurrency(account?.availableBalance || account?.balance || 0)}
+                value={formatCurrency(account?.availableBalance ?? account?.balance ?? 0)}
                 tone="accent"
               />
               <MetricTile

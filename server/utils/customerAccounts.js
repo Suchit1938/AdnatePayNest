@@ -77,6 +77,7 @@ const buildAccountSnapshot = (user, bankAccount, tier) => {
     overdraftLimit: toWholeRupees(firstDefined(bankAccount.odLimit, existingAccount.overdraftLimit)),
     overdraftUsed: toWholeRupees(firstDefined(bankAccount.odUsed, existingAccount.overdraftUsed)),
     odStartedAt: bankAccount.odStartedAt || existingAccount.odStartedAt || null,
+    odDrawdowns: bankAccount.odDrawdowns || existingAccount.odDrawdowns || [],
     odCountThisMonth: getCurrentMonthOdCount(bankAccount),
     odMonthlyUseLimit: toWholeRupees(odRule.monthlyOdUses),
     odBlocked: isCurrentMonthOdBlocked(bankAccount),

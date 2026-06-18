@@ -144,6 +144,10 @@ const Statement = () => {
   const [statementEntries, setStatementEntries] = useState([]);
   const [emailSending, setEmailSending] = useState(false);
   const accounts = useMemo(() => getCustomerAccounts(user), [user]);
+  const accountNumbers = useMemo(
+    () => new Set(accounts.map((account) => account.accountNumber).filter(Boolean)),
+    [accounts]
+  );
   const primaryAccount = accounts[0] || user?.account || null;
   const userName = user?.name;
   const userAccountNumber = primaryAccount?.accountNumber || "";
@@ -157,18 +161,28 @@ const Statement = () => {
         setStatementEntries(
           (data.transactions || []).map((transaction) => {
             const payoff = isOverdraftPayoff(transaction);
+            const fromLinkedAccount = accountNumbers.has(transaction.fromAccountNumber);
+            const toLinkedAccount = accountNumbers.has(transaction.toAccountNumber);
+            const isOwnLinkedTransfer = fromLinkedAccount && toLinkedAccount;
+            const entryType = isOwnLinkedTransfer
+              ? "Transfer"
+              : payoff || fromLinkedAccount || transaction.sender === userName
+                ? "Debit"
+                : "Credit";
 
             return {
               id: transaction.id,
               date: transaction.date,
               detail: payoff
                 ? "Overdraft payoff"
+                : isOwnLinkedTransfer
+                  ? `Own account transfer to ${maskAccountNumber(transaction.toAccountNumber)}`
                 : transaction.sender === userName
                   ? `Transfer to ${transaction.receiver}`
                   : `Transfer from ${transaction.sender}`,
               accountDetail: getAccountTrail(transaction, userAccountNumber),
               accountType: transaction.accountType || userAccountType || "Savings",
-              type: payoff || transaction.sender === userName ? "Debit" : "Credit",
+              type: entryType,
               amount: Number(transaction.amount || 0),
               status: transaction.status,
               transactionType: transaction.type || "bank-transfer",
@@ -183,7 +197,7 @@ const Statement = () => {
         );
       })
       .catch(() => setStatementEntries([]));
-  }, [userAccountNumber, userAccountType, userName]);
+  }, [accountNumbers, userAccountNumber, userAccountType, userName]);
 
   const monthStart = getMonthStart(selectedMonth);
   const monthEnd = getMonthEnd(selectedMonth);
@@ -233,7 +247,7 @@ const Statement = () => {
     [periodEntries]
   );
   const liveBalance = accounts.reduce(
-    (sum, account) => sum + Number(account.balance || account.availableBalance || 0),
+    (sum, account) => sum + Number(account.balance ?? account.availableBalance ?? 0),
     0
   );
   const netMovement = totalCredits - totalDebits;
@@ -274,7 +288,8 @@ const Statement = () => {
     return sortedEntries.reduce(
       (accumulator, entry) => {
         const rawBalance = entry.isPosted
-          ? accumulator.balance + (entry.type === "Credit" ? entry.amount : -entry.amount)
+          ? accumulator.balance +
+            (entry.type === "Credit" ? entry.amount : entry.type === "Debit" ? -entry.amount : 0)
           : accumulator.balance;
         const balance = Math.max(0, rawBalance);
         const ledgerEntry = {
@@ -340,6 +355,8 @@ const Statement = () => {
       ? getRejectionNarrative(statement)
       : statement.type === "Credit" && statement.isPosted
         ? formatCurrency(statement.amount)
+        : statement.type === "Transfer" && statement.isPosted
+          ? "Internal transfer"
         : "",
     Balance: statement.failureReason
       ? "Not posted"
@@ -792,12 +809,20 @@ const Statement = () => {
                               <p className="whitespace-nowrap text-lg font-bold leading-7 text-red-700">
                                 {formatCurrency(statement.amount)}
                               </p>
+                            ) : statement.type === "Transfer" && statement.isPosted ? (
+                              <p className="whitespace-nowrap text-lg font-bold leading-7 text-slate-500">
+                                {formatCurrency(statement.amount)}
+                              </p>
                             ) : (
                               <span className="text-xl font-bold text-red-700">-</span>
                             )}
                           </td>
                           <td className="px-3 py-7 text-right align-middle sm:px-5">
                             {statement.type === "Credit" && statement.isPosted ? (
+                              <p className="whitespace-nowrap text-lg font-bold leading-7 text-emerald-700">
+                                {formatCurrency(statement.amount)}
+                              </p>
+                            ) : statement.type === "Transfer" && statement.isPosted ? (
                               <p className="whitespace-nowrap text-lg font-bold leading-7 text-emerald-700">
                                 {formatCurrency(statement.amount)}
                               </p>

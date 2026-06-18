@@ -4,7 +4,11 @@ const BankAccount = require('../models/BankAccount');
 const Tier = require('../models/Tier');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
-const { calculateOverdraftInterest } = require('../utils/overdraftInterest');
+const {
+  applyPrincipalPaymentToDrawdowns,
+  calculateOverdraftInterestByDrawdown,
+  normalizeDrawdowns,
+} = require('../utils/overdraftInterest');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { writeSystemLog } = require('../utils/systemLog');
 
@@ -48,7 +52,13 @@ const payOffOverdraft = async (req, res) => {
       overdraftAccount.odStartedAt ||
       user.accounts?.find((account) => account.accountNumber === overdraftAccount.accountNumber)?.odStartedAt ||
       new Date();
-    const interest = calculateOverdraftInterest({
+    const odDrawdowns = normalizeDrawdowns({
+      drawdowns: overdraftAccount.odDrawdowns,
+      principal: overdraftUsed,
+      startedAt: odStartedAt,
+    });
+    const interest = calculateOverdraftInterestByDrawdown({
+      drawdowns: odDrawdowns,
       principal: overdraftUsed,
       monthlyInterestRate: tier?.lateFeeRate,
       startedAt: odStartedAt,
@@ -89,7 +99,14 @@ const payOffOverdraft = async (req, res) => {
     paymentAccount.availableBalance = paymentAccount.walletBalance;
 
     overdraftAccount.odUsed = remainingOverdraft;
-    overdraftAccount.odStartedAt = remainingOverdraft > 0 ? overdraftAccount.odStartedAt || odStartedAt : null;
+    overdraftAccount.odDrawdowns = applyPrincipalPaymentToDrawdowns({
+      drawdowns: odDrawdowns,
+      principalPayment,
+    });
+    overdraftAccount.odStartedAt =
+      remainingOverdraft > 0
+        ? overdraftAccount.odDrawdowns[0]?.usedAt || overdraftAccount.odStartedAt || odStartedAt
+        : null;
 
     await Promise.all([
       paymentAccount.save({ session }),
@@ -143,6 +160,7 @@ const payOffOverdraft = async (req, res) => {
           interestAmount: interest.interestAmount,
           interestPaid,
           interestDays: interest.interestDays,
+          interestBreakdown: interest.drawdowns,
           principalPaid: principalPayment,
           remainingOverdraft,
           totalDue,
@@ -164,6 +182,7 @@ const payOffOverdraft = async (req, res) => {
       interestAmount: interest.interestAmount,
       interestPaid,
       interestDays: interest.interestDays,
+      interestBreakdown: interest.drawdowns,
       principalPaid: principalPayment,
       totalDue,
       remainingOverdraft,
