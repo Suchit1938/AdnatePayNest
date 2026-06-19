@@ -1,4 +1,5 @@
 import {
+  BadgeIndianRupee,
   Bell,
   Mail,
   MessageSquareText,
@@ -64,9 +65,44 @@ const initialMessageForm = {
   sendEmail: false,
 };
 
+const defaultLoanRules = {
+  loanTypes: [],
+  scoreWeights: {
+    incomeStrength: 20,
+    liabilities: 30,
+    classification: 20,
+    employmentStability: 15,
+    accountHistory: 10,
+    overdraftUsage: 5,
+  },
+  decisionBands: {
+    highlyEligible: 80,
+    eligible: 65,
+    review: 50,
+  },
+  classificationBenefits: {
+    silver: {
+      classificationScoreRatio: 0.5,
+      interestDiscount: 0,
+      maxAmountMultiplier: 1,
+    },
+    gold: {
+      classificationScoreRatio: 0.75,
+      interestDiscount: 0.5,
+      maxAmountMultiplier: 1.25,
+    },
+    platinum: {
+      classificationScoreRatio: 1,
+      interestDiscount: 1,
+      maxAmountMultiplier: 1.5,
+    },
+  },
+};
+
 const BusinessRules = () => {
   const toast = useToast();
   const [permissions, setPermissions] = useState(defaultPermissions);
+  const [loanRules, setLoanRules] = useState(defaultLoanRules);
   const [updatedAt, setUpdatedAt] = useState("");
   const [customers, setCustomers] = useState([]);
   const [managers, setManagers] = useState([]);
@@ -86,6 +122,22 @@ const BusinessRules = () => {
             ...(config.managerTierPermissions || {}),
           });
           setUpdatedAt(config.updatedAt || "");
+          setLoanRules({
+            ...defaultLoanRules,
+            ...(config.loanRules || {}),
+            scoreWeights: {
+              ...defaultLoanRules.scoreWeights,
+              ...(config.loanRules?.scoreWeights || {}),
+            },
+            decisionBands: {
+              ...defaultLoanRules.decisionBands,
+              ...(config.loanRules?.decisionBands || {}),
+            },
+            classificationBenefits: {
+              ...defaultLoanRules.classificationBenefits,
+              ...(config.loanRules?.classificationBenefits || {}),
+            },
+          });
           setAuditLogs(rulesResult.value.data.auditLogs || []);
         }
 
@@ -124,14 +176,31 @@ const BusinessRules = () => {
     try {
       const { data } = await api.patch("/business-rules", {
         managerTierPermissions: permissions,
+        loanRules,
       });
 
       setPermissions({
         ...defaultPermissions,
         ...(data.config.managerTierPermissions || {}),
       });
+      setLoanRules({
+        ...defaultLoanRules,
+        ...(data.config.loanRules || {}),
+        scoreWeights: {
+          ...defaultLoanRules.scoreWeights,
+          ...(data.config.loanRules?.scoreWeights || {}),
+        },
+        decisionBands: {
+          ...defaultLoanRules.decisionBands,
+          ...(data.config.loanRules?.decisionBands || {}),
+        },
+        classificationBenefits: {
+          ...defaultLoanRules.classificationBenefits,
+          ...(data.config.loanRules?.classificationBenefits || {}),
+        },
+      });
       setUpdatedAt(data.config.updatedAt || "");
-      toast.success("Manager tier edit permissions updated.");
+      toast.success("Business rules updated.");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to update business rules.");
     } finally {
@@ -144,6 +213,48 @@ const BusinessRules = () => {
       ...current,
       [field]: value,
       ...(field === "targetType" ? { targetUserId: "", targetTier: "" } : {}),
+    }));
+  };
+
+  const updateLoanTypeRule = (key, field, value) => {
+    setLoanRules((current) => ({
+      ...current,
+      loanTypes: (current.loanTypes || []).map((rule) =>
+        rule.key === key ? { ...rule, [field]: value } : rule
+      ),
+    }));
+  };
+
+  const updateLoanScoreWeight = (field, value) => {
+    setLoanRules((current) => ({
+      ...current,
+      scoreWeights: {
+        ...current.scoreWeights,
+        [field]: value,
+      },
+    }));
+  };
+
+  const updateDecisionBand = (field, value) => {
+    setLoanRules((current) => ({
+      ...current,
+      decisionBands: {
+        ...current.decisionBands,
+        [field]: value,
+      },
+    }));
+  };
+
+  const updateClassificationBenefit = (classification, field, value) => {
+    setLoanRules((current) => ({
+      ...current,
+      classificationBenefits: {
+        ...current.classificationBenefits,
+        [classification]: {
+          ...(current.classificationBenefits?.[classification] || {}),
+          [field]: value,
+        },
+      },
     }));
   };
 
@@ -277,6 +388,217 @@ const BusinessRules = () => {
                 />
               </label>
             ))}
+          </div>
+        </section>
+
+        <section className="card-padded">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="rounded-lg bg-emerald-50 p-2.5 text-emerald-700">
+                <BadgeIndianRupee size={20} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-xl font-bold text-slate-950">Loan Policy Rules</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  Configure loan products and the score model used for manager recommendations.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={savePermissions}
+              disabled={isSavingPermissions}
+              className="btn-primary"
+            >
+              <Save size={17} />
+              {isSavingPermissions ? "Saving..." : "Save Loan Rules"}
+            </button>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {(loanRules.loanTypes || []).map((rule) => (
+              <article key={rule.key} className="rounded-xl border border-bank-card-border bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="font-bold text-slate-950">{rule.label}</h3>
+                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                    {rule.key}
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="label-field">
+                    Annual Interest (%)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={rule.annualInterestRate}
+                      onChange={(event) => updateLoanTypeRule(rule.key, "annualInterestRate", event.target.value)}
+                      className="input-field"
+                    />
+                  </label>
+                  <label className="label-field">
+                    Minimum Amount
+                    <input
+                      type="number"
+                      min="0"
+                      value={rule.minAmount}
+                      onChange={(event) => updateLoanTypeRule(rule.key, "minAmount", event.target.value)}
+                      className="input-field"
+                    />
+                  </label>
+                  <label className="label-field">
+                    Maximum Amount
+                    <input
+                      type="number"
+                      min="0"
+                      value={rule.maxAmount}
+                      onChange={(event) => updateLoanTypeRule(rule.key, "maxAmount", event.target.value)}
+                      className="input-field"
+                    />
+                  </label>
+                  <label className="label-field">
+                    Tenure Range
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={rule.minTenureMonths}
+                        onChange={(event) => updateLoanTypeRule(rule.key, "minTenureMonths", event.target.value)}
+                        className="input-field"
+                        aria-label={`${rule.label} minimum tenure`}
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        value={rule.maxTenureMonths}
+                        onChange={(event) => updateLoanTypeRule(rule.key, "maxTenureMonths", event.target.value)}
+                        className="input-field"
+                        aria-label={`${rule.label} maximum tenure`}
+                      />
+                    </div>
+                  </label>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-4">
+            <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+              <h3 className="font-bold text-slate-950">Eligibility Score Weights</h3>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {Object.entries(loanRules.scoreWeights || {}).map(([field, value]) => (
+                  <label key={field} className="label-field">
+                    {field.replace(/([A-Z])/g, " $1")}
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={value}
+                      onChange={(event) => updateLoanScoreWeight(field, event.target.value)}
+                      className="input-field bg-white"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+              <h3 className="font-bold text-slate-950">Decision Bands</h3>
+              <div className="mt-4 grid grid-cols-1 gap-3">
+                {[
+                  ["highlyEligible", "Highly Eligible"],
+                  ["eligible", "Eligible"],
+                  ["review", "Manager Review"],
+                ].map(([field, label]) => (
+                  <label key={field} className="label-field">
+                    {label}
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={loanRules.decisionBands?.[field] ?? ""}
+                      onChange={(event) => updateDecisionBand(field, event.target.value)}
+                      className="input-field bg-white"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-xl border border-bank-card-border bg-white p-4">
+            <h3 className="font-bold text-slate-950">Classification Loan Benefits</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              These values are applied automatically from the customer classification assigned during customer creation.
+            </p>
+            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+              {[
+                ["silver", "Silver"],
+                ["gold", "Gold"],
+                ["platinum", "Platinum"],
+              ].map(([classification, label]) => {
+                const benefit = loanRules.classificationBenefits?.[classification] || {};
+
+                return (
+                  <article key={classification} className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+                    <h4 className="font-bold text-slate-950">{label}</h4>
+                    <div className="mt-4 grid grid-cols-1 gap-3">
+                      <label className="label-field">
+                        Score Ratio
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          value={benefit.classificationScoreRatio ?? ""}
+                          onChange={(event) =>
+                            updateClassificationBenefit(
+                              classification,
+                              "classificationScoreRatio",
+                              event.target.value
+                            )
+                          }
+                          className="input-field bg-white"
+                        />
+                      </label>
+                      <label className="label-field">
+                        Interest Discount (%)
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={benefit.interestDiscount ?? ""}
+                          onChange={(event) =>
+                            updateClassificationBenefit(
+                              classification,
+                              "interestDiscount",
+                              event.target.value
+                            )
+                          }
+                          className="input-field bg-white"
+                        />
+                      </label>
+                      <label className="label-field">
+                        Max Amount Multiplier
+                        <input
+                          type="number"
+                          min="0.1"
+                          step="0.05"
+                          value={benefit.maxAmountMultiplier ?? ""}
+                          onChange={(event) =>
+                            updateClassificationBenefit(
+                              classification,
+                              "maxAmountMultiplier",
+                              event.target.value
+                            )
+                          }
+                          className="input-field bg-white"
+                        />
+                      </label>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </div>
         </section>
 

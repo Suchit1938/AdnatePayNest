@@ -117,7 +117,7 @@ const getNextSequence = async (key, startValue) => {
   const counter = await Counter.findOneAndUpdate(
     { key },
     { $inc: { value: 1 } },
-    { new: true }
+    { returnDocument: 'after' }
   );
 
   return counter.value;

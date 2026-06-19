@@ -20,6 +20,7 @@ import Beneficiaries from "../pages/customer/Beneficiaries";
 import Statement from "../pages/customer/Statement";
 import Profile from "../pages/customer/Profile";
 import Overdraft from "../pages/customer/Overdraft";
+import Loans from "../pages/customer/Loans";
 
 const customerRoute = (element) => (
   <ProtectedRoutes allowedRoles={["customer"]}>
@@ -112,6 +113,7 @@ const AppRoutes = () => {
           <Route path="/transfer" element={customerRoute(<TransferFunds />)} />
           <Route path="/accounts" element={customerRoute(<Accounts />)} />
           <Route path="/overdraft" element={customerRoute(<Overdraft />)} />
+          <Route path="/loans" element={customerRoute(<Loans />)} />
           <Route path="/beneficiaries" element={customerRoute(<Beneficiaries />)} />
           <Route path="/transactions" element={customerRoute(<Transactions />)} />
           <Route path="/statement" element={customerRoute(<Statement />)} />

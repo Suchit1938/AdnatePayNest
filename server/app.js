@@ -14,12 +14,14 @@ const overdraftRoutes = require('./routes/overdraftRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const businessRuleRoutes = require('./routes/businessRuleRoutes');
+const loanRoutes = require('./routes/loanRoutes');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
 
 const app = express();
 
 const allowedOrigins = [
     'http://localhost:5173',
+    'http://127.0.0.1:5173',
     'https://adnate-pay-nest.vercel.app',
 ];
 
@@ -27,7 +29,8 @@ app.use(cors({
     origin: allowedOrigins,
     credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '12mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/', (req, res) => {
     res.send('API Running...');
@@ -42,6 +45,7 @@ app.use('/api/overdraft', overdraftRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/business-rules', businessRuleRoutes);
+app.use('/api/loans', loanRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

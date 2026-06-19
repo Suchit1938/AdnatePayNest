@@ -155,11 +155,11 @@ body {
   }
 
   .section-split {
-    @apply grid grid-cols-1 gap-6 lg:grid-cols-3;
+    @apply grid grid-cols-1 gap-6 2xl:grid-cols-3;
   }
 
   .section-split-main {
-    @apply lg:col-span-2;
+    @apply 2xl:col-span-2;
   }
 }
 

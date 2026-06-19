@@ -894,7 +894,7 @@ const updateTier = async (req, res) => {
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
       runValidators: true,
     }
   );

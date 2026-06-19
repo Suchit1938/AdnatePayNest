@@ -3,6 +3,7 @@ import api from "../../api/axios";
 import EmptyState from "../../components/ui/EmptyState";
 import {
   ArrowRight,
+  BadgeIndianRupee,
   BarChart3,
   Bell,
   CalendarClock,
@@ -11,6 +12,7 @@ import {
   Clock,
   CreditCard,
   Edit3,
+  FileText,
   Gauge,
   IdCard,
   ListChecks,
@@ -48,6 +50,118 @@ const statusStyles = {
   approved: "bg-emerald-50 text-emerald-700",
   rejected: "bg-red-50 text-red-700",
   updated: "bg-blue-50 text-blue-700",
+  under_review: "bg-blue-50 text-blue-700",
+  disbursed: "bg-violet-50 text-violet-700",
+};
+
+const decisionCategoryStyles = {
+  transfer: "bg-blue-50 text-blue-700",
+  loan: "bg-emerald-50 text-emerald-700",
+  policy: "bg-violet-50 text-violet-700",
+};
+
+const loanStatusStyles = {
+  submitted: "bg-blue-50 text-blue-700",
+  under_review: "bg-amber-50 text-amber-700",
+  approved: "bg-emerald-50 text-emerald-700",
+  rejected: "bg-red-50 text-red-700",
+  disbursed: "bg-violet-50 text-violet-700",
+  closed: "bg-slate-100 text-slate-700",
+};
+
+const documentReviewStyles = {
+  pending: "bg-slate-100 text-slate-700",
+  verified: "bg-emerald-50 text-emerald-700",
+  mismatch: "bg-amber-50 text-amber-700",
+  rejected: "bg-red-50 text-red-700",
+  additional_info_required: "bg-blue-50 text-blue-700",
+};
+
+const formatStatusLabel = (value) =>
+  String(value || "")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const formatDetailLabel = (value) =>
+  String(value || "")
+    .replace(/([A-Z])/g, " $1")
+    .replace(/^./, (letter) => letter.toUpperCase());
+
+const loanScoreLabels = {
+  incomeStrength: "Income Strength",
+  liabilities: "FOIR / Liabilities",
+  classification: "Classification",
+  employmentStability: "Employment Stability",
+  accountHistory: "Account History",
+  overdraftUsage: "Overdraft Usage",
+};
+
+const defaultLoanScoreWeights = {
+  incomeStrength: 20,
+  liabilities: 30,
+  classification: 20,
+  employmentStability: 15,
+  accountHistory: 10,
+  overdraftUsage: 5,
+};
+
+const getScoreReason = (loan) => {
+  const scores = loan.eligibilityDetails?.componentScores || {};
+  const weights = loan.eligibilityDetails?.scoreWeights || defaultLoanScoreWeights;
+  const weakest = Object.entries(scores)
+    .map(([key, value]) => ({
+      key,
+      value: Number(value || 0),
+      max: Number(weights[key] || defaultLoanScoreWeights[key] || 0),
+    }))
+    .filter((item) => item.max > 0)
+    .sort((left, right) => left.value / left.max - right.value / right.max)[0];
+
+  if (!weakest) return "Score is based on income, liabilities, classification, employment, account history, and overdraft usage.";
+
+  return `Main score reducer: ${loanScoreLabels[weakest.key] || weakest.key} at ${weakest.value}/${weakest.max}.`;
+};
+
+const getLoanScoreTone = (score) => {
+  const value = Number(score || 0);
+
+  if (value >= 80) {
+    return {
+      label: "Strong",
+      ring: "ring-emerald-200",
+      text: "text-emerald-700",
+      bg: "bg-emerald-50",
+      bar: "bg-emerald-500",
+    };
+  }
+
+  if (value >= 65) {
+    return {
+      label: "Eligible",
+      ring: "ring-blue-200",
+      text: "text-blue-700",
+      bg: "bg-blue-50",
+      bar: "bg-blue-500",
+    };
+  }
+
+  if (value >= 50) {
+    return {
+      label: "Review",
+      ring: "ring-amber-200",
+      text: "text-amber-700",
+      bg: "bg-amber-50",
+      bar: "bg-amber-500",
+    };
+  }
+
+  return {
+    label: "Weak",
+    ring: "ring-red-200",
+    text: "text-red-700",
+    bg: "bg-red-50",
+    bar: "bg-red-500",
+  };
 };
 
 const odRiskStyles = {
@@ -157,9 +271,15 @@ function ManagerDashboard() {
   const { section = "dashboard" } = useParams();
   const { logout, user, setSessionUser } = useAuth();
   const [approvals, setApprovals] = useState([]);
+  const [loans, setLoans] = useState([]);
   const [approvalMessage, setApprovalMessage] = useState("");
   const [approvalError, setApprovalError] = useState("");
   const [rejectionReview, setRejectionReview] = useState(null);
+  const [loanReview, setLoanReview] = useState(null);
+  const [loanDocumentReview, setLoanDocumentReview] = useState(null);
+  const [expandedLoanId, setExpandedLoanId] = useState("");
+  const [loanMessage, setLoanMessage] = useState("");
+  const [loanError, setLoanError] = useState("");
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [profilePhone, setProfilePhone] = useState(user?.phone || "");
   const [profileMessage, setProfileMessage] = useState("");
@@ -222,8 +342,12 @@ function ManagerDashboard() {
         setBusinessRules({ managerTierPermissions: tierPermissionDefaults });
       });
 
-    return api.get("/approvals").then(({ data }) => {
-      setApprovals(data.approvals || []);
+    return Promise.all([
+      api.get("/approvals"),
+      api.get("/loans"),
+    ]).then(([approvalsResult, loansResult]) => {
+      setApprovals(approvalsResult.data.approvals || []);
+      setLoans(loansResult.data.loans || []);
     });
   }, []);
 
@@ -245,6 +369,11 @@ function ManagerDashboard() {
   const approvalHistory = approvals.filter((approval) =>
     ["approved", "rejected"].includes(approval.status)
   );
+  const pendingLoanReviews = loans.filter((loan) =>
+    ["submitted", "under_review"].includes(loan.status)
+  );
+  const approvedLoans = loans.filter((loan) => loan.status === "approved");
+  const disbursedLoans = loans.filter((loan) => loan.status === "disbursed");
   const tierDecisionHistory = useMemo(
     () => dashboardData.tierDecisionHistory || [],
     [dashboardData.tierDecisionHistory]
@@ -256,11 +385,87 @@ function ManagerDashboard() {
       subject: approval.customer || "Customer",
       type: approval.type,
       amount: formatCurrency(approval.amount),
+      amountValue: Number(approval.amount || 0),
       entity: maskAccountNumber(approval.account),
       reviewedAt: approval.reviewedAt || approval.updatedAt,
       status: approval.status,
+      category: "transfer",
       detail: approval.rejectionReason || "Transfer request approved.",
     }));
+    const loanRows = loans.flatMap((loan) => {
+      const rows = [];
+
+      if (loan.reviewedAt && ["approved", "rejected"].includes(loan.status)) {
+        rows.push({
+          id: `loan-review-${loan.id}`,
+          displayId: loan.id,
+          subject: loan.customerName || "Customer",
+          type: `${loan.loanTypeLabel || "Loan"} review`,
+          amount: formatCurrency(loan.amount),
+          amountValue: Number(loan.amount || 0),
+          entity: loan.customerCode || loan.customerClassification || "Loan",
+          reviewedAt: loan.reviewedAt,
+          status: loan.status,
+          category: "loan",
+          detail:
+            loan.status === "rejected"
+              ? loan.rejectionReason || loan.managerNote || "Loan application rejected."
+              : loan.managerNote || "Loan application approved.",
+        });
+      }
+
+      if (loan.reviewedAt && loan.status === "under_review" && loan.additionalInfoRequested) {
+        rows.push({
+          id: `loan-info-${loan.id}`,
+          displayId: loan.id,
+          subject: loan.customerName || "Customer",
+          type: `${loan.loanTypeLabel || "Loan"} information request`,
+          amount: formatCurrency(loan.amount),
+          amountValue: Number(loan.amount || 0),
+          entity: loan.customerCode || loan.customerClassification || "Loan",
+          reviewedAt: loan.reviewedAt,
+          status: "under_review",
+          category: "loan",
+          detail: loan.managerNote || "Additional information requested from customer.",
+        });
+      }
+
+      if (loan.reviewedAt && loan.status === "disbursed") {
+        rows.push({
+          id: `loan-review-${loan.id}`,
+          displayId: loan.id,
+          subject: loan.customerName || "Customer",
+          type: `${loan.loanTypeLabel || "Loan"} review`,
+          amount: formatCurrency(loan.amount),
+          amountValue: Number(loan.amount || 0),
+          entity: loan.customerCode || loan.customerClassification || "Loan",
+          reviewedAt: loan.reviewedAt,
+          status: "approved",
+          category: "loan",
+          detail: loan.managerNote || "Loan application approved.",
+        });
+      }
+
+      if (loan.disbursedAt) {
+        rows.push({
+          id: `loan-disbursed-${loan.id}`,
+          displayId: loan.id,
+          subject: loan.customerName || "Customer",
+          type: `${loan.loanTypeLabel || "Loan"} disbursal`,
+          amount: formatCurrency(loan.amount),
+          amountValue: Number(loan.amount || 0),
+          entity: loan.disbursementAccountNumber
+            ? maskAccountNumber(loan.disbursementAccountNumber)
+            : "Customer account",
+          reviewedAt: loan.disbursedAt,
+          status: "disbursed",
+          category: "loan",
+          detail: `${formatCurrency(loan.amount)} disbursed to customer account.`,
+        });
+      }
+
+      return rows;
+    });
     const tierRows = tierDecisionHistory.map((decision) => {
       const changes = Array.isArray(decision.changes) ? decision.changes : [];
       const changeSummary =
@@ -278,17 +483,19 @@ function ManagerDashboard() {
         subject: `${decision.tierLabel || "Tier"} Policy`,
         type: "Tier policy edit",
         amount: `${decision.customerCount || 0} affected customer(s)`,
+        amountValue: 0,
         entity: "Tier",
         reviewedAt: decision.createdAt,
         status: "updated",
+        category: "policy",
         detail: extraCount > 0 ? `${changeSummary}; ${extraCount} more change(s).` : changeSummary,
       };
     });
 
-    return [...approvalRows, ...tierRows].sort(
+    return [...approvalRows, ...loanRows, ...tierRows].sort(
       (left, right) => new Date(right.reviewedAt || 0) - new Date(left.reviewedAt || 0)
     );
-  }, [approvalHistory, tierDecisionHistory]);
+  }, [approvalHistory, loans, tierDecisionHistory]);
   const totalOdLimit = dashboardData.stats.totalOdLimit;
   const utilizedOd = dashboardData.stats.utilizedOd;
   const odPercent = dashboardData.stats.odPercent;
@@ -415,6 +622,16 @@ function ManagerDashboard() {
 
     return !Number.isNaN(decisionDate.getTime()) && decisionDate.toDateString() === todayKey;
   }).length;
+  const decisionSummary = useMemo(
+    () => ({
+      total: decisionHistory.length,
+      loans: decisionHistory.filter((decision) => decision.category === "loan").length,
+      transfers: decisionHistory.filter((decision) => decision.category === "transfer").length,
+      policies: decisionHistory.filter((decision) => decision.category === "policy").length,
+      today: decisionsToday,
+    }),
+    [decisionHistory, decisionsToday]
+  );
   const recentDecisions = decisionHistory.slice(0, 4);
   const approvalEscalations = pendingApprovals.map((approval) => ({
     id: `approval-${approval.id}`,
@@ -489,9 +706,13 @@ function ManagerDashboard() {
   const recentOverdraftActivityPagination = usePaginatedRows(recentOverdraftActivity);
   const escalationPagination = usePaginatedRows(displayedEscalations);
   const notificationPagination = usePaginatedRows(notifications);
+  const loanReviewPagination = usePaginatedRows(pendingLoanReviews);
+  const approvedLoanPagination = usePaginatedRows(approvedLoans);
+  const activeSection = section === "loan" ? "loans" : section;
   const pageTitle = {
     dashboard: "Manager Dashboard",
     approvals: "Approval Queue",
+    loans: "Loan Reviews",
     "approval-history": "Decision History",
     overdraft: "Overdraft Monitoring",
     policies: "Tier Policies",
@@ -499,7 +720,7 @@ function ManagerDashboard() {
     transactions: "Transaction Monitoring",
     notifications: "Notifications",
     profile: "Manager Profile",
-  }[section] ?? "Manager Dashboard";
+  }[activeSection] ?? "Manager Dashboard";
 
   const updateApproval = async (id, status, rejectionReason = "") => {
     setApprovalMessage("");
@@ -566,6 +787,138 @@ function ManagerDashboard() {
       const errorMessage =
         error.response?.data?.message || "Unable to update phone number.";
       setProfileError(errorMessage);
+      toast.error(errorMessage);
+    }
+  };
+
+  const updateLoanReviewNote = (value) => {
+    setLoanReview((current) => (current ? { ...current, note: value } : current));
+  };
+
+  const updateLoanDocumentReviewNote = (value) => {
+    setLoanDocumentReview((current) => (current ? { ...current, note: value } : current));
+  };
+
+  const submitLoanReview = async (loanId, action, note = "") => {
+    setLoanMessage("");
+    setLoanError("");
+
+    try {
+      const { data } = await api.patch(`/loans/${loanId}/review`, {
+        action,
+        note,
+      });
+
+      setLoans((current) =>
+        current.map((loan) => (loan.id === loanId ? { ...loan, ...data.loan } : loan))
+      );
+      setLoanReview(null);
+      setLoanMessage(data.message || "Loan review updated.");
+      toast.success(data.message || "Loan review updated.");
+      await loadDashboard();
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || "Unable to update loan review.";
+      setLoanError(errorMessage);
+      toast.error(errorMessage);
+    }
+  };
+
+  const openLoanNote = (loan, action) => {
+    setLoanMessage("");
+    setLoanError("");
+    setExpandedLoanId(loan.id);
+    setLoanDocumentReview(null);
+    setLoanReview({
+      id: loan.id,
+      action,
+      note:
+        action === "reject"
+          ? loan.rejectionReason || "Application does not meet the current loan review requirements."
+          : loan.managerNote || "",
+    });
+  };
+
+  const openLoanDocumentNote = (loan, document, reviewStatus) => {
+    setLoanMessage("");
+    setLoanError("");
+    setExpandedLoanId(loan.id);
+    setLoanReview(null);
+    setLoanDocumentReview({
+      loanId: loan.id,
+      documentId: document.id,
+      documentType: document.documentType,
+      reviewStatus,
+      note: document.managerNote || "",
+    });
+  };
+
+  const confirmLoanDocumentNoteAction = () => {
+    const note = loanDocumentReview?.note?.trim();
+
+    if (!note) {
+      setLoanError("Manager note is required for this document status.");
+      toast.warning("Manager note is required for this document status.");
+      return;
+    }
+
+    updateLoanDocument(
+      loanDocumentReview.loanId,
+      loanDocumentReview.documentId,
+      loanDocumentReview.reviewStatus,
+      note
+    );
+  };
+
+  const confirmLoanNoteAction = () => {
+    const note = loanReview?.note?.trim();
+
+    if (!note) {
+      setLoanError("Manager note is required.");
+      toast.warning("Manager note is required.");
+      return;
+    }
+
+    submitLoanReview(loanReview.id, loanReview.action, note);
+  };
+
+  const disburseLoan = async (loanId) => {
+    setLoanMessage("");
+    setLoanError("");
+
+    try {
+      const { data } = await api.patch(`/loans/${loanId}/disburse`);
+      setLoans((current) =>
+        current.map((loan) => (loan.id === loanId ? { ...loan, ...data.loan } : loan))
+      );
+      setLoanMessage(data.message || "Loan disbursed.");
+      toast.success(data.message || "Loan disbursed.");
+      await loadDashboard();
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || "Unable to disburse loan.";
+      setLoanError(errorMessage);
+      toast.error(errorMessage);
+    }
+  };
+
+  const updateLoanDocument = async (loanId, documentId, reviewStatus, managerNote = "") => {
+    setLoanMessage("");
+    setLoanError("");
+
+    try {
+      const { data } = await api.patch(`/loans/${loanId}/documents/${documentId}`, {
+        reviewStatus,
+        managerNote,
+      });
+
+      setLoans((current) =>
+        current.map((loan) => (loan.id === loanId ? { ...loan, ...data.loan } : loan))
+      );
+      setLoanDocumentReview(null);
+      setLoanMessage(data.message || "Document review updated.");
+      toast.success(data.message || "Document review updated.");
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || "Unable to update document review.";
+      setLoanError(errorMessage);
       toast.error(errorMessage);
     }
   };
@@ -815,65 +1168,92 @@ function ManagerDashboard() {
   );
 
   const approvalHistoryTable = (
-    <section className="table-shell">
-      <div className="flex items-center justify-between border-b border-slate-100 p-6">
-        <div>
-          <h2 className="text-xl font-bold">Decision History</h2>
-          <p className="text-sm text-slate-500">
-            Completed transfer decisions and tier policy edits reviewed by this manager.
-          </p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
-          {decisionHistory.length} recorded
-        </span>
+    <section className="space-y-6">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricTile label="Total Decisions" value={decisionSummary.total} tone="accent" />
+        <MetricTile label="Loan Decisions" value={decisionSummary.loans} tone="success" />
+        <MetricTile label="Transfer Decisions" value={decisionSummary.transfers} tone="default" />
+        <MetricTile label="Today" value={decisionSummary.today} tone="warning" />
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[920px] text-left">
-          <thead className="table-head">
-            <tr>
-              <th className="px-6 py-4">Decision ID</th>
-              <th className="px-6 py-4">Subject</th>
-              <th className="px-6 py-4">Type</th>
-              <th className="px-6 py-4">Amount / Impact</th>
-              <th className="px-6 py-4">Entity</th>
-              <th className="px-6 py-4">Reviewed On</th>
-              <th className="px-6 py-4">Status</th>
-              <th className="px-6 py-4">Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {decisionHistory.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-6 py-8">
-                  <EmptyState message="No manager decisions are available yet." />
-                </td>
-              </tr>
-            )}
-            {decisionHistoryPagination.pageRows.map((decision) => (
-              <tr key={decision.id} className="table-row">
-                <td className="px-6 py-4 font-semibold">{decision.displayId}</td>
-                <td className="px-6 py-4">{decision.subject}</td>
-                <td className="px-6 py-4">{decision.type}</td>
-                <td className="px-6 py-4 font-semibold">{decision.amount}</td>
-                <td className="px-6 py-4">{decision.entity}</td>
-                <td className="px-6 py-4">{decision.reviewedAt || "-"}</td>
-                <td className="px-6 py-4">
-                  <span
-                    className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ${statusStyles[decision.status]}`}
-                  >
-                    {decision.status}
-                  </span>
-                </td>
-                <td className="max-w-xs px-6 py-4 text-sm text-slate-600">
-                  {decision.detail || "-"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <TablePagination {...decisionHistoryPagination} />
-      </div>
+      <SectionCard
+        title="Decision History"
+        subtitle="Completed transfer approvals, loan outcomes, disbursals, and tier policy edits."
+        icon={ShieldCheck}
+      >
+        {decisionHistory.length === 0 ? (
+          <EmptyState message="No manager decisions are available yet." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1220px] text-left">
+              <thead className="table-head">
+                <tr>
+                  <th className="px-5 py-4">Subject</th>
+                  <th className="px-5 py-4">Category</th>
+                  <th className="px-5 py-4">Status</th>
+                  <th className="px-5 py-4">Decision Type</th>
+                  <th className="px-5 py-4">Amount / Impact</th>
+                  <th className="px-5 py-4">Entity</th>
+                  <th className="px-5 py-4">Reviewed On</th>
+                  <th className="px-5 py-4">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {decisionHistoryPagination.pageRows.map((decision) => (
+                  <tr key={decision.id} className="table-row align-top">
+                    <td className="w-56 px-5 py-5">
+                      <p className="max-w-56 break-words font-bold leading-6 text-slate-950">
+                        {decision.subject}
+                      </p>
+                      <p className="mt-1 max-w-56 break-words text-xs font-semibold text-slate-500">
+                        {decision.displayId}
+                      </p>
+                    </td>
+                    <td className="w-28 px-5 py-5">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${
+                          decisionCategoryStyles[decision.category] || decisionCategoryStyles.transfer
+                        }`}
+                      >
+                        {decision.category}
+                      </span>
+                    </td>
+                    <td className="w-32 px-5 py-5">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${
+                          statusStyles[decision.status] || statusStyles.updated
+                        }`}
+                      >
+                        {formatStatusLabel(decision.status)}
+                      </span>
+                    </td>
+                    <td className="w-48 px-5 py-5">
+                      <p className="max-w-48 break-words text-sm font-semibold leading-6 text-slate-600">
+                        {decision.type}
+                      </p>
+                    </td>
+                    <td className="w-40 px-5 py-5 font-bold leading-6 text-slate-950">
+                      {decision.amount}
+                    </td>
+                    <td className="w-40 px-5 py-5 break-words font-semibold leading-6 text-slate-700">
+                      {decision.entity}
+                    </td>
+                    <td className="w-44 px-5 py-5 font-semibold leading-6 text-slate-950">
+                      {formatDateTime(decision.reviewedAt)}
+                    </td>
+                    <td className="min-w-80 px-5 py-5">
+                      <p className="max-w-96 whitespace-normal break-words text-sm font-semibold leading-6 text-slate-600">
+                        {decision.detail || "-"}
+                      </p>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <TablePagination {...decisionHistoryPagination} />
+          </div>
+        )}
+      </SectionCard>
     </section>
   );
 
@@ -2167,6 +2547,441 @@ function ManagerDashboard() {
     </div>
   );
 
+  const loanReviewsSection = (
+    <div className="space-y-6">
+      {loanMessage && <div className="alert-success">{loanMessage}</div>}
+      {loanError && <div className="alert-error">{loanError}</div>}
+
+      <div className="stat-grid">
+        <StatsCard
+          title="Pending Loan Reviews"
+          value={pendingLoanReviews.length}
+          icon={BadgeIndianRupee}
+          accent="bg-amber-500"
+          iconTone="bg-amber-50 text-amber-600"
+          badge={
+            pendingLoanReviews.length > 0
+              ? { text: "Needs review", tone: "warning" }
+              : { text: "Queue clear", tone: "success" }
+          }
+        />
+        <StatsCard
+          title="Approved For Disbursal"
+          value={approvedLoans.length}
+          icon={Check}
+          accent="bg-emerald-500"
+          iconTone="bg-emerald-50 text-emerald-600"
+          footer={{ text: "Awaiting release to customer account" }}
+        />
+        <StatsCard
+          title="Disbursed Loan Value"
+          value={formatCurrency(disbursedLoans.reduce((sum, loan) => sum + Number(loan.amount || 0), 0))}
+          icon={CircleDollarSign}
+          accent="bg-violet-500"
+          iconTone="bg-violet-50 text-violet-600"
+          footer={{ text: `${disbursedLoans.length} active loan(s)` }}
+        />
+      </div>
+
+      <SectionCard
+        title="Loan Review Queue"
+        subtitle="Review income, liabilities, EMI impact, and score recommendation before making a manager decision."
+        icon={BadgeIndianRupee}
+      >
+        {pendingLoanReviews.length === 0 ? (
+          <EmptyState message="No loan applications are waiting for manager review." />
+        ) : (
+          <div className="space-y-4">
+            {loanReviewPagination.pageRows.map((loan) => {
+              const scoreTone = getLoanScoreTone(loan.eligibilityScore);
+              const isExpanded = expandedLoanId === loan.id;
+
+              return (
+              <article key={loan.id} className="overflow-hidden rounded-xl border border-bank-card-border bg-white shadow-sm">
+                <div className="grid gap-3 p-4 lg:grid-cols-[minmax(0,1.25fr)_0.75fr_0.65fr_0.7fr_auto] lg:items-center">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="truncate text-base font-bold text-slate-950">
+                        {loan.customerName || "Customer"}
+                      </h3>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${loanStatusStyles[loan.status] || loanStatusStyles.submitted}`}>
+                        {formatStatusLabel(loan.status)}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                      {loan.customerCode || "Customer ID pending"} / {loan.id}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-500">Loan Type</p>
+                    <p className="mt-1 truncate font-bold text-slate-950">{loan.loanTypeLabel}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-500">Amount</p>
+                    <p className="mt-1 font-bold text-slate-950">{formatCurrency(loan.amount)}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-500">Score</p>
+                    <span className={`mt-1 inline-flex rounded-full px-3 py-1 text-xs font-bold ring-1 ${scoreTone.bg} ${scoreTone.text} ${scoreTone.ring}`}>
+                      {scoreTone.label} / {loan.eligibilityScore}
+                    </span>
+                  </div>
+
+                  <div className="flex lg:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandedLoanId(isExpanded ? "" : loan.id);
+                        setLoanReview(null);
+                        setLoanDocumentReview(null);
+                      }}
+                      className="btn-secondary w-full justify-center whitespace-nowrap px-4 py-2 lg:w-auto"
+                    >
+                      {isExpanded ? "Hide Details" : "Review Details"}
+                    </button>
+                  </div>
+                </div>
+
+                {isExpanded && (
+                  <div className="border-t border-bank-card-border bg-slate-50/70 p-4">
+                    <div className="grid gap-5 xl:grid-cols-[1fr_1.05fr] xl:items-start">
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <div>
+                              <p className="text-xs font-bold uppercase text-slate-500">Monthly EMI</p>
+                              <p className="mt-1 font-bold text-blue-700">{formatCurrency(loan.emiAmount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold uppercase text-slate-500">Tenure</p>
+                              <p className="mt-1 font-bold text-slate-950">{loan.tenureMonths} months</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold uppercase text-slate-500">Rate</p>
+                              <p className="mt-1 font-bold text-slate-950">{loan.annualInterestRate}%</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold uppercase text-slate-500">Recommendation</p>
+                              <p className="mt-1 font-bold text-slate-950">{loan.eligibilityRecommendation}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {loan.eligibilityDetails?.classificationBenefit && (
+                          <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-semibold leading-6 text-emerald-800">
+                            {loan.customerClassification || "Classification"} benefit: {loan.eligibilityDetails.classificationBenefit.interestDiscount}% rate discount, max amount {formatCurrency(loan.eligibilityDetails.classificationBenefit.maxAmount)}.
+                          </div>
+                        )}
+
+                        {loan.purpose && (
+                          <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-semibold leading-6 text-blue-800">
+                            {loan.purpose}
+                          </p>
+                        )}
+
+                        {Object.entries(loan.supportingDetails || {}).filter(([, value]) => value).length > 0 && (
+                          <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                            <p className="font-bold text-slate-950">Supporting Details</p>
+                            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              {Object.entries(loan.supportingDetails || {})
+                                .filter(([, value]) => value)
+                                .map(([key, value]) => (
+                                  <div key={key} className="rounded-lg bg-bank-surface px-3 py-2">
+                                    <p className="text-xs font-bold uppercase text-slate-500">
+                                      {formatDetailLabel(key)}
+                                    </p>
+                                    <p className="mt-1 break-words text-sm font-bold text-slate-800">
+                                      {value}
+                                    </p>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
+                          <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                            <p className="text-xs font-bold uppercase text-slate-500">FOIR Inputs</p>
+                            <p className="mt-1 font-semibold text-slate-700">
+                              Income {formatCurrency(loan.monthlyIncome)} / Liabilities {formatCurrency(loan.existingMonthlyLiabilities)} / EMI {formatCurrency(loan.emiAmount)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                            <p className="text-xs font-bold uppercase text-slate-500">Employment</p>
+                            <p className="mt-1 font-semibold text-slate-700">
+                              {loan.employmentType || "Not specified"} / {loan.employmentDurationMonths || 0} months
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                            <p className="text-xs font-bold uppercase text-slate-500">Account / OD</p>
+                            <p className="mt-1 font-semibold text-slate-700">
+                              {loan.eligibilityDetails?.accountAgeMonths ?? 0} months history / OD {loan.eligibilityDetails?.odUsage ?? "No data"}%
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-slate-950">Submitted Documents</p>
+                              <p className="mt-1 text-sm font-semibold text-slate-500">
+                                Review uploaded proofs before taking a decision.
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                              {loan.documents?.length || 0} file(s)
+                            </span>
+                          </div>
+                          <div className="mt-4 space-y-3">
+                            {(loan.documents || []).length === 0 && (
+                              <EmptyState message="No documents were uploaded with this application." />
+                            )}
+                            {(loan.documents || []).map((document) => (
+                              <div
+                                key={document.id}
+                                className="rounded-lg border border-slate-200 bg-bank-surface p-3"
+                              >
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <FileText size={16} className="text-slate-500" />
+                                      <p className="font-bold text-slate-950">{document.documentType}</p>
+                                      <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${documentReviewStyles[document.reviewStatus] || documentReviewStyles.pending}`}>
+                                        {formatStatusLabel(document.reviewStatus || "pending")}
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                                      {document.fileName}
+                                    </p>
+                                    {document.managerNote && (
+                                      <p className="mt-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                        {document.managerNote}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 lg:justify-end">
+                                    <a
+                                      href={
+                                        document.fileUrl
+                                          ? `${api.defaults.baseURL.replace(/\/api$/, "")}${document.fileUrl}`
+                                          : document.dataUrl
+                                      }
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="btn-secondary px-3 py-2 text-xs"
+                                    >
+                                      View
+                                    </a>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateLoanDocument(loan.id, document.id, "verified")}
+                                      className="btn-primary bg-emerald-600 px-3 py-2 text-xs hover:bg-emerald-700"
+                                    >
+                                      Verify
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openLoanDocumentNote(loan, document, "mismatch")}
+                                      className="btn-secondary px-3 py-2 text-xs"
+                                    >
+                                      Mismatch
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openLoanDocumentNote(loan, document, "additional_info_required")}
+                                      className="btn-secondary px-3 py-2 text-xs"
+                                    >
+                                      Request Info
+                                    </button>
+                                  </div>
+                                </div>
+                                {loanDocumentReview?.loanId === loan.id &&
+                                  loanDocumentReview?.documentId === document.id && (
+                                    <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50/80 p-3">
+                                      <label className="label-field text-xs">
+                                        {loanDocumentReview.reviewStatus === "mismatch"
+                                          ? "Mismatch Reason"
+                                          : "Information Needed"}
+                                        <textarea
+                                          value={loanDocumentReview.note}
+                                          onChange={(event) =>
+                                            updateLoanDocumentReviewNote(event.target.value)
+                                          }
+                                          className="input-field mt-2 min-h-20 resize-y bg-white text-sm"
+                                          placeholder={
+                                            loanDocumentReview.reviewStatus === "mismatch"
+                                              ? "Describe what does not match the application."
+                                              : "Describe what the customer needs to provide."
+                                          }
+                                        />
+                                      </label>
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={confirmLoanDocumentNoteAction}
+                                          className="btn-primary px-3 py-2 text-xs"
+                                        >
+                                          Confirm
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setLoanDocumentReview(null)}
+                                          className="btn-secondary px-3 py-2 text-xs"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">Score Breakdown</p>
+                          <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                            {getScoreReason(loan)}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-700 ring-1 ring-slate-200">
+                          {loan.eligibilityScore}/100
+                        </span>
+                      </div>
+                      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white ring-1 ring-slate-100">
+                        <div
+                          className={`h-full rounded-full ${scoreTone.bar}`}
+                          style={{ width: `${Math.max(4, Math.min(100, Number(loan.eligibilityScore || 0)))}%` }}
+                        />
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                        {Object.entries(loan.eligibilityDetails?.componentScores || {}).map(([key, value]) => {
+                          const maxScore =
+                            loan.eligibilityDetails?.scoreWeights?.[key] ||
+                            defaultLoanScoreWeights[key] ||
+                            0;
+                          const percent = maxScore > 0 ? Math.round((Number(value || 0) / maxScore) * 100) : 0;
+
+                          return (
+                            <div key={key} className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-xs font-bold uppercase text-slate-500">
+                                  {loanScoreLabels[key] || key}
+                                </p>
+                                <p className="shrink-0 text-sm font-bold text-slate-950">
+                                  {value}/{maxScore}
+                                </p>
+                              </div>
+                              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                  className={`h-full rounded-full ${
+                                    percent >= 75
+                                      ? "bg-emerald-500"
+                                      : percent >= 50
+                                        ? "bg-amber-500"
+                                        : "bg-red-500"
+                                  }`}
+                                  style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <button
+                        type="button"
+                        onClick={() => submitLoanReview(loan.id, "approve")}
+                        className="btn-primary justify-center bg-emerald-600 hover:bg-emerald-700"
+                      >
+                        <Check size={16} />
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openLoanNote(loan, "request_info")}
+                        className="btn-secondary justify-center"
+                      >
+                        Request Info
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openLoanNote(loan, "reject")}
+                        className="btn-danger-soft justify-center"
+                      >
+                        <X size={16} />
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {loanReview?.id === loan.id && (
+                  <div className="border-t border-amber-100 bg-amber-50/70 p-4">
+                    <label className="label-field">
+                      Manager Note
+                      <textarea
+                        value={loanReview.note}
+                        onChange={(event) => updateLoanReviewNote(event.target.value)}
+                        className="input-field mt-2 min-h-24 resize-y bg-white"
+                        placeholder="Write the reason or information needed from the customer."
+                      />
+                    </label>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={confirmLoanNoteAction} className="btn-primary">
+                        Confirm
+                      </button>
+                      <button type="button" onClick={() => setLoanReview(null)} className="btn-secondary">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+              );
+            })}
+            <TablePagination {...loanReviewPagination} />
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Approved Loans"
+        subtitle="Disbursal credits the customer's primary account and starts the EMI schedule."
+        icon={CircleDollarSign}
+      >
+        {approvedLoans.length === 0 ? (
+          <EmptyState message="No approved loans are waiting for disbursal." />
+        ) : (
+          <div className="space-y-3">
+            {approvedLoanPagination.pageRows.map((loan) => (
+              <div key={loan.id} className="flex flex-col gap-3 rounded-xl border border-bank-card-border bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-950">{loan.customerName} / {loan.loanTypeLabel}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">
+                    {loan.id} / {formatCurrency(loan.amount)} / EMI {formatCurrency(loan.emiAmount)}
+                  </p>
+                </div>
+                <button type="button" onClick={() => disburseLoan(loan.id)} className="btn-primary justify-center">
+                  Disburse
+                </button>
+              </div>
+            ))}
+            <TablePagination {...approvedLoanPagination} />
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+
   const dashboardWorkbench = (
     <div className="space-y-6">
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -2319,11 +3134,19 @@ function ManagerDashboard() {
         >
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <MetricTile label="Active OD Accounts" value={odCustomerSummary.activeCount} tone="accent" />
+            <MetricTile label="Loan Reviews" value={pendingLoanReviews.length} tone={pendingLoanReviews.length > 0 ? "warning" : "success"} />
             <MetricTile label="Blocked OD" value={odCustomerSummary.blockedCount} tone={odCustomerSummary.blockedCount > 0 ? "danger" : "success"} />
             <MetricTile label="Alerts" value={notifications.length} tone={notifications.length > 0 ? "warning" : "success"} />
-            <MetricTile label="Policies" value={tierPolicies.length} tone="default" />
           </div>
           <div className="mt-4 grid gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/manager/loans")}
+              className="inline-flex items-center justify-between rounded-lg border border-bank-card-border bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-bank-surface"
+            >
+              Review loan applications
+              <ArrowRight size={17} />
+            </button>
             <button
               type="button"
               onClick={() => navigate("/manager/overdraft")}
@@ -2347,7 +3170,7 @@ function ManagerDashboard() {
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <SectionCard
           title="Recent Decisions"
-          subtitle="Latest approvals, rejections, and policy edits completed by the manager."
+          subtitle="Latest transfer, loan, disbursal, and policy decisions completed by the manager."
           icon={ShieldCheck}
         >
           {recentDecisions.length === 0 ? (
@@ -2435,6 +3258,7 @@ function ManagerDashboard() {
   const contentBySection = {
     dashboard: dashboardWorkbench,
     approvals: approvalTable,
+    loans: loanReviewsSection,
     "approval-history": approvalHistoryTable,
     overdraft: odSection,
     policies: tierPolicyDetails,
@@ -2448,8 +3272,8 @@ function ManagerDashboard() {
     <DashboardLayout>
       <PageContent>
         <PageHeader
-          eyebrow={section === "dashboard" ? "Manager Control Panel" : undefined}
-          title={section === "dashboard" ? "Manager Operations" : pageTitle}
+          eyebrow={activeSection === "dashboard" ? "Manager Control Panel" : undefined}
+          title={activeSection === "dashboard" ? "Manager Operations" : pageTitle}
           subtitle="Monitor approvals, overdraft activity, customer activity, and alerts."
         >
           <div className="stat-chip flex items-center gap-3 px-4 py-3">
@@ -2475,7 +3299,15 @@ function ManagerDashboard() {
           </button>
         </PageHeader>
 
-        {!["dashboard", "approval-history", "overdraft", "policies", "profile"].includes(section) && (
+        {![
+          "dashboard",
+          "approval-history",
+          "overdraft",
+          "policies",
+          "profile",
+          "loan",
+          "loans",
+        ].includes(section) && (
           <div className="stat-grid">
             <StatsCard
               title="Pending Approvals"
@@ -2492,7 +3324,7 @@ function ManagerDashboard() {
           </div>
         )}
 
-        {contentBySection[section] ?? contentBySection.dashboard}
+        {contentBySection[activeSection] ?? contentBySection.dashboard}
 
         {tierEditReview && tierEditForm && (
           <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:items-center">

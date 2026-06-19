@@ -30,6 +30,7 @@ const navItemsByRole = {
     { label: "Transfers", path: "/transfer", icon: ArrowLeftRight },
     { label: "My Accounts", path: "/accounts", icon: WalletCards },
     { label: "Overdraft Facility", path: "/overdraft", icon: Landmark },
+    { label: "Loans", path: "/loans", icon: BadgeIndianRupee },
     { label: "Payees", path: "/beneficiaries", icon: UserRoundCheck },
     { label: "Transaction Activity", path: "/transactions", icon: History },
     { label: "Account Statement", path: "/statement", icon: ReceiptText },
@@ -50,6 +51,7 @@ const navItemsByRole = {
   manager: [
     { label: "Manager Overview", path: "/manager", icon: LayoutDashboard },
     { label: "Pending Reviews", path: "/manager/approvals", icon: ListChecks },
+    { label: "Loan Reviews", path: "/manager/loans", icon: BadgeIndianRupee },
     { label: "Decision History", path: "/manager/approval-history", icon: ClipboardCheck },
     { label: "OD Monitoring", path: "/manager/overdraft", icon: CircleDollarSign },
     { label: "Tier Policies", path: "/manager/policies", icon: BadgeIndianRupee },

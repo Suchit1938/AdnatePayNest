@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  BadgeIndianRupee,
   Clock,
   CreditCard,
   ExternalLink,
@@ -7,8 +8,10 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import api from "../../api/axios";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import StatsCard from "../../components/dashboard/StatsCard";
 import ChartTooltip from "../../components/ui/ChartTooltip";
@@ -24,6 +27,7 @@ import { getTierTone } from "../../utils/ui";
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [loans, setLoans] = useState([]);
   const accounts = getCustomerAccounts(user);
   const totalBalance = accounts.reduce(
     (sum, currentAccount) => sum + Number(currentAccount.balance || 0),
@@ -38,6 +42,15 @@ const Dashboard = () => {
   );
   const overdraftPercent =
     overdraftLimit > 0 ? Math.round((overdraftUsed / overdraftLimit) * 100) : 0;
+  const activeLoans = loans.filter((loan) => ["approved", "disbursed"].includes(loan.status));
+  const pendingLoans = loans.filter((loan) => ["submitted", "under_review"].includes(loan.status));
+
+  useEffect(() => {
+    api
+      .get("/loans")
+      .then(({ data }) => setLoans(data.loans || []))
+      .catch(() => setLoans([]));
+  }, []);
 
   return (
     <DashboardLayout>
@@ -93,6 +106,18 @@ const Dashboard = () => {
             accent="bg-emerald-500"
             iconTone="bg-emerald-50 text-emerald-600"
             badge={{ text: "Lifetime count", tone: "neutral" }}
+          />
+
+          <StatsCard
+            title="Loan Applications"
+            value={`${pendingLoans.length}/${activeLoans.length}`}
+            icon={BadgeIndianRupee}
+            accent="bg-emerald-500"
+            iconTone="bg-emerald-50 text-emerald-600"
+            badge={{
+              text: `${pendingLoans.length} pending, ${activeLoans.length} active`,
+              tone: pendingLoans.length > 0 ? "warning" : "neutral",
+            }}
           />
 
           <StatsCard

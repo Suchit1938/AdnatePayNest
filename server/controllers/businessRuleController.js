@@ -3,6 +3,13 @@ const SystemLog = require('../models/SystemLog');
 const Tier = require('../models/Tier');
 const User = require('../models/User');
 const { sendEmail } = require('../utils/email');
+const {
+  DEFAULT_CLASSIFICATION_BENEFITS,
+  DEFAULT_LOAN_DECISION_BANDS,
+  DEFAULT_LOAN_SCORE_WEIGHTS,
+  DEFAULT_LOAN_TYPE_RULES,
+  normalizeLoanRules,
+} = require('../utils/loanRules');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const MANAGER_TIER_PERMISSION_FIELDS = [
@@ -29,9 +36,15 @@ const getBusinessRuleConfig = async () => {
       $setOnInsert: {
         key: 'global',
         managerTierPermissions: DEFAULT_MANAGER_TIER_PERMISSIONS,
+        loanRules: {
+          loanTypes: DEFAULT_LOAN_TYPE_RULES,
+          scoreWeights: DEFAULT_LOAN_SCORE_WEIGHTS,
+          decisionBands: DEFAULT_LOAN_DECISION_BANDS,
+          classificationBenefits: DEFAULT_CLASSIFICATION_BENEFITS,
+        },
       },
     },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
   );
 
   return config;
@@ -43,6 +56,7 @@ const serializeBusinessRuleConfig = (config) => ({
     ...DEFAULT_MANAGER_TIER_PERMISSIONS,
     ...(config.managerTierPermissions?.toObject?.() || config.managerTierPermissions || {}),
   },
+  loanRules: normalizeLoanRules(config.loanRules),
   updatedByName: config.updatedByName,
   updatedAt: config.updatedAt,
 });
@@ -83,17 +97,59 @@ const updateBusinessRules = async (req, res) => {
   MANAGER_TIER_PERMISSION_FIELDS.forEach((field) => {
     nextPermissions[field] = req.body.managerTierPermissions?.[field] === true;
   });
+  const currentConfig = await getBusinessRuleConfig();
+  const currentLoanRules = normalizeLoanRules(currentConfig.loanRules);
+  const incomingLoanRules = req.body.loanRules || {};
+  const nextLoanTypes = Array.isArray(incomingLoanRules.loanTypes)
+    ? incomingLoanRules.loanTypes.map((rule, index) => {
+      const fallback = currentLoanRules.loanTypes[index] || DEFAULT_LOAN_TYPE_RULES[index] || {};
+
+      return {
+        key: fallback.key || rule.key,
+        label: fallback.label || rule.label,
+        annualInterestRate: Math.max(0, Number(rule.annualInterestRate || fallback.annualInterestRate || 0)),
+        minAmount: Math.max(0, Number(rule.minAmount || fallback.minAmount || 0)),
+        maxAmount: Math.max(0, Number(rule.maxAmount || fallback.maxAmount || 0)),
+        minTenureMonths: Math.max(1, Number(rule.minTenureMonths || fallback.minTenureMonths || 1)),
+        maxTenureMonths: Math.max(1, Number(rule.maxTenureMonths || fallback.maxTenureMonths || 1)),
+      };
+    })
+    : currentLoanRules.loanTypes;
+  const nextScoreWeights = {
+    ...currentLoanRules.scoreWeights,
+    ...(incomingLoanRules.scoreWeights || {}),
+  };
+  const nextDecisionBands = {
+    ...currentLoanRules.decisionBands,
+    ...(incomingLoanRules.decisionBands || {}),
+  };
+  const nextClassificationBenefits = ['silver', 'gold', 'platinum'].reduce(
+    (benefits, classification) => ({
+      ...benefits,
+      [classification]: {
+        ...currentLoanRules.classificationBenefits[classification],
+        ...(incomingLoanRules.classificationBenefits?.[classification] || {}),
+      },
+    }),
+    {}
+  );
 
   const config = await BusinessRuleConfig.findOneAndUpdate(
     { key: 'global' },
     {
       $set: {
         managerTierPermissions: nextPermissions,
+        loanRules: {
+          loanTypes: nextLoanTypes,
+          scoreWeights: nextScoreWeights,
+          decisionBands: nextDecisionBands,
+          classificationBenefits: nextClassificationBenefits,
+        },
         updatedBy: req.user._id,
         updatedByName: req.user.name,
       },
     },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
   );
 
   await writeSystemLog({
@@ -106,6 +162,12 @@ const updateBusinessRules = async (req, res) => {
     severity: 'info',
     metadata: {
       managerTierPermissions: nextPermissions,
+      loanRules: {
+        loanTypes: nextLoanTypes,
+        scoreWeights: nextScoreWeights,
+        decisionBands: nextDecisionBands,
+        classificationBenefits: nextClassificationBenefits,
+      },
     },
   });
 
