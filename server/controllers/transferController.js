@@ -1,4 +1,7 @@
+const fs = require('fs');
 const mongoose = require('mongoose');
+const path = require('path');
+const PDFDocument = require('pdfkit');
 
 const BankAccount = require('../models/BankAccount');
 const Approval = require('../models/Approval');
@@ -137,10 +140,11 @@ const sendDetailedTransferEmail = async ({
   });
 };
 
-const PDF_PAGE_WIDTH = 595.28;
-const PDF_PAGE_HEIGHT = 841.89;
 const PDF_MARGIN = 40;
-const PDF_LINE_HEIGHT = 14;
+const PDF_TABLE_TOP_PADDING = 6;
+const PDF_TABLE_BOTTOM_PADDING = 6;
+const PDF_ROW_GAP = 0;
+const statementLogoPath = path.join(__dirname, '..', '..', 'client', 'public', 'logo.png');
 
 const normalizePdfText = (value) =>
   String(value ?? '')
@@ -149,79 +153,19 @@ const normalizePdfText = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const escapePdfText = (value) =>
-  normalizePdfText(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-
-const pdfText = (text, x, y, size = 9, font = 'F1') =>
-  `BT /${font} ${size} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${escapePdfText(text)}) Tj ET`;
-
-const pdfRect = (x, y, width, height) =>
-  `${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)} re S`;
-
-const splitPdfCell = (value, width) => {
-  const words = normalizePdfText(value).split(' ').filter(Boolean);
-  const maxChars = Math.max(8, Math.floor(width / 4.8));
-  const lines = [];
-  let line = '';
-
-  words.forEach((word) => {
-    const safeWord = word.length > maxChars ? word.slice(0, maxChars) : word;
-
-    if (!line) {
-      line = safeWord;
-      return;
-    }
-
-    if (`${line} ${safeWord}`.length <= maxChars) {
-      line = `${line} ${safeWord}`;
-      return;
-    }
-
-    lines.push(line);
-    line = safeWord;
-  });
-
-  if (line) lines.push(line);
-  return lines.length ? lines.slice(0, 4) : [''];
+const getPdfValue = (row, key, fallback = '-') => {
+  const value = row?.[key];
+  const text = normalizePdfText(value);
+  return text || fallback;
 };
 
-const createPdfBuffer = (pages) => {
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    `<< /Type /Pages /Kids [${pages.map((_, index) => `${index + 3} 0 R`).join(' ')}] /Count ${pages.length} >>`,
-  ];
-
-  pages.forEach((content, index) => {
-    const contentObject = 3 + pages.length + index;
-
-    objects.push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_PAGE_WIDTH} ${PDF_PAGE_HEIGHT}] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> /Contents ${contentObject} 0 R >>`
-    );
-  });
-
-  pages.forEach((content) => {
-    objects.push(`<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`);
-  });
-
-  const parts = ['%PDF-1.4\n'];
-  const offsets = [0];
-
-  objects.forEach((object, index) => {
-    offsets.push(Buffer.byteLength(parts.join(''), 'ascii'));
-    parts.push(`${index + 1} 0 obj\n${object}\nendobj\n`);
-  });
-
-  const xrefOffset = Buffer.byteLength(parts.join(''), 'ascii');
-  parts.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
-  offsets.slice(1).forEach((offset) => {
-    parts.push(`${String(offset).padStart(10, '0')} 00000 n \n`);
-  });
-  parts.push(
-    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`
-  );
-
-  return Buffer.from(parts.join(''), 'ascii');
-};
+const parseDetailRows = (rows = []) =>
+  rows
+    .map((row) => ({
+      label: getPdfValue(row, 'label', getPdfValue(row, 'Details', '')),
+      value: getPdfValue(row, 'value', getPdfValue(row, 'Balance', '')),
+    }))
+    .filter((row) => row.label);
 
 const buildStatementPdf = ({
   bankName,
@@ -231,64 +175,300 @@ const buildStatementPdf = ({
   generatedOn,
   filter,
   rows,
-}) => {
-  const headers = ['Date', 'Details', 'Status', 'Debit', 'Credit', 'Balance'];
-  const columnWidths = [55, 150, 60, 85, 175, 55];
-  const pages = [];
-  let commands = [];
-  let y = PDF_PAGE_HEIGHT - PDF_MARGIN;
-
-  const addPage = () => {
-    if (commands.length) pages.push(commands.join('\n'));
-    commands = [];
-    y = PDF_PAGE_HEIGHT - PDF_MARGIN;
-    commands.push(pdfText(`${bankName} - ${statementLabel}`, PDF_MARGIN, y, 16, 'F2'));
-    y -= 20;
-    commands.push(pdfText(`Statement Ref: ${statementReference}`, PDF_MARGIN, y, 10, 'F2'));
-    y -= 16;
-    commands.push(pdfText(`Period: ${periodLabel} | Generated: ${generatedOn} | Filter: ${filter || 'All'}`, PDF_MARGIN, y, 9));
-    y -= 24;
-
-    let x = PDF_MARGIN;
-    commands.push('0.80 0.88 1.00 RG');
-    headers.forEach((header, index) => {
-      commands.push(pdfRect(x, y - 14, columnWidths[index], 20));
-      commands.push(pdfText(header, x + 4, y - 9, 8, 'F2'));
-      x += columnWidths[index];
+  customerDetails = [],
+  summary = [],
+  transactions = [],
+}) =>
+  new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: PDF_MARGIN,
+      bufferPages: true,
+      info: {
+        Title: `${bankName} - ${statementLabel}`,
+        Subject: statementReference,
+        Author: 'AdnatePayNest',
+      },
     });
-    commands.push('0.86 0.91 0.96 RG');
-    y -= 24;
-  };
+    const chunks = [];
 
-  addPage();
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
 
-  (rows.length ? rows : [{ Date: '', Details: 'No statement entries for this period.', Debit: '', Credit: '', Balance: '' }]).forEach((row) => {
-    const cellLines = headers.map((header, index) => splitPdfCell(row[header], columnWidths[index] - 8));
-    const rowHeight = Math.max(...cellLines.map((lines) => lines.length)) * PDF_LINE_HEIGHT + 8;
+    const customerRows = parseDetailRows(customerDetails);
+    const summaryRows = parseDetailRows(summary);
+    const transactionRows = transactions.length ? transactions : rows;
+    const headers = ['Date', 'Description', 'Status', 'Debit', 'Credit', 'Balance'];
+    const columnWidths = [55, 205, 62, 72, 72, 68];
+    const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+    const left = PDF_MARGIN;
+    const bottom = doc.page.height - PDF_MARGIN;
 
-    if (y - rowHeight < PDF_MARGIN) {
-      addPage();
+    const drawBankHeader = () => {
+      const top = doc.y;
+      const logoSize = 42;
+
+      if (fs.existsSync(statementLogoPath)) {
+        doc.image(statementLogoPath, left, top, { width: logoSize, height: logoSize });
+      } else {
+        doc.circle(left + logoSize / 2, top + logoSize / 2, logoSize / 2).fill('#0f172a');
+      }
+
+      doc
+        .fillColor('#0f172a')
+        .font('Helvetica-Bold')
+        .fontSize(18)
+        .text(normalizePdfText(bankName), left + 54, top + 1, {
+          width: 280,
+        });
+      doc
+        .font('Helvetica')
+        .fontSize(8.5)
+        .fillColor('#475569')
+        .text('Digital Banking Branch | IFSC ADNT0000001', left + 54, top + 24, {
+          width: 280,
+        })
+        .text('support@adnatepaynest.local | www.adnatepaynest.local', left + 54, top + 36, {
+          width: 280,
+        });
+
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .fillColor('#0f172a')
+        .text(normalizePdfText(statementLabel), left + 350, top + 2, {
+          width: tableWidth - 350,
+          align: 'right',
+        });
+      doc
+        .font('Helvetica')
+        .fontSize(8.5)
+        .fillColor('#475569')
+        .text(`Statement Ref: ${normalizePdfText(statementReference)}`, left + 350, top + 22, {
+          width: tableWidth - 350,
+          align: 'right',
+        })
+        .text(`Generated: ${normalizePdfText(generatedOn)}`, left + 350, top + 35, {
+          width: tableWidth - 350,
+          align: 'right',
+        });
+
+      doc
+        .moveTo(left, top + 58)
+        .lineTo(left + tableWidth, top + 58)
+        .lineWidth(1)
+        .strokeColor('#cbd5e1')
+        .stroke();
+
+      doc.y = top + 74;
+    };
+
+    const drawSectionTitle = (title, subtitle) => {
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(10)
+        .fillColor('#0f172a')
+        .text(title, left, doc.y, { width: tableWidth });
+
+      if (subtitle) {
+        doc
+          .font('Helvetica')
+          .fontSize(8)
+          .fillColor('#64748b')
+          .text(subtitle, left, doc.y + 2, { width: tableWidth });
+      }
+
+      doc.moveDown(0.55);
+    };
+
+    const drawInfoGrid = (items, x, y, width, columns = 2) => {
+      const rowHeight = 34;
+      const columnWidth = width / columns;
+      const rowsCount = Math.ceil(items.length / columns);
+      const boxHeight = rowsCount * rowHeight + 12;
+
+      doc.roundedRect(x, y, width, boxHeight, 6).fillAndStroke('#f8fafc', '#dbe3ee');
+
+      items.forEach((item, index) => {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        const cellX = x + 12 + column * columnWidth;
+        const cellY = y + 10 + row * rowHeight;
+
+        doc
+          .font('Helvetica')
+          .fontSize(7.5)
+          .fillColor('#64748b')
+          .text(normalizePdfText(item.label), cellX, cellY, {
+            width: columnWidth - 20,
+          });
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(8.5)
+          .fillColor('#0f172a')
+          .text(normalizePdfText(item.value), cellX, cellY + 11, {
+            width: columnWidth - 20,
+            height: 20,
+          });
+      });
+
+      doc.y = y + boxHeight;
+      return boxHeight;
+    };
+
+    const drawSummaryCards = (items) => {
+      const cardGap = 8;
+      const cardWidth = (tableWidth - cardGap * 2) / 3;
+      const cardHeight = 47;
+      const highlightedLabels = new Set(['Opening Balance', 'Total Credits', 'Total Debits', 'Closing Balance', 'Current Balance']);
+      const cards = items.filter((item) => highlightedLabels.has(item.label)).slice(0, 6);
+      const startY = doc.y;
+
+      for (let index = 0; index < cards.length; index += 1) {
+        const column = index % 3;
+        const row = Math.floor(index / 3);
+        const x = left + column * (cardWidth + cardGap);
+        const y = startY + row * (cardHeight + 8);
+        const isBalance = /balance/i.test(cards[index].label);
+
+        doc
+          .roundedRect(x, y, cardWidth, cardHeight, 6)
+          .fillAndStroke(isBalance ? '#ecfdf5' : '#ffffff', isBalance ? '#bbf7d0' : '#dbe3ee');
+        doc
+          .font('Helvetica')
+          .fontSize(7.5)
+          .fillColor(isBalance ? '#047857' : '#64748b')
+          .text(cards[index].label, x + 10, y + 9, { width: cardWidth - 20 });
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(12)
+          .fillColor(isBalance ? '#047857' : '#0f172a')
+          .text(cards[index].value, x + 10, y + 24, { width: cardWidth - 20 });
+      }
+
+      if (cards.length) {
+        doc.y = startY + Math.ceil(cards.length / 3) * (cardHeight + 8) + 10;
+      }
+    };
+
+    const drawTableHeader = () => {
+      let x = left;
+      const y = doc.y;
+
+      doc.rect(left, y, tableWidth, 24).fill('#0f172a');
+      headers.forEach((header, index) => {
+        doc
+          .fillColor('#ffffff')
+          .font('Helvetica-Bold')
+          .fontSize(8)
+          .text(header, x + 5, y + 8, {
+            width: columnWidths[index] - 8,
+            align: ['Debit', 'Credit', 'Balance'].includes(header) ? 'right' : 'left',
+          });
+        x += columnWidths[index];
+      });
+      doc.y = y + 24;
+    };
+
+    const addTransactionPage = () => {
+      doc.addPage();
+      drawBankHeader();
+      drawSectionTitle('Transaction Activity', `Period: ${normalizePdfText(periodLabel)} | Filter: ${normalizePdfText(filter || 'All')}`);
+      drawTableHeader();
+    };
+
+    const textHeight = (text, width) =>
+      doc.heightOfString(normalizePdfText(text || '-'), {
+        width,
+        lineGap: 1,
+      });
+
+    const drawRow = (row, rowIndex) => {
+      const rejectionReason = getPdfValue(row, 'Rejection Reason', '');
+      const description = [
+        getPdfValue(row, 'Details', '-'),
+        getPdfValue(row, 'Manager Review', ''),
+        rejectionReason ? `Rejection reason: ${rejectionReason}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      const values = [
+        getPdfValue(row, 'Date', '-'),
+        description,
+        getPdfValue(row, 'Status', '-'),
+        getPdfValue(row, 'Debit', ''),
+        getPdfValue(row, 'Credit', ''),
+        getPdfValue(row, 'Balance', ''),
+      ];
+      const rowHeight =
+        Math.max(
+          ...values.map((value, index) => textHeight(value, columnWidths[index] - 8))
+        ) +
+        PDF_TABLE_TOP_PADDING +
+        PDF_TABLE_BOTTOM_PADDING;
+
+      if (doc.y + rowHeight > bottom) {
+        addTransactionPage();
+      }
+
+      let x = left;
+      const y = doc.y;
+
+      doc.rect(left, y, tableWidth, rowHeight).fill(rejectionReason ? '#fff7ed' : rowIndex % 2 === 0 ? '#ffffff' : '#f8fafc');
+      doc.lineWidth(0.5).strokeColor('#cbd5e1');
+
+      headers.forEach((header, index) => {
+        doc.rect(x, y, columnWidths[index], rowHeight).stroke();
+        doc
+          .fillColor(rejectionReason && index === 1 ? '#9a3412' : '#0f172a')
+          .font(rejectionReason && index === 1 ? 'Helvetica-Bold' : 'Helvetica')
+          .fontSize(8)
+          .text(values[index], x + 4, y + PDF_TABLE_TOP_PADDING, {
+            width: columnWidths[index] - 8,
+            lineGap: 1,
+            align: ['Debit', 'Credit', 'Balance'].includes(header) ? 'right' : 'left',
+          });
+        x += columnWidths[index];
+      });
+
+      doc.y = y + rowHeight + PDF_ROW_GAP;
+    };
+
+    drawBankHeader();
+    drawSectionTitle('Statement Overview', `Period: ${normalizePdfText(periodLabel)} | Filter: ${normalizePdfText(filter || 'All')}`);
+
+    drawInfoGrid(
+      customerRows.length
+        ? customerRows
+        : [{ label: 'Statement Reference', value: statementReference }],
+      left,
+      doc.y,
+      tableWidth,
+      2
+    );
+
+    doc.y += 16;
+    drawSectionTitle('Summary');
+    drawSummaryCards(summaryRows);
+
+    if (!summaryRows.length) {
+      doc.moveDown(0.5);
     }
 
-    let x = PDF_MARGIN;
-    headers.forEach((header, index) => {
-      commands.push(pdfRect(x, y - rowHeight + 5, columnWidths[index], rowHeight));
-      cellLines[index].forEach((line, lineIndex) => {
-        commands.push(pdfText(line || '-', x + 4, y - 10 - lineIndex * PDF_LINE_HEIGHT, 8));
-      });
-      x += columnWidths[index];
-    });
-    y -= rowHeight;
+    drawSectionTitle('Transaction Activity');
+    drawTableHeader();
+
+    const bodyRows = transactionRows.length
+      ? transactionRows
+      : [{ Date: '', Details: 'No statement entries for this period.', Debit: '', Credit: '', Balance: '' }];
+
+    bodyRows.forEach((row, rowIndex) => drawRow(row, rowIndex));
+
+    doc.end();
   });
 
-  pages.push(commands.join('\n'));
-  return createPdfBuffer(pages);
-};
-
-const buildSafeStatementFilename = (statementReference) =>
-  `${String(statementReference || 'statement').replace(/[^a-z0-9_-]/gi, '-')}.pdf`;
-
-const emailStatement = async (req, res) => {
+const getStatementPayload = (body) => {
   const {
     statementReference,
     statementLabel,
@@ -297,25 +477,91 @@ const emailStatement = async (req, res) => {
     filter,
     bankName = 'AdnatePayNest',
     rows = [],
-  } = req.body;
+    customerDetails = [],
+    summary = [],
+    transactions = [],
+  } = body;
+
+  return {
+    statementReference,
+    statementLabel,
+    periodLabel,
+    generatedOn,
+    filter,
+    bankName,
+    rows: Array.isArray(rows) ? rows : [],
+    customerDetails: Array.isArray(customerDetails) ? customerDetails : [],
+    summary: Array.isArray(summary) ? summary : [],
+    transactions: Array.isArray(transactions) ? transactions : [],
+  };
+};
+
+const validateStatementPayload = ({ statementReference, statementLabel, periodLabel }) => {
+  if (!statementReference || !statementLabel || !periodLabel) {
+    return 'Statement details are required.';
+  }
+
+  return null;
+};
+
+const downloadStatementPdf = async (req, res) => {
+  const payload = getStatementPayload(req.body);
+  const validationMessage = validateStatementPayload(payload);
+
+  if (validationMessage) {
+    return res.status(400).json({ message: validationMessage });
+  }
+
+  const statementPdf = await buildStatementPdf({
+    ...payload,
+    generatedOn: payload.generatedOn || new Date().toISOString().slice(0, 10),
+  });
+  const filename = buildSafeStatementFilename(payload.statementReference);
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(statementPdf);
+};
+
+const buildSafeStatementFilename = (statementReference) =>
+  `${String(statementReference || 'statement').replace(/[^a-z0-9_-]/gi, '-')}.pdf`;
+
+const emailStatement = async (req, res) => {
+  const payload = getStatementPayload(req.body);
+  const {
+    statementReference,
+    statementLabel,
+    periodLabel,
+    generatedOn,
+    filter,
+    bankName,
+    rows,
+    customerDetails,
+    summary,
+    transactions,
+  } = payload;
 
   if (!req.user?.email) {
     return res.status(400).json({ message: 'Your account does not have an email address.' });
   }
 
-  if (!statementReference || !statementLabel || !periodLabel) {
-    return res.status(400).json({ message: 'Statement details are required.' });
+  const validationMessage = validateStatementPayload(payload);
+
+  if (validationMessage) {
+    return res.status(400).json({ message: validationMessage });
   }
 
-  const safeRows = Array.isArray(rows) ? rows : [];
-  const statementPdf = buildStatementPdf({
+  const statementPdf = await buildStatementPdf({
     bankName,
     statementLabel,
     statementReference,
     periodLabel,
     generatedOn: generatedOn || new Date().toISOString().slice(0, 10),
     filter,
-    rows: safeRows,
+    rows,
+    customerDetails,
+    summary,
+    transactions,
   });
   const delivery = await sendEmail({
     to: req.user.email,
@@ -1060,4 +1306,4 @@ const createOwnAccountTransfer = async (req, res) => {
   }
 };
 
-module.exports = { emailStatement, getTransactions, createOwnAccountTransfer, createTransfer };
+module.exports = { downloadStatementPdf, emailStatement, getTransactions, createOwnAccountTransfer, createTransfer };

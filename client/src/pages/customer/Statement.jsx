@@ -17,7 +17,6 @@ import DashboardLayout from "../../layouts/DashboardLayout";
 import { BANK_NAME, formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { useAuth } from "../../context/useAuth";
 import { getCustomerAccounts } from "../../utils/overdraft";
-import { downloadPdf as downloadPdfFile } from "../../utils/pdfExport";
 import { getTransactionStatusLabel } from "../../utils/ui";
 
 const toDateInputValue = (date) => date.toISOString().slice(0, 10);
@@ -143,6 +142,7 @@ const Statement = () => {
   const [interimEndDate, setInterimEndDate] = useState(todayValue);
   const [statementEntries, setStatementEntries] = useState([]);
   const [emailSending, setEmailSending] = useState(false);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
   const accounts = useMemo(() => getCustomerAccounts(user), [user]);
   const accountNumbers = useMemo(
     () => new Set(accounts.map((account) => account.accountNumber).filter(Boolean)),
@@ -403,6 +403,8 @@ const Statement = () => {
     Credit: "",
     Balance: value,
   }));
+  const pdfCustomerDetails = accountInfoRows.map(([label, value]) => ({ label, value }));
+  const pdfSummaryRows = balanceRows.map(([label, value]) => ({ label, value }));
 
   const downloadCsv = () => {
     try {
@@ -454,20 +456,41 @@ const Statement = () => {
     }
   };
 
-  const downloadPdf = () => {
+  const downloadPdf = async () => {
+    setPdfDownloading(true);
+
     try {
-      downloadPdfFile(
-        buildStatementFilename(statementReference, "pdf"),
-        `${bankName} - ${statementLabel}`,
-        [...accountRows, ...summaryRows, ...statementRows],
+      const filename = buildStatementFilename(statementReference, "pdf");
+      const { data } = await api.post(
+        "/transfers/statement/pdf",
         {
-          headers: ["Date", "Details", "Status", "Debit", "Credit", "Balance"],
-          subtitle: `${statementReference} | ${periodLabel} | Generated ${generatedOn} | Filter: ${filter}`,
-        }
+          statementReference,
+          statementLabel,
+          periodLabel,
+          generatedOn,
+          filter,
+          bankName,
+          rows: [...accountRows, ...summaryRows, ...statementRows],
+          customerDetails: pdfCustomerDetails,
+          summary: pdfSummaryRows,
+          transactions: statementRows,
+        },
+        { responseType: "blob" }
       );
+      const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
       toast.success(`${statementLabel} PDF downloaded.`);
     } catch {
       toast.error("Unable to download statement PDF. Please try again.");
+    } finally {
+      setPdfDownloading(false);
     }
   };
 
@@ -483,6 +506,9 @@ const Statement = () => {
         filter,
         bankName,
         rows: [...accountRows, ...summaryRows, ...statementRows],
+        customerDetails: pdfCustomerDetails,
+        summary: pdfSummaryRows,
+        transactions: statementRows,
       });
 
       toast.success(data.message || "Statement sent to your registered email.");
@@ -521,10 +547,11 @@ const Statement = () => {
             <button
               type="button"
               onClick={downloadPdf}
+              disabled={pdfDownloading}
               className="inline-flex items-center gap-2 border-l border-bank-card-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-bank-surface"
             >
               <Download size={16} />
-              PDF
+              {pdfDownloading ? "Downloading..." : "PDF"}
             </button>
           </div>
         </PageHeader>
