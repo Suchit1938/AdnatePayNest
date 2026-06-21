@@ -12,6 +12,7 @@ import {
   Clock,
   CreditCard,
   Edit3,
+  FileBarChart,
   FileText,
   Gauge,
   IdCard,
@@ -36,6 +37,10 @@ import ChartTooltip from "../../components/ui/ChartTooltip";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
+import {
+  RechartsDonut,
+  RechartsHorizontalBar,
+} from "../../components/ui/RechartsReports";
 import SectionCard from "../../components/ui/SectionCard";
 import TablePagination from "../../components/ui/TablePagination";
 import { useToast } from "../../components/ui/useToast";
@@ -87,9 +92,12 @@ const formatDetailLabel = (value) =>
     .replace(/([A-Z])/g, " $1")
     .replace(/^./, (letter) => letter.toUpperCase());
 
+const getUploadUrl = (fileUrl = "") =>
+  fileUrl ? `${api.defaults.baseURL.replace(/\/api$/, "")}${fileUrl}` : "";
+
 const loanScoreLabels = {
   incomeStrength: "Income Strength",
-  liabilities: "FOIR / Liabilities",
+  liabilities: "Active Loans",
   classification: "Classification",
   employmentStability: "Employment Stability",
   accountHistory: "Account History",
@@ -117,7 +125,7 @@ const getScoreReason = (loan) => {
     .filter((item) => item.max > 0)
     .sort((left, right) => left.value / left.max - right.value / right.max)[0];
 
-  if (!weakest) return "Score is based on income, liabilities, classification, employment, account history, and overdraft usage.";
+  if (!weakest) return "Score is based on income, active loans, classification, employment, account history, and overdraft usage.";
 
   return `Main score reducer: ${loanScoreLabels[weakest.key] || weakest.key} at ${weakest.value}/${weakest.max}.`;
 };
@@ -211,6 +219,19 @@ const transactionTypeLabels = {
 };
 
 const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
+const delinquentEmiStatuses = new Set(["missed", "overdue"]);
+const openEmiStatuses = new Set(["pending", "missed", "overdue", "part_paid"]);
+
+const getLoanOutstandingExposure = (loan) =>
+  Number(loan.outstandingPrincipal || 0) +
+  Number(loan.foreclosureQuote?.accruedInterest || loan.accruedInterest || 0) +
+  Number(loan.foreclosureQuote?.unpaidPenalties || loan.accruedPenalty || 0);
+
+const getLoanDelinquentRows = (loan) =>
+  (loan.amortizationSchedule || []).filter((row) => delinquentEmiStatuses.has(row.status));
+
+const getLoanNextOpenEmi = (loan) =>
+  (loan.amortizationSchedule || []).find((row) => openEmiStatuses.has(row.status));
 
 const tierPermissionDefaults = {
   perTxnLimit: false,
@@ -287,6 +308,9 @@ function ManagerDashboard() {
   const [odCustomerFilter, setOdCustomerFilter] = useState("attention");
   const [odCustomerSearch, setOdCustomerSearch] = useState("");
   const [odMonitoringTab, setOdMonitoringTab] = useState("cases");
+  const [loanPortfolioFilter, setLoanPortfolioFilter] = useState("all");
+  const [loanPortfolioSearch, setLoanPortfolioSearch] = useState("");
+  const [expandedPortfolioLoanId, setExpandedPortfolioLoanId] = useState("");
   const [transactionStatusFilter, setTransactionStatusFilter] = useState("all");
   const [transactionSearch, setTransactionSearch] = useState("");
   const [businessRules, setBusinessRules] = useState({
@@ -374,6 +398,121 @@ function ManagerDashboard() {
   );
   const approvedLoans = loans.filter((loan) => loan.status === "approved");
   const disbursedLoans = loans.filter((loan) => loan.status === "disbursed");
+  const loanPortfolioLoans = loans.filter((loan) =>
+    ["approved", "disbursed", "closed", "rejected"].includes(loan.status)
+  );
+  const loanPortfolioHealth = useMemo(() => {
+    const now = new Date();
+    const nextWeek = new Date(now);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+
+    const operationalLoans = loanPortfolioLoans.filter((loan) =>
+      ["approved", "disbursed"].includes(loan.status)
+    );
+    const repaymentRows = loanPortfolioLoans.flatMap((loan) =>
+      (loan.repaymentHistory || []).map((entry) => ({ ...entry, loan }))
+    );
+    const successfulRepayments = repaymentRows.filter((entry) => entry.status === "success");
+    const collectedAmount = successfulRepayments.reduce(
+      (sum, entry) => sum + Number(entry.amount || 0),
+      0
+    );
+    const dueSoonRows = operationalLoans.flatMap((loan) =>
+      (loan.amortizationSchedule || [])
+        .filter((row) => {
+          const dueDate = row.dueDate ? new Date(row.dueDate) : null;
+
+          return (
+            row.status === "pending" &&
+            dueDate &&
+            !Number.isNaN(dueDate.getTime()) &&
+            dueDate <= nextWeek
+          );
+        })
+        .map((row) => ({ ...row, loan }))
+    );
+    const delinquentLoans = operationalLoans
+      .map((loan) => {
+        const delinquentRows = getLoanDelinquentRows(loan);
+        const delinquentAmount = delinquentRows.reduce(
+          (sum, row) => sum + Number(row.emiAmount || 0) + Number(row.penaltyAmount || 0),
+          0
+        );
+        const nextOpenEmi = getLoanNextOpenEmi(loan);
+
+        return {
+          ...loan,
+          delinquentRows,
+          delinquentAmount,
+          outstandingExposure: getLoanOutstandingExposure(loan),
+          nextOpenEmi,
+        };
+      })
+      .filter((loan) => loan.delinquentRows.length > 0)
+      .sort(
+        (left, right) =>
+          right.delinquentRows.length - left.delinquentRows.length ||
+          right.delinquentAmount - left.delinquentAmount ||
+          right.outstandingExposure - left.outstandingExposure
+      );
+    const delinquentAmount = delinquentLoans.reduce(
+      (sum, loan) => sum + loan.delinquentAmount,
+      0
+    );
+    const collectionBase = collectedAmount + delinquentAmount;
+    const byType = ["personal", "home", "vehicle", "education"].map((loanType) => {
+      const rows = operationalLoans.filter((loan) => loan.loanType === loanType);
+
+      return {
+        label: formatStatusLabel(loanType),
+        count: rows.length,
+        exposure: rows.reduce((sum, loan) => sum + getLoanOutstandingExposure(loan), 0),
+      };
+    });
+    const maxExposure = Math.max(...byType.map((row) => row.exposure), 1);
+
+    return {
+      activeCount: operationalLoans.length,
+      outstandingExposure: operationalLoans.reduce(
+        (sum, loan) => sum + getLoanOutstandingExposure(loan),
+        0
+      ),
+      collectedAmount,
+      collectionRate: collectionBase > 0 ? Math.round((collectedAmount / collectionBase) * 100) : 100,
+      dueSoonCount: dueSoonRows.length,
+      dueSoonAmount: dueSoonRows.reduce((sum, row) => sum + Number(row.emiAmount || 0), 0),
+      delinquentLoans,
+      delinquentAmount,
+      byType: byType.map((row) => ({
+        ...row,
+        width: `${Math.max(8, Math.round((row.exposure / maxExposure) * 100))}%`,
+      })),
+      followUpLoans: delinquentLoans.slice(0, 5),
+    };
+  }, [loanPortfolioLoans]);
+  const filteredLoanPortfolioLoans = useMemo(() => {
+    const query = loanPortfolioSearch.trim().toLowerCase();
+
+    return loanPortfolioLoans.filter((loan) => {
+      const matchesStatus =
+        loanPortfolioFilter === "all" || loan.status === loanPortfolioFilter;
+
+      if (!matchesStatus) return false;
+      if (!query) return true;
+
+      return [
+        loan.id,
+        loan.customerName,
+        loan.customerCode,
+        loan.loanTypeLabel,
+        loan.disbursementAccountNumber,
+        loan.sanctionLetter?.status,
+        loan.loanAgreement?.status,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [loanPortfolioFilter, loanPortfolioLoans, loanPortfolioSearch]);
   const tierDecisionHistory = useMemo(
     () => dashboardData.tierDecisionHistory || [],
     [dashboardData.tierDecisionHistory]
@@ -708,11 +847,13 @@ function ManagerDashboard() {
   const notificationPagination = usePaginatedRows(notifications);
   const loanReviewPagination = usePaginatedRows(pendingLoanReviews);
   const approvedLoanPagination = usePaginatedRows(approvedLoans);
+  const loanPortfolioPagination = usePaginatedRows(filteredLoanPortfolioLoans);
   const activeSection = section === "loan" ? "loans" : section;
   const pageTitle = {
     dashboard: "Manager Dashboard",
     approvals: "Approval Queue",
     loans: "Loan Reviews",
+    "loan-portfolio": "Loan Portfolio",
     "approval-history": "Decision History",
     overdraft: "Overdraft Monitoring",
     policies: "Tier Policies",
@@ -1257,16 +1398,6 @@ function ManagerDashboard() {
     </section>
   );
 
-  const maxOdUsed = Math.max(...odUtilizers.map((item) => Number(item.used || 0)), 1);
-  const maxExposure = Math.max(
-    ...overdraftExposureByType.map((item) => Number(item.value || 0)),
-    1
-  );
-  const totalRiskCount = Math.max(
-    overdraftRisk.reduce((sum, item) => sum + Number(item.value || 0), 0),
-    1
-  );
-
   const odOverview = (
     <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       <StatsCard
@@ -1401,30 +1532,15 @@ function ManagerDashboard() {
   const odUtilizationCard = (
     <SectionCard title="OD Utilization" subtitle="Sanctioned limit versus active usage" icon={Gauge}>
       <div className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-center">
-        <div className="flex justify-center">
-          <div className="group relative h-48 w-48 rounded-full outline-none" tabIndex={0}>
-          <div
-            className="grid h-full w-full place-items-center rounded-full shadow-inner"
-            style={{
-              background: `conic-gradient(#2563eb 0 ${clampPercent(
-                odPercent
-              )}%, #e2e8f0 ${clampPercent(odPercent)}% 100%)`,
-            }}
-          >
-            <div className="grid h-28 w-28 place-items-center rounded-full bg-white text-center shadow-sm">
-              <div>
-                <p className="text-3xl font-bold text-slate-950">{odPercent}%</p>
-                <p className="text-xs font-semibold uppercase text-slate-500">Used</p>
-              </div>
-            </div>
-          </div>
-          <ChartTooltip
-            label="OD Utilization"
-            value={`${odPercent}% used`}
-            detail={`${formatCurrency(utilizedOd)} used of ${formatCurrency(totalOdLimit)} sanctioned limit`}
-            className="left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 group-hover:block group-focus:block"
+        <div>
+          <RechartsDonut
+            rows={[
+              { label: "Used", value: utilizedOd, color: "#2563eb" },
+              { label: "Available", value: Math.max(0, totalOdLimit - utilizedOd), color: "#e2e8f0" },
+            ]}
+            emptyMessage="No overdraft limits are available to chart."
+            height={220}
           />
-          </div>
         </div>
         <div className="metric-grid">
           <MetricTile label="Total OD Limit" value={formatCurrency(totalOdLimit)} />
@@ -1441,114 +1557,61 @@ function ManagerDashboard() {
 
   const odTopUtilizersCard = (
     <SectionCard title="Top Customer Utilization" subtitle="Highest active overdraft balances" icon={BarChart3}>
-      <div className="space-y-4">
-        {odUtilizers.length === 0 && (
-        <EmptyState message="No active overdraft usage is recorded right now." />
-        )}
-        {odUtilizers.map((item) => {
+      <RechartsHorizontalBar
+        rows={odUtilizers.map((item) => {
           const risk = odRiskStyles[item.risk] || odRiskStyles.active;
-          const width = Math.max(6, Math.round((Number(item.used || 0) / maxOdUsed) * 100));
 
-          return (
-            <div key={`${item.customer}-${item.used}`} className="group relative space-y-2 rounded-lg outline-none" tabIndex={0}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="font-semibold text-slate-900">{item.customer}</p>
-                  <p className="text-xs text-slate-500">
-                    {formatCurrency(item.used)} of {formatCurrency(item.limit)}
-                  </p>
-                </div>
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${risk.badge}`}>
-                  {item.utilization}% {risk.label}
-                </span>
-              </div>
-              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className={`h-full rounded-full ${risk.bar}`}
-                  style={{ width: item.used > 0 ? `${width}%` : "0%" }}
-                />
-              </div>
-              <ChartTooltip
-                label={item.customer}
-                value={`${item.utilization}% utilized`}
-                detail={`${formatCurrency(item.used)} used of ${formatCurrency(item.limit)} limit`}
-                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-              />
-            </div>
-          );
+          return {
+            label: item.customer,
+            value: item.used,
+            color:
+              risk.label === "Critical"
+                ? "#ef4444"
+                : risk.label === "High"
+                  ? "#f59e0b"
+                  : "#2563eb",
+          };
         })}
-      </div>
+        valueFormatter={formatCurrency}
+        emptyMessage="No active overdraft usage is recorded right now."
+      />
     </SectionCard>
   );
 
   const odRiskCard = (
     <SectionCard title="Risk Distribution" subtitle="Customers grouped by OD utilization">
-      <div className="space-y-4">
-        {overdraftRisk.length === 0 && (
-          <EmptyState message="No overdraft utilization groups are available right now." />
-        )}
-        {overdraftRisk.map((item) => {
+      <RechartsDonut
+        rows={overdraftRisk.map((item) => {
           const risk = odRiskStyles[item.label] || odRiskStyles.unused;
-          const width = Math.max(4, Math.round((Number(item.value || 0) / totalRiskCount) * 100));
 
-          return (
-            <div key={item.label} className="group relative space-y-2 rounded-lg outline-none" tabIndex={0}>
-              <div className="flex items-center justify-between gap-3">
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${risk.soft}`}>
-                  {risk.label}
-                </span>
-                <span className="text-sm font-bold text-slate-900">{item.value}</span>
-              </div>
-              <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className={`h-full rounded-full ${risk.bar}`}
-                  style={{ width: Number(item.value || 0) > 0 ? `${width}%` : "0%" }}
-                />
-              </div>
-              <ChartTooltip
-                label={risk.label}
-                value={`${item.value} customer${Number(item.value) === 1 ? "" : "s"}`}
-                detail={`${width}% of current OD risk distribution`}
-                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-              />
-            </div>
-          );
+          return {
+            label: risk.label,
+            value: item.value,
+            color:
+              risk.label === "Critical"
+                ? "#ef4444"
+                : risk.label === "High"
+                  ? "#f59e0b"
+                  : risk.label === "Active"
+                    ? "#2563eb"
+                    : "#94a3b8",
+          };
         })}
-      </div>
+        emptyMessage="No overdraft utilization groups are available right now."
+      />
     </SectionCard>
   );
 
   const odExposureCard = (
     <SectionCard title="Exposure By Account Type" subtitle="Active OD amount by primary account">
-      <div className="space-y-4">
-        {overdraftExposureByType.length === 0 && (
-          <EmptyState message="No active overdraft exposure is linked to account types." />
-        )}
-        {overdraftExposureByType.map((item) => {
-          const width = Math.max(6, Math.round((Number(item.value || 0) / maxExposure) * 100));
-
-          return (
-            <div key={item.label} className="group relative space-y-2 rounded-lg outline-none" tabIndex={0}>
-              <div className="flex items-center justify-between gap-3">
-                <p className="font-semibold text-slate-900">{item.label}</p>
-                <p className="text-sm font-bold text-slate-900">{formatCurrency(item.value)}</p>
-              </div>
-              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className="h-full rounded-full bg-sky-500"
-                  style={{ width: Number(item.value || 0) > 0 ? `${width}%` : "0%" }}
-                />
-              </div>
-              <ChartTooltip
-                label={item.label}
-                value={formatCurrency(item.value)}
-                detail={`${width}% of highest account-type exposure`}
-                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-              />
-            </div>
-          );
-        })}
-      </div>
+      <RechartsHorizontalBar
+        rows={overdraftExposureByType.map((item, index) => ({
+          ...item,
+          color: ["#0891b2", "#2563eb", "#10b981"][index % 3],
+        }))}
+        valueFormatter={formatCurrency}
+        emptyMessage="No active overdraft exposure is linked to account types."
+      />
     </SectionCard>
   );
 
@@ -2114,39 +2177,20 @@ function ManagerDashboard() {
           subtitle="Status split for the latest customer transaction register."
           icon={BarChart3}
         >
-          <div className="space-y-4">
-            {transactionStatusRows.map((row) => {
-              const width = transactions.length > 0 ? Math.max(6, Math.round((row.value / transactions.length) * 100)) : 0;
-
-              return (
-                <button
-                  key={row.key}
-                  type="button"
-                  onClick={() => setTransactionStatusFilter(row.key)}
-                  className="group relative block w-full rounded-xl border border-bank-card-border bg-white p-4 text-left transition hover:border-blue-200 hover:bg-blue-50/40"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-bold text-slate-900">{row.label}</span>
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${row.tone}`}>
-                      {row.value}
-                    </span>
-                  </div>
-                  <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className={`h-full rounded-full ${row.bar}`}
-                      style={{ width: row.value > 0 ? `${width}%` : "0%" }}
-                    />
-                  </div>
-                  <ChartTooltip
-                    label={row.label}
-                    value={`${row.value} transaction${row.value === 1 ? "" : "s"}`}
-                    detail={`${width}% of latest customer transaction register`}
-                    className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-                  />
-                </button>
-              );
-            })}
-          </div>
+          <RechartsHorizontalBar
+            rows={transactionStatusRows.map((row) => ({
+              label: row.label,
+              value: row.value,
+              color:
+                row.key === "success"
+                  ? "#10b981"
+                  : row.key === "failed"
+                    ? "#ef4444"
+                    : "#f59e0b",
+            }))}
+            valueFormatter={(value) => `${value}`}
+            emptyMessage="No transaction status records are available yet."
+          />
         </SectionCard>
 
         <SectionCard
@@ -2702,11 +2746,17 @@ function ManagerDashboard() {
                           </div>
                         )}
 
-                        <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
+                        <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-4">
                           <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
                             <p className="text-xs font-bold uppercase text-slate-500">FOIR Inputs</p>
                             <p className="mt-1 font-semibold text-slate-700">
                               Income {formatCurrency(loan.monthlyIncome)} / Liabilities {formatCurrency(loan.existingMonthlyLiabilities)} / EMI {formatCurrency(loan.emiAmount)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                            <p className="text-xs font-bold uppercase text-slate-500">Active Loans</p>
+                            <p className="mt-1 font-semibold text-slate-700">
+                              {loan.activeLoanCount ?? loan.eligibilityDetails?.activeLoanCount ?? 0} active loan(s)
                             </p>
                           </div>
                           <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
@@ -2963,19 +3013,516 @@ function ManagerDashboard() {
         ) : (
           <div className="space-y-3">
             {approvedLoanPagination.pageRows.map((loan) => (
-              <div key={loan.id} className="flex flex-col gap-3 rounded-xl border border-bank-card-border bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div key={loan.id} className="flex flex-col gap-3 rounded-xl border border-bank-card-border bg-white p-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
                   <p className="font-bold text-slate-950">{loan.customerName} / {loan.loanTypeLabel}</p>
                   <p className="mt-1 text-sm font-semibold text-slate-500">
                     {loan.id} / {formatCurrency(loan.amount)} / EMI {formatCurrency(loan.emiAmount)}
                   </p>
+                  <p className="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                    Sanction: {formatStatusLabel(loan.sanctionLetter?.status || "pending")}
+                  </p>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                    Agreement: {formatStatusLabel(loan.loanAgreement?.status || "pending")}
+                  </p>
+                  {(loan.sanctionLetter?.status !== "accepted" ||
+                    loan.loanAgreement?.status !== "accepted") && (
+                    <p className="mt-1 text-xs font-semibold text-amber-700">
+                      Waiting for customer sanction and agreement acceptance before disbursal.
+                    </p>
+                  )}
                 </div>
-                <button type="button" onClick={() => disburseLoan(loan.id)} className="btn-primary justify-center">
-                  Disburse
-                </button>
+                <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
+                  {loan.sanctionLetter?.fileUrl && (
+                    <a
+                      href={getUploadUrl(loan.sanctionLetter.fileUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary justify-center px-4 py-2 text-sm"
+                    >
+                      <FileText size={16} />
+                      Sanction PDF
+                    </a>
+                  )}
+                  {loan.loanAgreement?.fileUrl && (
+                    <a
+                      href={getUploadUrl(loan.loanAgreement.fileUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary justify-center px-4 py-2 text-sm"
+                    >
+                      <FileText size={16} />
+                      Agreement PDF
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => disburseLoan(loan.id)}
+                    disabled={
+                      loan.sanctionLetter?.status !== "accepted" ||
+                      loan.loanAgreement?.status !== "accepted"
+                    }
+                    className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    Disburse
+                  </button>
+                </div>
               </div>
             ))}
             <TablePagination {...approvedLoanPagination} />
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+
+  const loanPortfolioSection = (
+    <div className="space-y-6">
+      <SectionCard
+        title="Loan Portfolio"
+        subtitle="Read-only audit view for approved, rejected, disbursed, and closed loans."
+        icon={FileBarChart}
+      >
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div className="relative">
+            <Search
+              size={18}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              value={loanPortfolioSearch}
+              onChange={(event) => setLoanPortfolioSearch(event.target.value)}
+              className="input-field pl-10"
+              placeholder="Search by loan, customer, account, sanction status"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {["all", "approved", "disbursed", "closed", "rejected"].map((status) => (
+              <button
+                key={status}
+                type="button"
+                onClick={() => setLoanPortfolioFilter(status)}
+                className={`rounded-lg px-3 py-2 text-xs font-bold transition ${
+                  loanPortfolioFilter === status
+                    ? "bg-bank-accent text-white"
+                    : "bg-white text-slate-600 ring-1 ring-bank-card-border hover:bg-bank-surface"
+                }`}
+              >
+                {status === "all" ? "All" : formatStatusLabel(status)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Portfolio Health"
+        subtitle="Collection signals for active loans and customer follow-up."
+        icon={Gauge}
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <MetricTile
+            label="Active Loans"
+            value={loanPortfolioHealth.activeCount}
+            tone="accent"
+          />
+          <MetricTile
+            label="Outstanding Exposure"
+            value={formatCurrency(loanPortfolioHealth.outstandingExposure)}
+            tone="warning"
+          />
+          <MetricTile
+            label="Due In 7 Days"
+            value={loanPortfolioHealth.dueSoonCount}
+            tone={loanPortfolioHealth.dueSoonCount > 0 ? "warning" : "success"}
+          />
+          <MetricTile
+            label="Collection Rate"
+            value={`${loanPortfolioHealth.collectionRate}%`}
+            tone={loanPortfolioHealth.collectionRate >= 90 ? "success" : "danger"}
+          />
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-xl border border-bank-card-border bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-slate-950">Loan Distribution</p>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  Outstanding exposure by product type.
+                </p>
+              </div>
+              <BarChart3 className="shrink-0 text-blue-600" size={22} />
+            </div>
+            <RechartsHorizontalBar
+              rows={loanPortfolioHealth.byType.map((row, index) => ({
+                label: `${row.label} / ${row.count}`,
+                value: row.exposure,
+                color: ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4],
+              }))}
+              valueFormatter={formatCurrency}
+              emptyMessage="No active loan exposure is available to chart."
+              height={240}
+            />
+          </div>
+
+          <div className="rounded-xl border border-bank-card-border bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-slate-950">Collection Focus</p>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  Loans with missed or overdue EMI items appear first.
+                </p>
+              </div>
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-bold ${
+                  loanPortfolioHealth.delinquentLoans.length > 0
+                    ? "bg-red-50 text-red-700 ring-1 ring-red-100"
+                    : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
+                }`}
+              >
+                {loanPortfolioHealth.delinquentLoans.length} delinquent
+              </span>
+            </div>
+
+            {loanPortfolioHealth.followUpLoans.length === 0 ? (
+              <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-5 text-sm font-semibold text-emerald-800">
+                No missed or overdue EMI items are currently recorded.
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {loanPortfolioHealth.followUpLoans.map((loan) => (
+                  <button
+                    key={loan.id}
+                    type="button"
+                    onClick={() => setExpandedPortfolioLoanId(loan.id)}
+                    className="w-full rounded-lg border border-red-100 bg-red-50/70 px-4 py-3 text-left transition hover:bg-red-50"
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="break-words font-bold text-slate-950">
+                          {loan.customerName || "Customer"} / {loan.id}
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-slate-600">
+                          {loan.delinquentRows.length} missed or overdue EMI item(s)
+                        </p>
+                      </div>
+                      <div className="shrink-0 sm:text-right">
+                        <p className="font-bold text-red-700">
+                          {formatCurrency(loan.delinquentAmount)}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          Next due {loan.nextOpenEmi?.dueDate ? new Date(loan.nextOpenEmi.dueDate).toLocaleDateString() : "not set"}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
+
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <MetricTile label="Approved" value={loans.filter((loan) => loan.status === "approved").length} tone="warning" />
+        <MetricTile label="Disbursed" value={loans.filter((loan) => loan.status === "disbursed").length} tone="success" />
+        <MetricTile label="Closed" value={loans.filter((loan) => loan.status === "closed").length} tone="accent" />
+        <MetricTile label="Rejected" value={loans.filter((loan) => loan.status === "rejected").length} tone="danger" />
+      </section>
+
+      <SectionCard
+        title="Portfolio Records"
+        subtitle="Open any loan to inspect documents, sanction letter, repayment schedule, and history."
+        icon={BadgeIndianRupee}
+      >
+        {filteredLoanPortfolioLoans.length === 0 ? (
+          <EmptyState message="No loans match the selected portfolio filters." />
+        ) : (
+          <div className="space-y-3">
+            {loanPortfolioPagination.pageRows.map((loan) => {
+              const isExpanded = expandedPortfolioLoanId === loan.id;
+              const sanction = loan.sanctionLetter || {};
+              const agreement = loan.loanAgreement || {};
+              const repaymentSchedule = loan.repaymentScheduleDocument || {};
+              const documentCount = loan.documents?.length || 0;
+
+              return (
+                <article
+                  key={loan.id}
+                  className="overflow-hidden rounded-xl border border-bank-card-border bg-white shadow-sm"
+                >
+                  <div className="grid grid-cols-1 gap-4 p-4 xl:grid-cols-[1.2fr_1fr_1fr_auto] xl:items-center">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="break-words text-lg font-black text-slate-950">
+                          {loan.customerName || "Customer"}
+                        </p>
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${loanStatusStyles[loan.status] || loanStatusStyles.submitted}`}>
+                          {formatStatusLabel(loan.status)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-500">
+                        {loan.customerCode || "Customer ID pending"} / {loan.id}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Loan Terms</p>
+                      <p className="mt-1 font-bold text-slate-950">
+                        {loan.loanTypeLabel} / {formatCurrency(loan.amount)}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        EMI {formatCurrency(loan.emiAmount)} / {loan.annualInterestRate}% p.a.
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Sanction</p>
+                      <p className="mt-1 font-bold text-slate-950">
+                        {formatStatusLabel(sanction.status || "pending")}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        {documentCount} document(s)
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setExpandedPortfolioLoanId(isExpanded ? "" : loan.id)}
+                      className="btn-secondary justify-center whitespace-nowrap px-4 py-2"
+                    >
+                      {isExpanded ? "Hide Details" : "View Details"}
+                    </button>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="border-t border-bank-card-border bg-slate-50/70 p-4">
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Loan Details</p>
+                          <div className="mt-3 space-y-2 text-sm">
+                            <p><span className="font-bold text-slate-500">Type:</span> {loan.loanTypeLabel}</p>
+                            <p><span className="font-bold text-slate-500">Amount:</span> {formatCurrency(loan.amount)}</p>
+                            <p><span className="font-bold text-slate-500">Tenure:</span> {loan.tenureMonths} months</p>
+                            <p><span className="font-bold text-slate-500">EMI:</span> {formatCurrency(loan.emiAmount)}</p>
+                            <p><span className="font-bold text-slate-500">Total Repayment:</span> {formatCurrency(loan.totalRepayment)}</p>
+                            <p><span className="font-bold text-slate-500">Outstanding:</span> {formatCurrency(loan.outstandingPrincipal ?? 0)}</p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Lifecycle</p>
+                          <div className="mt-3 space-y-2 text-sm">
+                            <p><span className="font-bold text-slate-500">Reviewed By:</span> {loan.reviewedBy || "Not recorded"}</p>
+                            <p><span className="font-bold text-slate-500">Reviewed:</span> {formatDateTime(loan.reviewedAt)}</p>
+                            <p><span className="font-bold text-slate-500">Disbursed:</span> {loan.disbursedAt ? formatDateTime(loan.disbursedAt) : "Not disbursed"}</p>
+                            <p><span className="font-bold text-slate-500">Closed:</span> {loan.closedAt ? formatDateTime(loan.closedAt) : "Not closed"}</p>
+                            <p><span className="font-bold text-slate-500">Score:</span> {loan.eligibilityScore}/100</p>
+                            <p><span className="font-bold text-slate-500">Recommendation:</span> {loan.eligibilityRecommendation || "Not recorded"}</p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Sanction Letter</p>
+                          <div className="mt-3 space-y-2 text-sm">
+                            <p><span className="font-bold text-slate-500">Status:</span> {formatStatusLabel(sanction.status || "pending")}</p>
+                            <p><span className="font-bold text-slate-500">Generated:</span> {sanction.generatedAt ? formatDateTime(sanction.generatedAt) : "Not generated"}</p>
+                            <p><span className="font-bold text-slate-500">Accepted:</span> {sanction.acceptedAt ? formatDateTime(sanction.acceptedAt) : "Not accepted"}</p>
+                          </div>
+                          {sanction.fileUrl && (
+                            <a
+                              href={getUploadUrl(sanction.fileUrl)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn-secondary mt-4 justify-center px-4 py-2 text-sm"
+                            >
+                              <FileText size={16} />
+                              View Sanction PDF
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Loan Agreement</p>
+                          <div className="mt-3 space-y-2 text-sm">
+                            <p><span className="font-bold text-slate-500">Status:</span> {formatStatusLabel(agreement.status || "pending")}</p>
+                            <p><span className="font-bold text-slate-500">Generated:</span> {agreement.generatedAt ? formatDateTime(agreement.generatedAt) : "Not generated"}</p>
+                            <p><span className="font-bold text-slate-500">Accepted:</span> {agreement.acceptedAt ? formatDateTime(agreement.acceptedAt) : "Not accepted"}</p>
+                          </div>
+                          {agreement.fileUrl && (
+                            <a
+                              href={getUploadUrl(agreement.fileUrl)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn-secondary mt-4 justify-center px-4 py-2 text-sm"
+                            >
+                              <FileText size={16} />
+                              View Agreement PDF
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Repayment Schedule</p>
+                          <div className="mt-3 space-y-2 text-sm">
+                            <p><span className="font-bold text-slate-500">Status:</span> {formatStatusLabel(repaymentSchedule.status || "pending")}</p>
+                            <p><span className="font-bold text-slate-500">Generated:</span> {repaymentSchedule.generatedAt ? formatDateTime(repaymentSchedule.generatedAt) : "Not generated"}</p>
+                            <p><span className="font-bold text-slate-500">Email:</span> {repaymentSchedule.emailStatus || "Not sent"}</p>
+                          </div>
+                          {repaymentSchedule.fileUrl && (
+                            <a
+                              href={getUploadUrl(repaymentSchedule.fileUrl)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn-secondary mt-4 justify-center px-4 py-2 text-sm"
+                            >
+                              <FileText size={16} />
+                              View Schedule PDF
+                            </a>
+                          )}
+                        </div>
+                      </div>
+
+                      {(loan.purpose || loan.rejectionReason || loan.managerNote) && (
+                        <div className="mt-4 rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Notes</p>
+                          {loan.purpose && (
+                            <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+                              Purpose: {loan.purpose}
+                            </p>
+                          )}
+                          {(loan.rejectionReason || loan.managerNote) && (
+                            <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+                              Manager note: {loan.rejectionReason || loan.managerNote}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="font-bold text-slate-950">Submitted Documents</p>
+                            <span className="rounded-full bg-bank-surface px-3 py-1 text-xs font-bold text-slate-600">
+                              {documentCount} file(s)
+                            </span>
+                          </div>
+                          <div className="mt-3 space-y-2">
+                            {documentCount === 0 ? (
+                              <p className="text-sm font-semibold text-slate-500">No documents were attached.</p>
+                            ) : (
+                              loan.documents.map((document) => (
+                                <div
+                                  key={document.id}
+                                  className="flex flex-col gap-2 rounded-lg bg-bank-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="break-words text-sm font-bold text-slate-950">
+                                      {document.documentType}
+                                    </p>
+                                    <p className="break-words text-xs font-semibold text-slate-500">
+                                      {document.fileName} / {formatStatusLabel(document.reviewStatus || "pending")}
+                                    </p>
+                                  </div>
+                                  <a
+                                    href={
+                                      document.fileUrl
+                                        ? getUploadUrl(document.fileUrl)
+                                        : document.dataUrl
+                                    }
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn-secondary justify-center px-3 py-2 text-xs"
+                                  >
+                                    View
+                                  </a>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-bank-card-border bg-white p-4">
+                          <p className="font-bold text-slate-950">Repayment History</p>
+                          <div className="mt-3 max-h-80 overflow-auto rounded-lg border border-slate-100">
+                            <table className="w-full min-w-[560px] text-left text-sm">
+                              <thead className="table-head">
+                                <tr>
+                                  <th className="px-3 py-2">Date</th>
+                                  <th className="px-3 py-2">Type</th>
+                                  <th className="px-3 py-2">Amount</th>
+                                  <th className="px-3 py-2">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(loan.repaymentHistory || []).length === 0 ? (
+                                  <tr className="table-row">
+                                    <td colSpan={4} className="px-3 py-3 text-sm font-semibold text-slate-500">
+                                      No repayment activity yet.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  loan.repaymentHistory.map((entry, index) => (
+                                    <tr key={`${entry.transactionId || entry.paymentType}-${index}`} className="table-row">
+                                      <td className="px-3 py-2">{entry.paidAt ? formatDateTime(entry.paidAt) : "Not set"}</td>
+                                      <td className="px-3 py-2 font-bold">{formatStatusLabel(entry.paymentType)}</td>
+                                      <td className="px-3 py-2">{formatCurrency(entry.amount)}</td>
+                                      <td className="px-3 py-2">{formatStatusLabel(entry.status)}</td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-bank-card-border bg-white p-4">
+                        <p className="font-bold text-slate-950">Amortization Schedule</p>
+                        <div className="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-100">
+                          <table className="w-full min-w-[760px] text-left text-sm">
+                            <thead className="table-head">
+                              <tr>
+                                <th className="px-3 py-2">EMI</th>
+                                <th className="px-3 py-2">Due Date</th>
+                                <th className="px-3 py-2">Amount</th>
+                                <th className="px-3 py-2">Principal</th>
+                                <th className="px-3 py-2">Interest</th>
+                                <th className="px-3 py-2">Penalty</th>
+                                <th className="px-3 py-2">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(loan.amortizationSchedule || []).length === 0 ? (
+                                <tr className="table-row">
+                                  <td colSpan={7} className="px-3 py-3 text-sm font-semibold text-slate-500">
+                                    No amortization schedule available.
+                                  </td>
+                                </tr>
+                              ) : (
+                                loan.amortizationSchedule.map((row) => (
+                                  <tr key={row.emiNumber} className="table-row">
+                                    <td className="px-3 py-2 font-bold">{row.emiNumber}</td>
+                                    <td className="px-3 py-2">{row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "Not set"}</td>
+                                    <td className="px-3 py-2">{formatCurrency(row.emiAmount)}</td>
+                                    <td className="px-3 py-2">{formatCurrency(row.principalComponent)}</td>
+                                    <td className="px-3 py-2">{formatCurrency(row.interestComponent)}</td>
+                                    <td className="px-3 py-2">{formatCurrency(row.penaltyAmount || 0)}</td>
+                                    <td className="px-3 py-2">{formatStatusLabel(row.status)}</td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+            <TablePagination {...loanPortfolioPagination} />
           </div>
         )}
       </SectionCard>
@@ -3259,6 +3806,7 @@ function ManagerDashboard() {
     dashboard: dashboardWorkbench,
     approvals: approvalTable,
     loans: loanReviewsSection,
+    "loan-portfolio": loanPortfolioSection,
     "approval-history": approvalHistoryTable,
     overdraft: odSection,
     policies: tierPolicyDetails,
@@ -3307,6 +3855,7 @@ function ManagerDashboard() {
           "profile",
           "loan",
           "loans",
+          "loan-portfolio",
         ].includes(section) && (
           <div className="stat-grid">
             <StatsCard

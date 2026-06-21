@@ -103,6 +103,7 @@ const calculateEligibility = ({
   bankAccounts,
   monthlyIncome,
   existingMonthlyLiabilities,
+  activeLoanCount,
   employmentDurationMonths,
   loanAmount,
   emi,
@@ -111,6 +112,7 @@ const calculateEligibility = ({
 }) => {
   const income = toNumber(monthlyIncome);
   const liabilities = toNumber(existingMonthlyLiabilities);
+  const activeLoans = Math.max(0, Math.round(toNumber(activeLoanCount)));
   const amount = toNumber(loanAmount);
   const totalObligation = liabilities + toNumber(emi);
   const foir = income > 0 ? (totalObligation / income) * 100 : 100;
@@ -164,11 +166,11 @@ const calculateEligibility = ({
     ),
     liabilities: Math.round(
       weights.liabilities *
-        scoreByBands(foir, [
-          { test: (ratio) => ratio < 35, ratio: 1 },
-          { test: (ratio) => ratio <= 45, ratio: 0.8 },
-          { test: (ratio) => ratio <= 55, ratio: 0.53 },
-          { test: (ratio) => ratio <= 65, ratio: 0.27 },
+        scoreByBands(activeLoans, [
+          { test: (count) => count === 0, ratio: 1 },
+          { test: (count) => count === 1, ratio: 0.8 },
+          { test: (count) => count === 2, ratio: 0.53 },
+          { test: (count) => count === 3, ratio: 0.27 },
         ])
     ),
     classification: Math.round(
@@ -202,6 +204,7 @@ const calculateEligibility = ({
     totalScore: Math.max(0, Math.min(100, totalScore)),
     componentScores,
     foir: Number.isFinite(foir) ? Number(foir.toFixed(2)) : 100,
+    activeLoanCount: activeLoans,
     odUsage: odUsage === null ? null : Number(odUsage.toFixed(2)),
     odUtilizationRatio: Number(odUtilizationRatio.toFixed(2)),
     odFrequencyRatio: Number(odFrequencyRatio.toFixed(2)),

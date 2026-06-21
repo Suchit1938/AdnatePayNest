@@ -1,6 +1,7 @@
 const SystemLog = require('../models/SystemLog');
 const Transaction = require('../models/Transaction');
 const BankAccount = require('../models/BankAccount');
+const Loan = require('../models/Loan');
 const Tier = require('../models/Tier');
 const User = require('../models/User');
 const {
@@ -10,6 +11,73 @@ const {
 } = require('../utils/accountTypeOdPolicy');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
+const ACTIVE_LOAN_STATUSES = ['approved', 'disbursed'];
+const DELINQUENT_EMI_STATUSES = ['missed', 'overdue'];
+
+const getLoanOutstandingPrincipal = (loan) => {
+  if (loan.status === 'closed') return 0;
+
+  const paidPrincipal = (loan.repaymentHistory || []).reduce(
+    (sum, entry) => sum + toWholeRupees(entry.status === 'success' ? entry.principalPaid : 0),
+    0
+  );
+  const calculatedPrincipal = Math.max(0, toWholeRupees(loan.amount) - paidPrincipal);
+  const storedPrincipal = Math.max(0, toWholeRupees(loan.outstandingPrincipal));
+
+  return storedPrincipal > 0 || paidPrincipal > 0 ? storedPrincipal : calculatedPrincipal;
+};
+
+const monthKeyFromDate = (value) => {
+  const date = value ? new Date(value) : null;
+
+  if (!date || Number.isNaN(date.getTime())) return 'Unscheduled';
+
+  return date.toLocaleDateString('en-IN', {
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const serializeLoanAnalyticsRow = (loan) => {
+  const outstandingPrincipal = getLoanOutstandingPrincipal(loan);
+  const accruedInterest = toWholeRupees(loan.accruedInterest);
+  const accruedPenalty = toWholeRupees(loan.accruedPenalty);
+  const paidAmount = (loan.repaymentHistory || []).reduce(
+    (sum, entry) => sum + toWholeRupees(entry.status === 'success' ? entry.amount : 0),
+    0
+  );
+  const delinquentEmis = (loan.amortizationSchedule || []).filter((row) =>
+    DELINQUENT_EMI_STATUSES.includes(row.status)
+  );
+  const nextDueEmi = (loan.amortizationSchedule || []).find((row) =>
+    ['pending', 'missed', 'overdue', 'part_paid'].includes(row.status)
+  );
+
+  return {
+    id: loan.loanId,
+    customerName: loan.customer?.name || 'Customer',
+    customerCode: loan.customer?.customerId || '',
+    loanType: loan.loanType,
+    loanTypeLabel: loan.loanTypeLabel || loan.loanType,
+    status: loan.status,
+    amount: toWholeRupees(loan.amount),
+    emiAmount: toWholeRupees(loan.emiAmount),
+    tenureMonths: toWholeRupees(loan.tenureMonths),
+    outstandingPrincipal,
+    accruedInterest,
+    accruedPenalty,
+    outstandingBalance: outstandingPrincipal + accruedInterest + accruedPenalty,
+    totalRepayment: toWholeRupees(loan.totalRepayment),
+    paidAmount,
+    delinquentEmiCount: delinquentEmis.length,
+    delinquentAmount: delinquentEmis.reduce((sum, row) => sum + toWholeRupees(row.emiAmount), 0),
+    nextDueDate: nextDueEmi?.dueDate,
+    disbursedAt: loan.disbursedAt,
+    closedAt: loan.closedAt,
+    createdAt: loan.createdAt,
+    updatedAt: loan.updatedAt,
+  };
+};
 
 const serializeTierPolicy = (tier) => ({
   id: tier._id,
@@ -99,6 +167,112 @@ const getAdminActivity = async (req, res) => {
   );
 
   res.json({ activityPoints });
+};
+
+const getAdminLoanAnalytics = async (req, res) => {
+  const loans = await Loan.find()
+    .populate('customer', 'name customerId classification')
+    .sort({ createdAt: -1 });
+  const loanRows = loans.map(serializeLoanAnalyticsRow);
+  const repaymentRows = loans.flatMap((loan) =>
+    (loan.repaymentHistory || []).map((entry, index) => ({
+      id: `${loan.loanId}-${entry.transactionId || index}`,
+      loanId: loan.loanId,
+      customerName: loan.customer?.name || 'Customer',
+      customerCode: loan.customer?.customerId || '',
+      loanType: loan.loanType,
+      loanTypeLabel: loan.loanTypeLabel || loan.loanType,
+      paymentType: entry.paymentType,
+      amount: toWholeRupees(entry.amount),
+      principalPaid: toWholeRupees(entry.principalPaid),
+      interestPaid: toWholeRupees(entry.interestPaid),
+      penaltyPaid: toWholeRupees(entry.penaltyPaid),
+      foreclosureFeePaid: toWholeRupees(entry.foreclosureFeePaid),
+      status: entry.status,
+      transactionId: entry.transactionId || '',
+      accountNumber: entry.accountNumber || '',
+      paidAt: entry.paidAt,
+      remarks: entry.remarks || '',
+    }))
+  );
+  const emiRows = loans.flatMap((loan) =>
+    (loan.amortizationSchedule || []).map((row) => ({
+      loanId: loan.loanId,
+      customerName: loan.customer?.name || 'Customer',
+      customerCode: loan.customer?.customerId || '',
+      loanType: loan.loanType,
+      loanTypeLabel: loan.loanTypeLabel || loan.loanType,
+      emiNumber: row.emiNumber,
+      dueDate: row.dueDate,
+      emiAmount: toWholeRupees(row.emiAmount),
+      principalComponent: toWholeRupees(row.principalComponent),
+      interestComponent: toWholeRupees(row.interestComponent),
+      outstandingBalance: toWholeRupees(row.outstandingBalance),
+      status: row.status,
+      penaltyAmount: toWholeRupees(row.penaltyAmount),
+      paidAt: row.paidAt,
+    }))
+  );
+  const activeLoans = loanRows.filter((loan) => ACTIVE_LOAN_STATUSES.includes(loan.status));
+  const delinquentRows = loanRows.filter((loan) => loan.delinquentEmiCount > 0);
+  const collectedAmount = repaymentRows.reduce(
+    (sum, row) => sum + toWholeRupees(row.status === 'success' ? row.amount : 0),
+    0
+  );
+  const expectedEmiAmount = emiRows
+    .filter((row) => row.status !== 'foreclosed')
+    .reduce((sum, row) => sum + toWholeRupees(row.emiAmount), 0);
+
+  res.json({
+    summary: {
+      totalLoans: loanRows.length,
+      activeLoans: activeLoans.length,
+      disbursedLoans: loanRows.filter((loan) => loan.status === 'disbursed').length,
+      outstandingBalance: activeLoans.reduce((sum, loan) => sum + loan.outstandingBalance, 0),
+      repaymentCount: repaymentRows.length,
+      delinquentAccounts: delinquentRows.length,
+      delinquentAmount: delinquentRows.reduce((sum, loan) => sum + loan.delinquentAmount, 0),
+      expectedEmiAmount,
+      collectedAmount,
+      collectionRate:
+        expectedEmiAmount > 0 ? Math.round((collectedAmount / expectedEmiAmount) * 100) : 0,
+    },
+    loanRows,
+    repaymentRows,
+    emiRows,
+    delinquentRows,
+    distributionRows: ['personal', 'home', 'vehicle', 'education'].map((loanType) => ({
+      label: loanType.charAt(0).toUpperCase() + loanType.slice(1),
+      value: loanRows.filter((loan) => loan.loanType === loanType).length,
+    })),
+    statusRows: ['submitted', 'under_review', 'approved', 'rejected', 'disbursed', 'closed'].map(
+      (status) => ({
+        label: status.replaceAll('_', ' '),
+        value: loanRows.filter((loan) => loan.status === status).length,
+      })
+    ),
+    emiTrendRows: Array.from(
+      emiRows.reduce((map, row) => {
+        const key = monthKeyFromDate(row.dueDate);
+        const current = map.get(key) || { label: key, due: 0, collected: 0, delinquent: 0 };
+        const collectedForEmi = repaymentRows
+          .filter(
+            (entry) =>
+              entry.loanId === row.loanId &&
+              entry.status === 'success' &&
+              (entry.paymentType === 'emi' || entry.paymentType === 'auto_emi') &&
+              monthKeyFromDate(entry.paidAt) === key
+          )
+          .reduce((sum, entry) => sum + entry.amount, 0);
+
+        current.due += row.emiAmount;
+        current.collected += collectedForEmi;
+        current.delinquent += DELINQUENT_EMI_STATUSES.includes(row.status) ? row.emiAmount : 0;
+        map.set(key, current);
+        return map;
+      }, new Map()).values()
+    ).slice(-8),
+  });
 };
 
 const getManagerDashboard = async (req, res) => {
@@ -432,4 +606,9 @@ const getManagerDashboard = async (req, res) => {
   });
 };
 
-module.exports = { getAdminActivity, getAdminLogs, getManagerDashboard };
+module.exports = {
+  getAdminActivity,
+  getAdminLoanAnalytics,
+  getAdminLogs,
+  getManagerDashboard,
+};

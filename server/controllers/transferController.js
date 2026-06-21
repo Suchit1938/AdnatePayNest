@@ -32,7 +32,7 @@ const serializeTransaction = (transaction, approvalDetail = {}) => ({
   createdAt: transaction.createdAt,
 });
 
-const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
+const formatMoney = (value) => `₹ ${toWholeRupees(value).toLocaleString('en-IN')}`;
 const maskAccount = (value) => {
   const account = String(value || '');
   if (account.length <= 4) return account;
@@ -889,7 +889,7 @@ const createTransfer = async (req, res) => {
       await writeSystemLog(
         {
           action: 'approval.created',
-          message: `Approval escalation ${approval[0].requestId} created for ${sender.name}'s beneficiary transfer of INR ${transferAmount.toLocaleString('en-IN')} above ${approvalReasons.join(' and ')}`,
+          message: `Approval escalation ${approval[0].requestId} created for ${sender.name}'s beneficiary transfer of ₹ ${transferAmount.toLocaleString('en-IN')} above ${approvalReasons.join(' and ')}`,
           actor: sender._id,
           actorName: sender.name,
           entityType: 'Approval',

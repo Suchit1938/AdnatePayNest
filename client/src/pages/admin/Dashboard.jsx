@@ -12,9 +12,12 @@ import { useNavigate } from "react-router-dom";
 
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
-import ChartTooltip from "../../components/ui/ChartTooltip";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
+import {
+  RechartsDonut,
+  RechartsHorizontalBar,
+} from "../../components/ui/RechartsReports";
 import TablePagination from "../../components/ui/TablePagination";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
@@ -136,148 +139,27 @@ const buildActivityDisplay = (log) => {
   };
 };
 
-const ChartEmptyState = ({ message }) => (
-  <div className="flex h-44 items-center justify-center rounded-xl border border-dashed border-bank-card-border bg-bank-surface text-sm font-semibold text-slate-500">
-    {message}
-  </div>
-);
-
 const HorizontalBarChart = ({ rows, valueFormatter = (value) => value, detailFormatter }) => {
-  const maxValue = Math.max(...rows.map((row) => toNumber(row.value)), 0);
-
-  if (maxValue === 0) {
-    return <ChartEmptyState message="No customer balance records to chart." />;
-  }
-
   return (
-    <div className="space-y-4">
-      {rows.map((row) => {
-        const rowValue = toNumber(row.value);
-        const width = rowValue > 0 ? `${Math.max(7, percentOf(rowValue, maxValue))}%` : "0%";
-
-        return (
-          <div
-            key={row.label}
-            className="group relative rounded-lg outline-none"
-            tabIndex={0}
-          >
-            <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-              <span className="font-semibold text-slate-700">{row.label}</span>
-              <span className="shrink-0 font-bold text-slate-950">
-                {valueFormatter(row.value)}
-              </span>
-            </div>
-            <div className="h-3 rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full"
-                style={{ width, backgroundColor: row.color }}
-              />
-            </div>
-            <ChartTooltip
-              label={row.label}
-              value={valueFormatter(row.value)}
-              detail={detailFormatter?.(row)}
-              className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-            />
-            {detailFormatter && (
-              <p className="mt-1 text-xs font-medium text-slate-500">
-                {detailFormatter(row)}
-              </p>
-            )}
-          </div>
-        );
-      })}
-    </div>
+    <RechartsHorizontalBar
+      rows={rows.map((row) => ({
+        ...row,
+        detail: detailFormatter?.(row),
+      }))}
+      valueFormatter={valueFormatter}
+      emptyMessage="No customer balance records to chart."
+      height={240}
+    />
   );
 };
 
 const DonutChart = ({ rows }) => {
-  const total = rows.reduce((sum, row) => sum + toNumber(row.value), 0);
-  const [activeRow, setActiveRow] = useState(null);
-
-  if (total === 0) {
-    return <ChartEmptyState message="No tier distribution records to chart." />;
-  }
-
-  const chartSegments = rows.reduce((segments, row) => {
-    const segment = (toNumber(row.value) / total) * 100;
-    const previousOffset =
-      segments.length === 0
-        ? 25
-        : segments[segments.length - 1].offset - segments[segments.length - 1].segment;
-
-    return [
-      ...segments,
-      {
-        ...row,
-        segment,
-        dash: `${segment} ${100 - segment}`,
-        offset: previousOffset,
-      },
-    ];
-  }, []);
-
   return (
-    <div className="grid items-center gap-5 sm:grid-cols-[180px_1fr]">
-      <div className="relative">
-      <svg viewBox="0 0 42 42" className="mx-auto h-44 w-44 -rotate-90">
-        <circle
-          cx="21"
-          cy="21"
-          r="15.915"
-          fill="transparent"
-          stroke="#e2e8f0"
-          strokeWidth="6"
-        />
-        {chartSegments.map((row) => (
-          <circle
-            key={row.label}
-            cx="21"
-            cy="21"
-            r="15.915"
-            fill="transparent"
-            stroke={row.color}
-            strokeDasharray={row.dash}
-            strokeDashoffset={row.offset}
-            strokeWidth="6"
-            className="cursor-pointer transition-opacity hover:opacity-80 focus:opacity-80"
-            onMouseEnter={() => setActiveRow(row)}
-            onMouseLeave={() => setActiveRow(null)}
-            onFocus={() => setActiveRow(row)}
-            onBlur={() => setActiveRow(null)}
-            tabIndex={0}
-          />
-        ))}
-      </svg>
-      {activeRow && (
-        <ChartTooltip
-          label={activeRow.label}
-          value={activeRow.value}
-          percent={percentOf(activeRow.value, total)}
-          detail={`${total} total records`}
-          className="left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-        />
-      )}
-      </div>
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <div key={row.label} className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                className="h-3 w-3 shrink-0 rounded-full"
-                style={{ backgroundColor: row.color }}
-              />
-              <span className="truncate text-sm font-semibold text-slate-700">
-                {row.label}
-              </span>
-            </div>
-            <span className="shrink-0 text-sm font-bold text-slate-950">
-              {row.value}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <RechartsDonut
+      rows={rows}
+      emptyMessage="No tier distribution records to chart."
+      height={240}
+    />
   );
 };
 

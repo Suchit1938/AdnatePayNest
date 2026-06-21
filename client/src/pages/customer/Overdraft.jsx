@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   AlertTriangle,
   CircleDollarSign,
@@ -10,10 +11,10 @@ import {
 
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
-import ChartTooltip from "../../components/ui/ChartTooltip";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
+import { RechartsHorizontalBar } from "../../components/ui/RechartsReports";
 import SectionCard from "../../components/ui/SectionCard";
 import { useToast } from "../../components/ui/useToast";
 import { useAuth } from "../../context/useAuth";
@@ -144,6 +145,7 @@ const getAccountRule = (policy, accountType) =>
 
 const Overdraft = () => {
   const toast = useToast();
+  const location = useLocation();
   const { setSessionUser, user } = useAuth();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -163,6 +165,17 @@ const Overdraft = () => {
       setTierPolicy(data.tier);
     });
   }, []);
+
+  useEffect(() => {
+    if (location.hash) {
+      const element = document.getElementById(location.hash.slice(1));
+      if (element) {
+        setTimeout(() => {
+          element.scrollIntoView({ behavior: "smooth" });
+        }, 100);
+      }
+    }
+  }, [location, tierPolicy]);
 
   const summary = getCustomerOverdraftSummary(user);
   const effectiveOdAccountNumber = odAccountNumber || activeOdAccount?.accountNumber || "";
@@ -351,30 +364,29 @@ const Overdraft = () => {
                     {isBlocked ? "Blocked" : account.used > 0 ? "Active OD" : "Available"}
                   </span>
                 </div>
-                <div className="group relative mt-5 rounded-full outline-none" tabIndex={0}>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className={`h-full rounded-full ${
-                      account.percent >= 90
-                        ? "bg-red-500"
-                        : account.percent >= 70
-                          ? "bg-amber-500"
-                          : "bg-blue-500"
-                    }`}
-                    style={{
-                      width:
-                        account.percent > 0
-                          ? `${Math.max(4, Math.min(100, account.percent))}%`
-                          : "0%",
-                    }}
+                <div className="mt-5">
+                  <RechartsHorizontalBar
+                    rows={[
+                      {
+                        label: "OD Used",
+                        value: account.used,
+                        color:
+                          account.percent >= 90
+                            ? "#ef4444"
+                            : account.percent >= 70
+                              ? "#f59e0b"
+                              : "#2563eb",
+                      },
+                      {
+                        label: "Available",
+                        value: account.available,
+                        color: "#10b981",
+                      },
+                    ]}
+                    valueFormatter={formatCurrency}
+                    emptyMessage="No overdraft limit is available for this account."
+                    height={120}
                   />
-                </div>
-                <ChartTooltip
-                  label={`${account.accountType} OD Usage`}
-                  value={`${account.percent}% used`}
-                  detail={`${formatCurrency(account.used)} used of ${formatCurrency(account.limit)} limit | ${account.odCountThisMonth || 0} uses this month`}
-                  className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-                />
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div>

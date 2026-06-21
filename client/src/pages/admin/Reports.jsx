@@ -13,9 +13,13 @@ import { useEffect, useMemo, useState } from "react";
 
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
-import ChartTooltip from "../../components/ui/ChartTooltip";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
+import {
+  RechartsColumn,
+  RechartsDonut,
+  RechartsHorizontalBar,
+} from "../../components/ui/RechartsReports";
 import TablePagination from "../../components/ui/TablePagination";
 import { useToast } from "../../components/ui/useToast";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
@@ -75,6 +79,10 @@ const formatReportDate = (value) => {
 };
 
 const formatStatus = (value) => getTransactionStatusLabel(value || "unknown");
+const formatReportLabel = (value) =>
+  String(value || "unknown")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 const getDateRangeBounds = ({ preset, startDate, endDate }) => {
   const now = new Date();
@@ -157,12 +165,6 @@ const downloadCsv = (filename, rows) => {
   const csv = buildCsv(rows);
   downloadFile(filename, `\uFEFF${csv}`, "text/csv;charset=utf-8;");
 };
-
-const ChartEmptyState = ({ message }) => (
-  <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-bank-card-border bg-bank-surface text-sm font-semibold text-slate-500">
-    {message}
-  </div>
-);
 
 const SectionHeader = ({
   icon: Icon,
@@ -254,6 +256,7 @@ const EmptyTableRow = ({ colSpan, message }) => (
 );
 
 const StatusBadge = ({ status }) => {
+  const label = formatReportLabel(getTransactionStatusLabel(status));
   const toneByStatus = {
     success: "bg-emerald-50 text-emerald-700",
     approved: "bg-emerald-50 text-emerald-700",
@@ -267,178 +270,35 @@ const StatusBadge = ({ status }) => {
 
   return (
     <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${toneByStatus[status] || "bg-slate-100 text-slate-600"}`}>
-      {getTransactionStatusLabel(status)}
+      {label}
     </span>
   );
 };
 
-const HorizontalBarChart = ({ rows, valueFormatter = (value) => value, detailFormatter }) => {
-  const maxValue = Math.max(...rows.map((row) => toNumber(row.value)), 0);
-
-  if (maxValue === 0) {
-    return <ChartEmptyState message="No transfer records to chart for this view." />;
-  }
-
-  return (
-    <div className="flex min-h-60 flex-col justify-center space-y-4">
-      {rows.map((row) => {
-        const rowValue = toNumber(row.value);
-        const width =
-          rowValue > 0 ? `${Math.max(7, percentOf(rowValue, maxValue))}%` : "0%";
-
-        return (
-          <div
-            key={row.label}
-            className="group relative rounded-lg outline-none"
-            tabIndex={0}
-          >
-            <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-              <span className="font-semibold text-slate-700">{row.label}</span>
-              <span className="shrink-0 font-bold text-slate-950">
-                {valueFormatter(row.value)}
-              </span>
-            </div>
-            <div className="h-3 rounded-full bg-slate-100 ring-1 ring-slate-100">
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width,
-                  backgroundColor: row.color,
-                }}
-              />
-            </div>
-            <ChartTooltip
-              label={row.label}
-              value={valueFormatter(row.value)}
-              detail={detailFormatter?.(row)}
-              className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-            />
-            {detailFormatter && (
-              <p className="mt-1 text-xs font-medium text-slate-500">
-                {detailFormatter(row)}
-              </p>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
+const HorizontalBarChart = ({ rows, valueFormatter = (value) => value }) => (
+  <RechartsHorizontalBar
+    rows={rows}
+    valueFormatter={valueFormatter}
+    emptyMessage="No transfer records to chart for this view."
+  />
+);
 
 const ColumnChart = ({ rows, valueFormatter = (value) => value }) => {
-  const maxValue = Math.max(...rows.map((row) => toNumber(row.value)), 0);
-
-  if (maxValue === 0) {
-    return <ChartEmptyState message="No transfer split is available for this view." />;
-  }
-
   return (
-    <div className="flex h-64 items-stretch gap-3 border-b border-l border-slate-200 px-3 pt-5 sm:gap-4">
-      {rows.map((row) => {
-        const rowValue = toNumber(row.value);
-        const height =
-          rowValue > 0 ? `${Math.max(14, percentOf(rowValue, maxValue))}%` : "0%";
-
-        return (
-          <div
-            key={row.label}
-            className="group relative flex min-w-0 flex-1 flex-col items-center gap-2 outline-none"
-            tabIndex={0}
-          >
-            <span className="text-xs font-bold text-slate-700">
-              {valueFormatter(row.value)}
-            </span>
-            <div className="flex min-h-0 w-full flex-1 items-end">
-              <div
-                className="w-full rounded-t-lg shadow-sm"
-                style={{
-                  height,
-                  backgroundColor: row.color,
-                }}
-              />
-            </div>
-            <ChartTooltip
-              label={row.label}
-              value={valueFormatter(row.value)}
-              detail="Transactions recorded"
-              percent={percentOf(rowValue, maxValue)}
-              className="bottom-9 left-1/2 hidden -translate-x-1/2 group-hover:block group-focus:block"
-            />
-            <span className="w-full truncate text-center text-xs font-semibold text-slate-500" title={row.label}>
-              {row.label}
-            </span>
-          </div>
-        );
-      })}
-    </div>
+    <RechartsColumn
+      rows={rows}
+      valueFormatter={valueFormatter}
+      emptyMessage="No transfer split is available for this view."
+    />
   );
 };
 
 const DonutChart = ({ rows }) => {
-  const total = rows.reduce((sum, row) => sum + toNumber(row.value), 0);
-  const [activeRow, setActiveRow] = useState(null);
-
-  if (total === 0) {
-    return <ChartEmptyState message="No approval records to chart for this view." />;
-  }
-
-  const segments = rows.reduce((items, row) => {
-    const segment = (toNumber(row.value) / total) * 100;
-    const offset =
-      items.length === 0 ? 25 : items[items.length - 1].offset - items[items.length - 1].segment;
-
-    return [...items, { ...row, segment, offset, dash: `${segment} ${100 - segment}` }];
-  }, []);
-
   return (
-    <div className="grid min-h-60 items-center gap-5 sm:grid-cols-[180px_1fr]">
-      <div className="relative">
-      <svg viewBox="0 0 42 42" className="mx-auto h-44 w-44 -rotate-90">
-        <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#e2e8f0" strokeWidth="6" />
-        {segments.map((row) => (
-          <circle
-            key={row.label}
-            cx="21"
-            cy="21"
-            r="15.915"
-            fill="transparent"
-            stroke={row.color}
-            strokeDasharray={row.dash}
-            strokeDashoffset={row.offset}
-            strokeWidth="6"
-            className="cursor-pointer transition-opacity hover:opacity-80 focus:opacity-80"
-            onMouseEnter={() => setActiveRow(row)}
-            onMouseLeave={() => setActiveRow(null)}
-            onFocus={() => setActiveRow(row)}
-            onBlur={() => setActiveRow(null)}
-            tabIndex={0}
-          />
-        ))}
-      </svg>
-      {activeRow && (
-        <ChartTooltip
-          label={activeRow.label}
-          value={activeRow.value}
-          percent={percentOf(activeRow.value, total)}
-          detail={`${total} total records`}
-          className="left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-        />
-      )}
-      </div>
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <div key={row.label} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
-              <span className="truncate text-sm font-semibold text-slate-700">{row.label}</span>
-            </div>
-            <span className="shrink-0 text-sm font-bold text-slate-950">
-              {row.value} ({percentOf(row.value, total)}%)
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <RechartsDonut
+      rows={rows}
+      emptyMessage="No approval records to chart for this view."
+    />
   );
 };
 
@@ -563,11 +423,36 @@ const formatAccountOdBreakdown = (accounts = []) =>
 
 const normalizeIdentifier = (value) => String(value || "").trim().toLowerCase();
 
+const defaultLoanAnalytics = {
+  summary: {
+    totalLoans: 0,
+    activeLoans: 0,
+    disbursedLoans: 0,
+    outstandingBalance: 0,
+    repaymentCount: 0,
+    delinquentAccounts: 0,
+    delinquentAmount: 0,
+    expectedEmiAmount: 0,
+    collectedAmount: 0,
+    collectionRate: 0,
+  },
+  loanRows: [],
+  repaymentRows: [],
+  emiRows: [],
+  delinquentRows: [],
+  distributionRows: [],
+  statusRows: [],
+  emiTrendRows: [],
+};
+
+const loanChartColors = ["#2563eb", "#0891b2", "#10b981", "#f59e0b", "#ef4444", "#7c3aed"];
+
 const AdminReports = () => {
   const [users, setUsers] = useState({ customers: [] });
   const [tiers, setTiers] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [loanAnalytics, setLoanAnalytics] = useState(defaultLoanAnalytics);
   const [dateFilter, setDateFilter] = useState({
     preset: "30d",
     startDate: "",
@@ -580,7 +465,8 @@ const AdminReports = () => {
       api.get("/tiers"),
       api.get("/approvals"),
       api.get("/transfers/transactions"),
-    ]).then(([usersResult, tiersResult, approvalsResult, transactionsResult]) => {
+      api.get("/dashboard/admin/loan-analytics"),
+    ]).then(([usersResult, tiersResult, approvalsResult, transactionsResult, loansResult]) => {
       const usersData = usersResult.status === "fulfilled" ? usersResult.value.data : {};
 
       setUsers({
@@ -592,6 +478,11 @@ const AdminReports = () => {
         transactionsResult.status === "fulfilled"
           ? transactionsResult.value.data.transactions || []
           : []
+      );
+      setLoanAnalytics(
+        loansResult.status === "fulfilled"
+          ? { ...defaultLoanAnalytics, ...loansResult.value.data }
+          : defaultLoanAnalytics
       );
     });
   }, []);
@@ -1049,7 +940,102 @@ const AdminReports = () => {
       ].join(" | "),
     })),
   ];
+  const filteredRepaymentRows = loanAnalytics.repaymentRows.filter((entry) =>
+    isWithinDateRange(entry.paidAt, reportData.dateRange)
+  );
+  const loanDistributionRows = loanAnalytics.distributionRows.map((row, index) => ({
+    ...row,
+    color: loanChartColors[index % loanChartColors.length],
+  }));
+  const loanStatusRows = loanAnalytics.statusRows.map((row, index) => ({
+    ...row,
+    label: formatReportLabel(row.label),
+    color: loanChartColors[index % loanChartColors.length],
+  }));
+  const emiDueTrendRows = loanAnalytics.emiTrendRows.map((row, index) => ({
+    label: row.label,
+    value: row.due,
+    color: loanChartColors[index % loanChartColors.length],
+  }));
+  const repaymentTypeRows = ["emi", "auto_emi", "part_payment", "foreclosure", "failed_emi"].map(
+    (paymentType, index) => ({
+      label: formatReportLabel(paymentType),
+      value: filteredRepaymentRows.filter((entry) => entry.paymentType === paymentType).length,
+      amount: filteredRepaymentRows
+        .filter((entry) => entry.paymentType === paymentType && entry.status === "success")
+        .reduce((sum, entry) => sum + toNumber(entry.amount), 0),
+      color: loanChartColors[index % loanChartColors.length],
+    })
+  );
+  const loanPortfolioCsvRows = loanAnalytics.loanRows.map((loan) => ({
+    "Loan ID": loan.id,
+    "Customer": loan.customerName,
+    "Customer ID": loan.customerCode,
+    "Loan Type": loan.loanTypeLabel,
+    "Status": formatReportLabel(loan.status),
+    "Sanctioned Amount": formatCurrency(loan.amount),
+    "Monthly EMI": formatCurrency(loan.emiAmount),
+    "Outstanding Balance": formatCurrency(loan.outstandingBalance),
+    "Paid Amount": formatCurrency(loan.paidAmount),
+    "Delinquent EMIs": loan.delinquentEmiCount,
+    "Delinquent Amount": formatCurrency(loan.delinquentAmount),
+  }));
+  const repaymentCsvRows = filteredRepaymentRows.map((entry) => ({
+    "Loan ID": entry.loanId,
+    "Customer": entry.customerName,
+    "Customer ID": entry.customerCode,
+    "Payment Type": formatReportLabel(entry.paymentType),
+    "Amount": formatCurrency(entry.amount),
+    "Principal": formatCurrency(entry.principalPaid),
+    "Interest": formatCurrency(entry.interestPaid),
+    "Penalty": formatCurrency(entry.penaltyPaid),
+    "Foreclosure Fee": formatCurrency(entry.foreclosureFeePaid),
+    "Status": formatReportLabel(entry.status),
+    "Transaction ID": entry.transactionId,
+    "Paid On": formatReportDate(entry.paidAt),
+  }));
+  const delinquentLoanCsvRows = loanAnalytics.delinquentRows.map((loan) => ({
+    "Loan ID": loan.id,
+    "Customer": loan.customerName,
+    "Customer ID": loan.customerCode,
+    "Loan Type": loan.loanTypeLabel,
+    "Outstanding Balance": formatCurrency(loan.outstandingBalance),
+    "Delinquent EMIs": loan.delinquentEmiCount,
+    "Delinquent Amount": formatCurrency(loan.delinquentAmount),
+    "Next Due Date": formatReportDate(loan.nextDueDate),
+    "Status": formatReportLabel(loan.status),
+  }));
+  const loanAnalyticsPdfRows = [
+    {
+      Metric: "Active loans",
+      Value: loanAnalytics.summary.activeLoans,
+      Details: `${loanAnalytics.summary.disbursedLoans} disbursed loan(s)`,
+    },
+    {
+      Metric: "Outstanding balances",
+      Value: formatCurrency(loanAnalytics.summary.outstandingBalance),
+      Details: "Principal, accrued interest, and penalties on active loans",
+    },
+    {
+      Metric: "Repayment history",
+      Value: filteredRepaymentRows.length,
+      Details: "Repayments matching the selected report period",
+    },
+    {
+      Metric: "Delinquent accounts",
+      Value: loanAnalytics.summary.delinquentAccounts,
+      Details: formatCurrency(loanAnalytics.summary.delinquentAmount),
+    },
+    {
+      Metric: "Collection performance",
+      Value: `${loanAnalytics.summary.collectionRate}%`,
+      Details: `${formatCurrency(loanAnalytics.summary.collectedAmount)} collected of ${formatCurrency(loanAnalytics.summary.expectedEmiAmount)} scheduled`,
+    },
+  ];
   const highValuePagination = usePaginatedRows(reportData.highValueTransfers);
+  const loanPortfolioPagination = usePaginatedRows(loanAnalytics.loanRows);
+  const repaymentPagination = usePaginatedRows(filteredRepaymentRows);
+  const delinquentLoanPagination = usePaginatedRows(loanAnalytics.delinquentRows);
   const nearOdPagination = usePaginatedRows(reportData.nearOdLimitRows);
   const approvalPagination = usePaginatedRows(reportData.approvalDetailRows);
 
@@ -1065,6 +1051,7 @@ const AdminReports = () => {
         <div className="flex flex-wrap gap-2 rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
           {[
             ["Transactions", "#transactions"],
+            ["Loans", "#loans"],
             ["Overdraft", "#overdraft"],
             ["Approvals", "#approvals"],
             ["Customers", "#customers"],
@@ -1161,7 +1148,270 @@ const AdminReports = () => {
             iconTone="bg-amber-50 text-amber-600"
             footer={{ text: `${reportData.odBlocked} blocked accounts` }}
           />
+          <StatsCard
+            title="Active Loans"
+            value={loanAnalytics.summary.activeLoans}
+            icon={BadgeIndianRupee}
+            accent="bg-emerald-500"
+            iconTone="bg-emerald-50 text-emerald-600"
+            footer={{ text: `${loanAnalytics.summary.disbursedLoans} disbursed` }}
+          />
+          <StatsCard
+            title="Outstanding Balances"
+            value={formatCompactCurrency(loanAnalytics.summary.outstandingBalance)}
+            icon={FileBarChart}
+            accent="bg-violet-500"
+            iconTone="bg-violet-50 text-violet-600"
+            footer={{ text: `${loanAnalytics.summary.collectionRate}% collection performance` }}
+          />
         </div>
+
+        <section id="loans" className="scroll-mt-8 space-y-6">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+            <div className="card-padded min-h-[380px]">
+              <SectionHeader
+                icon={BadgeIndianRupee}
+                title="Loan Analytics"
+                subtitle="Active loans, outstanding balances, delinquency, and collection performance."
+                exportLabel="Export Loan Analytics"
+                exportName="loan-analytics"
+                exportRows={loanPortfolioCsvRows}
+                exportPdfRows={loanAnalyticsPdfRows}
+                exportPdfOptions={{
+                  headers: ["Metric", "Value", "Details"],
+                  subtitle: `Loan Analytics | Generated on ${formatReportDate(new Date())}`,
+                }}
+              />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <PolicyMetric label="Active Loans" value={loanAnalytics.summary.activeLoans} />
+                <PolicyMetric label="Outstanding" value={formatCurrency(loanAnalytics.summary.outstandingBalance)} />
+                <PolicyMetric label="Repayments" value={filteredRepaymentRows.length} />
+                <PolicyMetric label="Delinquent Accounts" value={loanAnalytics.summary.delinquentAccounts} />
+              </div>
+              <div className="mt-5 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                {formatCurrency(loanAnalytics.summary.collectedAmount)} collected against {formatCurrency(loanAnalytics.summary.expectedEmiAmount)} scheduled EMI value.
+              </div>
+              {loanAnalytics.summary.delinquentAccounts > 0 && (
+                <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                  {loanAnalytics.summary.delinquentAccounts} account(s) have missed or overdue EMI items worth {formatCurrency(loanAnalytics.summary.delinquentAmount)}.
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className="card-padded min-h-[360px]">
+                <SectionHeader
+                  icon={FileBarChart}
+                  title="Loan Distribution"
+                  subtitle="Loan count split by product type."
+                />
+                <DonutChart rows={loanDistributionRows} />
+              </div>
+              <div className="card-padded min-h-[360px]">
+                <SectionHeader
+                  icon={ShieldCheck}
+                  title="Loan Status Mix"
+                  subtitle="Current portfolio status across the loan lifecycle."
+                />
+                <DonutChart rows={loanStatusRows} />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <div className="card-padded min-h-[360px]">
+              <SectionHeader
+                icon={Clock3}
+                title="EMI Trends"
+                subtitle="Scheduled EMI value by due month."
+              />
+              <ColumnChart rows={emiDueTrendRows} valueFormatter={formatCompactCurrency} />
+            </div>
+            <div className="card-padded min-h-[360px]">
+              <SectionHeader
+                icon={FileBarChart}
+                title="Repayment Analytics"
+                subtitle="Repayment activity by payment type for the selected period."
+              />
+              <HorizontalBarChart
+                rows={repaymentTypeRows}
+                valueFormatter={(value) => `${value} records`}
+                detailFormatter={(row) => `${formatCompactCurrency(row.amount)} collected`}
+              />
+            </div>
+          </div>
+
+          <div className="table-shell">
+            <div className="border-b border-bank-card-border p-5 sm:p-6">
+              <SectionHeader
+                icon={AlertTriangle}
+                title="Delinquent Accounts"
+                subtitle="Loans with missed or overdue EMI rows, sorted by delinquent exposure."
+                exportLabel="Export Delinquencies"
+                exportName="loan-delinquent-accounts"
+                exportRows={delinquentLoanCsvRows}
+                className="mb-0"
+              />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] text-left">
+                <thead className="table-head">
+                  <tr>
+                    <th className="px-6 py-4">Loan</th>
+                    <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Outstanding</th>
+                    <th className="px-6 py-4">Delinquency</th>
+                    <th className="px-6 py-4">Next Due</th>
+                    <th className="px-6 py-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {delinquentLoanPagination.pageRows.map((loan) => (
+                    <tr key={loan.id} className="table-row bg-red-50/40">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-950">{loan.id}</p>
+                        <p className="text-sm font-semibold text-slate-500">{loan.loanTypeLabel}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-semibold text-slate-900">{loan.customerName}</p>
+                        <p className="text-sm text-slate-500">{loan.customerCode}</p>
+                      </td>
+                      <td className="px-6 py-4 font-bold">{formatCurrency(loan.outstandingBalance)}</td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-red-700">{loan.delinquentEmiCount} EMI item(s)</p>
+                        <p className="text-sm font-semibold text-slate-500">{formatCurrency(loan.delinquentAmount)}</p>
+                      </td>
+                      <td className="px-6 py-4">{formatReportDate(loan.nextDueDate)}</td>
+                      <td className="px-6 py-4">
+                        <StatusBadge status={loan.status} />
+                      </td>
+                    </tr>
+                  ))}
+                  {loanAnalytics.delinquentRows.length === 0 && (
+                    <EmptyTableRow colSpan={6} message="No delinquent loan accounts are currently recorded." />
+                  )}
+                </tbody>
+              </table>
+              <TablePagination {...delinquentLoanPagination} />
+            </div>
+          </div>
+
+          <div className="table-shell">
+            <div className="border-b border-bank-card-border p-5 sm:p-6">
+              <SectionHeader
+                icon={FileBarChart}
+                title="Loan Portfolio Register"
+                subtitle="Active and historical loan records with outstanding balances and payment progress."
+                exportLabel="Export Loan Portfolio"
+                exportName="loan-portfolio-register"
+                exportRows={loanPortfolioCsvRows}
+                className="mb-0"
+              />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1120px] text-left">
+                <thead className="table-head">
+                  <tr>
+                    <th className="px-6 py-4">Loan</th>
+                    <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Amount</th>
+                    <th className="px-6 py-4">Outstanding</th>
+                    <th className="px-6 py-4">Paid</th>
+                    <th className="px-6 py-4">EMI</th>
+                    <th className="px-6 py-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loanPortfolioPagination.pageRows.map((loan) => (
+                    <tr key={loan.id} className="table-row">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-950">{loan.id}</p>
+                        <p className="text-sm font-semibold text-slate-500">{loan.loanTypeLabel}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-semibold text-slate-900">{loan.customerName}</p>
+                        <p className="text-sm text-slate-500">{loan.customerCode}</p>
+                      </td>
+                      <td className="px-6 py-4 font-bold">{formatCurrency(loan.amount)}</td>
+                      <td className="px-6 py-4">{formatCurrency(loan.outstandingBalance)}</td>
+                      <td className="px-6 py-4">{formatCurrency(loan.paidAmount)}</td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold">{formatCurrency(loan.emiAmount)}</p>
+                        <p className="text-xs font-semibold text-slate-500">{loan.tenureMonths} months</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <StatusBadge status={loan.status} />
+                      </td>
+                    </tr>
+                  ))}
+                  {loanAnalytics.loanRows.length === 0 && (
+                    <EmptyTableRow colSpan={7} message="No loan records are available for reporting." />
+                  )}
+                </tbody>
+              </table>
+              <TablePagination {...loanPortfolioPagination} />
+            </div>
+          </div>
+
+          <div className="table-shell">
+            <div className="border-b border-bank-card-border p-5 sm:p-6">
+              <SectionHeader
+                icon={Clock3}
+                title="Repayment History"
+                subtitle="EMI, auto EMI, part-payment, foreclosure, and failed EMI records for the selected period."
+                exportLabel="Export Repayments"
+                exportName="loan-repayment-history"
+                exportRows={repaymentCsvRows}
+                className="mb-0"
+              />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1180px] text-left">
+                <thead className="table-head">
+                  <tr>
+                    <th className="px-6 py-4">Loan</th>
+                    <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Payment</th>
+                    <th className="px-6 py-4">Principal</th>
+                    <th className="px-6 py-4">Interest</th>
+                    <th className="px-6 py-4">Penalty</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {repaymentPagination.pageRows.map((entry) => (
+                    <tr key={entry.id} className="table-row">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-950">{entry.loanId}</p>
+                        <p className="text-sm font-semibold text-slate-500">{entry.transactionId || "No transaction ID"}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-semibold text-slate-900">{entry.customerName}</p>
+                        <p className="text-sm text-slate-500">{entry.customerCode}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold">{formatCurrency(entry.amount)}</p>
+                        <p className="text-xs font-semibold text-slate-500">{formatReportLabel(entry.paymentType)}</p>
+                      </td>
+                      <td className="px-6 py-4">{formatCurrency(entry.principalPaid)}</td>
+                      <td className="px-6 py-4">{formatCurrency(entry.interestPaid)}</td>
+                      <td className="px-6 py-4">{formatCurrency(entry.penaltyPaid)}</td>
+                      <td className="px-6 py-4">
+                        <StatusBadge status={entry.status} />
+                      </td>
+                      <td className="px-6 py-4">{formatReportDate(entry.paidAt)}</td>
+                    </tr>
+                  ))}
+                  {filteredRepaymentRows.length === 0 && (
+                    <EmptyTableRow colSpan={8} message="No repayment records match the selected period." />
+                  )}
+                </tbody>
+              </table>
+              <TablePagination {...repaymentPagination} />
+            </div>
+          </div>
+        </section>
 
         <section id="transactions" className="grid scroll-mt-8 grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]">
           <div className="card-padded min-h-[360px]">

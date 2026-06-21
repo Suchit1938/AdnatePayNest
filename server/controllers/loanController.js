@@ -1,4 +1,7 @@
+const fs = require('fs');
+const path = require('path');
 const mongoose = require('mongoose');
+const PDFDocument = require('pdfkit');
 
 const BankAccount = require('../models/BankAccount');
 const Loan = require('../models/Loan');
@@ -16,10 +19,15 @@ const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const toNumber = (value) => Number(value || 0);
-const money = (value) => `INR ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
+const money = (value) => `₹ ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
 const MISSED_EMI_FIXED_PENALTY = 500;
 const MISSED_EMI_PENALTY_RATE = 0.02;
 const FORECLOSURE_FEE_RATE = 0.02;
+const ACTIVE_LOAN_STATUSES = ['approved', 'disbursed'];
+const EMI_GRACE_PERIOD_DAYS = 5;
+const SANCTION_LETTER_DIR = path.join(__dirname, '..', 'uploads', 'sanction-letters');
+const LOAN_AGREEMENT_DIR = path.join(__dirname, '..', 'uploads', 'loan-agreements');
+const REPAYMENT_SCHEDULE_DIR = path.join(__dirname, '..', 'uploads', 'repayment-schedules');
 
 const calculateMissedEmiPenalty = (emiAmount) =>
   Math.round(Math.max(MISSED_EMI_FIXED_PENALTY, toNumber(emiAmount) * MISSED_EMI_PENALTY_RATE));
@@ -27,11 +35,29 @@ const calculateMissedEmiPenalty = (emiAmount) =>
 const calculateForeclosureFee = (outstandingPrincipal) =>
   Math.round(Math.max(0, toNumber(outstandingPrincipal) * FORECLOSURE_FEE_RATE));
 
+const addDays = (date, days) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
 const addMonths = (date, months) => {
   const next = new Date(date);
   next.setMonth(next.getMonth() + months);
   return next;
 };
+
+const isEmiGracePeriodActive = (emiRow, now = new Date()) =>
+  emiRow?.dueDate && now <= addDays(emiRow.dueDate, EMI_GRACE_PERIOD_DAYS);
+
+const formatDate = (date) =>
+  date
+    ? new Date(date).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    })
+    : 'Not set';
 
 const buildReducedTenureSchedule = ({
   principal,
@@ -141,6 +167,772 @@ const sendLoanEmail = async ({ customer, subject, text, html }) => {
   await sendEmail({ to: customer.email, subject, text, html });
 };
 
+const addPdfFooter = (doc, loan) => {
+  const bottom = doc.page.height - 54;
+
+  doc
+    .moveTo(42, bottom - 10)
+    .lineTo(doc.page.width - 42, bottom - 10)
+    .strokeColor('#dbe3ef')
+    .lineWidth(1)
+    .stroke();
+  doc
+    .font('Helvetica')
+    .fontSize(8)
+    .fillColor('#64748b')
+    .text(`AdnatePayNest Loan Sanction Letter - ${loan.loanId}`, 42, bottom, {
+      width: doc.page.width - 84,
+      align: 'center',
+    });
+};
+
+const drawSanctionHeader = (doc, loan) => {
+  doc.rect(0, 0, doc.page.width, 112).fill('#0f3a5f');
+  doc.circle(64, 52, 24).fill('#ffffff');
+  doc
+    .fillColor('#0f3a5f')
+    .font('Helvetica-Bold')
+    .fontSize(18)
+    .text('APN', 48, 43, { width: 32, align: 'center' });
+  doc
+    .fillColor('#ffffff')
+    .font('Helvetica-Bold')
+    .fontSize(22)
+    .text('AdnatePayNest Bank', 104, 30);
+  doc
+    .font('Helvetica')
+    .fontSize(10)
+    .fillColor('#dbeafe')
+    .text('Digital Banking and Lending Services', 104, 58);
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(11)
+    .fillColor('#ffffff')
+    .text('LOAN SANCTION LETTER', 392, 34, { width: 150, align: 'right' });
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#bfdbfe')
+    .text(`Ref: ${loan.loanId}`, 392, 56, { width: 150, align: 'right' });
+};
+
+const drawInfoCard = (doc, title, rows, x, y, width) => {
+  doc.roundedRect(x, y, width, 26 + rows.length * 24, 8).fillAndStroke('#f8fafc', '#dbe3ef');
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(10)
+    .fillColor('#0f172a')
+    .text(title, x + 14, y + 12, { width: width - 28 });
+
+  rows.forEach((row, index) => {
+    const rowY = y + 34 + index * 24;
+
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .fillColor('#64748b')
+      .text(row.label, x + 14, rowY, { width: width * 0.42 });
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#0f172a')
+      .text(row.value || 'Not set', x + width * 0.45, rowY, { width: width * 0.48 });
+  });
+};
+
+const drawTermsTable = (doc, loan, x, y, width) => {
+  const rows = [
+    ['Sanctioned Amount', money(loan.amount)],
+    ['Loan Product', loan.loanTypeLabel || loan.loanType],
+    ['Interest Rate', `${loan.annualInterestRate}% p.a.`],
+    ['Tenure', `${loan.tenureMonths} months`],
+    ['Monthly EMI', money(loan.emiAmount)],
+    ['Total Interest', money(loan.totalInterest)],
+    ['Total Repayment', money(loan.totalRepayment)],
+    ['Disbursement Account', `${loan.disbursementAccountType || 'Account'} ${loan.disbursementAccountNumber || ''}`.trim()],
+  ];
+
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(13)
+    .fillColor('#0f172a')
+    .text('Sanctioned Loan Terms', x, y);
+
+  let rowY = y + 24;
+  rows.forEach(([label, value], index) => {
+    const fill = index % 2 === 0 ? '#ffffff' : '#f8fafc';
+
+    doc.rect(x, rowY, width, 28).fillAndStroke(fill, '#e2e8f0');
+    doc
+      .font('Helvetica')
+      .fontSize(9)
+      .fillColor('#475569')
+      .text(label, x + 12, rowY + 9, { width: width * 0.42 });
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#0f172a')
+      .text(value, x + width * 0.48, rowY + 9, { width: width * 0.46, align: 'right' });
+    rowY += 28;
+  });
+
+  return rowY;
+};
+
+const generateSanctionLetterPdf = (loan, manager) =>
+  new Promise((resolve, reject) => {
+    fs.mkdirSync(SANCTION_LETTER_DIR, { recursive: true });
+
+    const fileName = `${loan.loanId}-sanction-letter.pdf`;
+    const filePath = path.join(SANCTION_LETTER_DIR, fileName);
+    const doc = new PDFDocument({ size: 'A4', margin: 42, bufferPages: true });
+    const stream = fs.createWriteStream(filePath);
+    const issuedAt = new Date();
+    const validUntil = addDays(issuedAt, 30);
+    const customer = loan.customer || {};
+
+    stream.on('finish', () => {
+      resolve({
+        fileName,
+        filePath,
+        fileUrl: `/uploads/sanction-letters/${fileName}`,
+        generatedAt: issuedAt,
+      });
+    });
+    stream.on('error', reject);
+    doc.on('error', reject);
+    doc.pipe(stream);
+
+    drawSanctionHeader(doc, loan);
+
+    doc
+      .fillColor('#0f172a')
+      .font('Helvetica-Bold')
+      .fontSize(16)
+      .text('In-Principle Sanction and Terms of Approval', 42, 138);
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor('#475569')
+      .text(
+        'We are pleased to inform you that your loan application has been approved subject to acceptance of the terms below, completion of applicable documentation, and final disbursement checks.',
+        42,
+        164,
+        { width: 510, lineGap: 4 }
+      );
+
+    drawInfoCard(
+      doc,
+      'Borrower Details',
+      [
+        { label: 'Customer Name', value: customer.name },
+        { label: 'Customer ID', value: customer.customerId },
+        { label: 'Classification', value: loan.customerClassification || customer.classification },
+      ],
+      42,
+      220,
+      238
+    );
+    drawInfoCard(
+      doc,
+      'Sanction Details',
+      [
+        { label: 'Loan ID', value: loan.loanId },
+        { label: 'Issue Date', value: formatDate(issuedAt) },
+        { label: 'Valid Until', value: formatDate(validUntil) },
+      ],
+      304,
+      220,
+      248
+    );
+
+    const tableBottom = drawTermsTable(doc, loan, 42, 326, 510);
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(13)
+      .fillColor('#0f172a')
+      .text('Key Conditions', 42, tableBottom + 26);
+
+    const conditions = [
+      `The sanctioned amount will be disbursed only after the borrower accepts this sanction letter in the application.`,
+      `The first EMI will follow the repayment schedule generated at disbursement. EMI auto-pay will attempt debit from the selected repayment account.`,
+      `A grace period of ${EMI_GRACE_PERIOD_DAYS} days is available after each EMI due date. No late penalty is applied within this period.`,
+      `If an EMI remains unpaid after the grace period, the account may be marked missed and a penalty of the higher of ${money(MISSED_EMI_FIXED_PENALTY)} or ${MISSED_EMI_PENALTY_RATE * 100}% of EMI may apply.`,
+      `Part-payment and foreclosure are subject to the outstanding principal, accrued interest, unpaid penalties, and foreclosure charges shown in the application.`,
+      `The lender may withhold or cancel disbursement if submitted documents are found invalid, mismatched, or materially incomplete.`,
+    ];
+
+    let conditionY = tableBottom + 52;
+    conditions.forEach((condition, index) => {
+      doc
+        .circle(48, conditionY + 5, 2.2)
+        .fill('#2563eb');
+      doc
+        .font('Helvetica')
+        .fontSize(9.2)
+        .fillColor('#334155')
+        .text(condition, 60, conditionY, { width: 480, lineGap: 3 });
+      conditionY += index === 0 ? 32 : 38;
+    });
+
+    doc.addPage();
+    drawSanctionHeader(doc, loan);
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(14)
+      .fillColor('#0f172a')
+      .text('Declaration and Acceptance', 42, 138);
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor('#334155')
+      .text(
+        'This sanction letter is not a disbursement confirmation. Disbursement will be completed only after borrower acceptance and successful completion of operational checks. By accepting this letter, the borrower confirms that the loan terms, repayment obligations, charges, and penalties have been reviewed and understood.',
+        42,
+        166,
+        { width: 510, lineGap: 5 }
+      );
+
+    doc.roundedRect(42, 250, 510, 130, 8).fillAndStroke('#f8fafc', '#dbe3ef');
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(11)
+      .fillColor('#0f172a')
+      .text('Borrower Acceptance', 60, 270);
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#475569')
+      .text('Accepted digitally in AdnatePayNest by the customer before disbursement.', 60, 294, {
+        width: 460,
+      });
+    doc
+      .moveTo(60, 346)
+      .lineTo(246, 346)
+      .strokeColor('#94a3b8')
+      .stroke();
+    doc
+      .moveTo(316, 346)
+      .lineTo(510, 346)
+      .strokeColor('#94a3b8')
+      .stroke();
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .fillColor('#64748b')
+      .text('Borrower Signature / Digital Acceptance', 60, 354)
+      .text('Date', 316, 354);
+
+    doc.roundedRect(42, 410, 510, 116, 8).fillAndStroke('#eff6ff', '#bfdbfe');
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(11)
+      .fillColor('#0f3a5f')
+      .text('For AdnatePayNest Bank', 60, 430);
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#334155')
+      .text(`Approved by: ${manager?.name || 'Authorized Manager'}`, 60, 456)
+      .text(`Approval Date: ${formatDate(loan.reviewedAt || issuedAt)}`, 60, 476)
+      .text('This is a system-generated sanction letter and does not require a physical stamp.', 60, 496);
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#0f172a')
+      .text('Important Notice', 42, 560);
+    doc
+      .font('Helvetica')
+      .fontSize(8.5)
+      .fillColor('#64748b')
+      .text(
+        'Please preserve this letter for your records. Any mismatch in borrower details, loan details, repayment account, or sanctioned amount should be reported before accepting the sanction terms.',
+        42,
+        578,
+        { width: 510, lineGap: 3 }
+      );
+
+    const pageRange = doc.bufferedPageRange();
+    for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
+      doc.switchToPage(i);
+      addPdfFooter(doc, loan);
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#64748b')
+        .text(`Page ${i + 1} of ${pageRange.count}`, 482, doc.page.height - 54, {
+          width: 70,
+          align: 'right',
+        });
+    }
+
+    doc.end();
+  });
+
+const generateAndSendSanctionLetter = async (loan, manager) => {
+  const pdf = await generateSanctionLetterPdf(loan, manager);
+  const emailResult = loan.customer?.email
+    ? await sendEmail({
+      to: loan.customer.email,
+      subject: `Loan sanction letter for ${loan.loanId}`,
+      text: `Your ${loan.loanTypeLabel} loan has been approved. Please review and accept the attached sanction letter before disbursement.`,
+      html: `<p>Your <strong>${loan.loanTypeLabel}</strong> loan application <strong>${loan.loanId}</strong> has been approved.</p><p>Please review and accept the sanction letter before disbursement.</p>`,
+      attachments: [
+        {
+          filename: pdf.fileName,
+          path: pdf.filePath,
+        },
+      ],
+    })
+    : { sent: false, message: 'Customer email is not available.' };
+
+  loan.sanctionLetter = {
+    ...(loan.sanctionLetter || {}),
+    status: emailResult?.sent ? 'sent' : 'generated',
+    fileName: pdf.fileName,
+    fileUrl: pdf.fileUrl,
+    filePath: pdf.filePath,
+    generatedAt: pdf.generatedAt,
+    sentAt: emailResult?.sent ? new Date() : loan.sanctionLetter?.sentAt,
+    emailStatus: emailResult?.sent ? 'sent' : emailResult?.message || 'Email not configured',
+  };
+
+  return emailResult;
+};
+
+const drawAgreementClause = (doc, number, title, body, x, y, width) => {
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(10.5)
+    .fillColor('#0f172a')
+    .text(`${number}. ${title}`, x, y, { width });
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#475569')
+    .text(body, x, y + 16, { width, lineGap: 3 });
+
+  return doc.y + 12;
+};
+
+const generateLoanAgreementPdf = (loan, manager) =>
+  new Promise((resolve, reject) => {
+    fs.mkdirSync(LOAN_AGREEMENT_DIR, { recursive: true });
+
+    const fileName = `${loan.loanId}-loan-agreement.pdf`;
+    const filePath = path.join(LOAN_AGREEMENT_DIR, fileName);
+    const doc = new PDFDocument({ size: 'A4', margin: 42, bufferPages: true });
+    const stream = fs.createWriteStream(filePath);
+    const generatedAt = new Date();
+    const customer = loan.customer || {};
+    const clauseWidth = 510;
+
+    stream.on('finish', () => {
+      resolve({
+        fileName,
+        filePath,
+        fileUrl: `/uploads/loan-agreements/${fileName}`,
+        generatedAt,
+      });
+    });
+    stream.on('error', reject);
+    doc.on('error', reject);
+    doc.pipe(stream);
+
+    drawSanctionHeader(doc, loan);
+    doc
+      .fillColor('#0f172a')
+      .font('Helvetica-Bold')
+      .fontSize(17)
+      .text('Loan Agreement and Repayment Authorization', 42, 138);
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor('#475569')
+      .text(
+        'This agreement records the binding terms between AdnatePayNest Bank and the borrower for the sanctioned loan. The borrower must accept this agreement before disbursement.',
+        42,
+        166,
+        { width: clauseWidth, lineGap: 4 }
+      );
+
+    drawInfoCard(
+      doc,
+      'Borrower',
+      [
+        { label: 'Name', value: customer.name },
+        { label: 'Customer ID', value: customer.customerId },
+        { label: 'Classification', value: loan.customerClassification || customer.classification },
+      ],
+      42,
+      220,
+      238
+    );
+    drawInfoCard(
+      doc,
+      'Agreement',
+      [
+        { label: 'Loan ID', value: loan.loanId },
+        { label: 'Date', value: formatDate(generatedAt) },
+        { label: 'Approved By', value: manager?.name || loan.reviewedBy?.name || 'Authorized Manager' },
+      ],
+      304,
+      220,
+      248
+    );
+
+    let y = drawTermsTable(doc, loan, 42, 326, clauseWidth) + 24;
+    const firstPageClauses = [
+      [
+        'Loan Facility',
+        `The lender agrees to provide the borrower a ${loan.loanTypeLabel || loan.loanType} loan of ${money(loan.amount)} subject to this agreement, sanction terms, document verification, and disbursement controls.`,
+      ],
+      [
+        'Repayment Obligation',
+        `The borrower agrees to repay the loan through monthly EMIs of ${money(loan.emiAmount)} for ${loan.tenureMonths} months, together with applicable interest, charges, penalties, and any other dues.`,
+      ],
+      [
+        'Auto-Debit Authorization',
+        `The borrower authorizes EMI recovery from ${loan.disbursementAccountType || 'the selected account'} ${loan.disbursementAccountNumber || ''}. If sufficient balance is unavailable, the EMI may be marked overdue or missed as per policy.`,
+      ],
+    ];
+
+    firstPageClauses.forEach(([title, body], index) => {
+      y = drawAgreementClause(doc, index + 1, title, body, 42, y, clauseWidth);
+    });
+
+    doc.addPage();
+    drawSanctionHeader(doc, loan);
+    y = 138;
+
+    const clauses = [
+      [
+        'Grace Period and Late Payment',
+        `A ${EMI_GRACE_PERIOD_DAYS}-day grace period applies after each EMI due date. If the EMI remains unpaid after the grace period, penalty may be charged at the higher of ${money(MISSED_EMI_FIXED_PENALTY)} or ${MISSED_EMI_PENALTY_RATE * 100}% of EMI.`,
+      ],
+      [
+        'Part-Payment and Foreclosure',
+        'Part-payment and foreclosure are permitted subject to outstanding principal, accrued interest, unpaid penalties, foreclosure fee, and operational checks shown in the application at the time of payment.',
+      ],
+      [
+        'Events of Default',
+        'Failure to pay EMI after the grace period, false documents, misuse of loan proceeds, account irregularity, or breach of this agreement may be treated as default and may affect recovery actions and customer profile.',
+      ],
+      [
+        'Borrower Declarations',
+        'The borrower confirms that submitted information and documents are true, the loan purpose is genuine, and the borrower has understood the interest, EMI, total repayment, charges, and consequences of default.',
+      ],
+      [
+        'Lender Rights',
+        'The lender may verify documents, contact the borrower, send electronic communications, adjust payments against dues, withhold disbursement, or close the facility according to policy and applicable law.',
+      ],
+      [
+        'Electronic Records',
+        'The borrower agrees that digital acceptance in AdnatePayNest is valid evidence of consent and will be retained with the loan record for audit and servicing.',
+      ],
+      [
+        'Governing Terms',
+        'This agreement is governed by applicable banking policies, platform terms, and Indian law. Disputes should first be raised through official customer support channels.',
+      ],
+    ];
+
+    clauses.forEach(([title, body], index) => {
+      if (y > 660) {
+        doc.addPage();
+        drawSanctionHeader(doc, loan);
+        y = 138;
+      }
+      y = drawAgreementClause(doc, index + 4, title, body, 42, y, clauseWidth);
+    });
+
+    if (y > 560) {
+      doc.addPage();
+      drawSanctionHeader(doc, loan);
+      y = 138;
+    }
+
+    doc.roundedRect(42, y + 8, 510, 154, 8).fillAndStroke('#f8fafc', '#dbe3ef');
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(12)
+      .fillColor('#0f172a')
+      .text('Digital Acceptance and Execution', 60, y + 28);
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#475569')
+      .text(
+        'By accepting this agreement in the application, the borrower confirms consent to the loan contract, repayment authorization, EMI schedule, penalty terms, and lender rights stated above.',
+        60,
+        y + 52,
+        { width: 460, lineGap: 4 }
+      );
+    doc
+      .moveTo(60, y + 124)
+      .lineTo(246, y + 124)
+      .strokeColor('#94a3b8')
+      .stroke();
+    doc
+      .moveTo(316, y + 124)
+      .lineTo(510, y + 124)
+      .strokeColor('#94a3b8')
+      .stroke();
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .fillColor('#64748b')
+      .text('Borrower Digital Acceptance', 60, y + 132)
+      .text('Agreement Acceptance Date', 316, y + 132);
+
+    doc.roundedRect(42, y + 188, 510, 86, 8).fillAndStroke('#eff6ff', '#bfdbfe');
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(11)
+      .fillColor('#0f3a5f')
+      .text('For AdnatePayNest Bank', 60, y + 208);
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#334155')
+      .text(`Authorized Manager: ${manager?.name || 'Authorized Manager'}`, 60, y + 232)
+      .text(`Agreement Generated: ${formatDate(generatedAt)}`, 60, y + 252);
+
+    const pageRange = doc.bufferedPageRange();
+    for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
+      doc.switchToPage(i);
+      addPdfFooter(doc, loan);
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#64748b')
+        .text(`Page ${i + 1} of ${pageRange.count}`, 482, doc.page.height - 54, {
+          width: 70,
+          align: 'right',
+        });
+    }
+
+    doc.end();
+  });
+
+const generateAndSendLoanAgreement = async (loan, manager) => {
+  const pdf = await generateLoanAgreementPdf(loan, manager);
+  const emailResult = loan.customer?.email
+    ? await sendEmail({
+      to: loan.customer.email,
+      subject: `Loan agreement for ${loan.loanId}`,
+      text: `Your loan agreement is ready. Please review and accept it before disbursement.`,
+      html: `<p>Your loan agreement for <strong>${loan.loanId}</strong> is ready.</p><p>Please review and accept it before disbursement.</p>`,
+      attachments: [
+        {
+          filename: pdf.fileName,
+          path: pdf.filePath,
+        },
+      ],
+    })
+    : { sent: false, message: 'Customer email is not available.' };
+
+  loan.loanAgreement = {
+    ...(loan.loanAgreement || {}),
+    status: emailResult?.sent ? 'sent' : 'generated',
+    fileName: pdf.fileName,
+    fileUrl: pdf.fileUrl,
+    filePath: pdf.filePath,
+    generatedAt: pdf.generatedAt,
+    sentAt: emailResult?.sent ? new Date() : loan.loanAgreement?.sentAt,
+    emailStatus: emailResult?.sent ? 'sent' : emailResult?.message || 'Email not configured',
+  };
+
+  return emailResult;
+};
+
+const drawRepaymentScheduleHeader = (doc, startY) => {
+  const columns = [
+    ['EMI', 42, 42],
+    ['Due Date', 84, 78],
+    ['EMI Amount', 162, 82],
+    ['Principal', 244, 82],
+    ['Interest', 326, 78],
+    ['Balance', 404, 86],
+    ['Status', 490, 62],
+  ];
+
+  doc.rect(42, startY, 510, 24).fillAndStroke('#eff6ff', '#bfdbfe');
+  columns.forEach(([label, x, width]) => {
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(7.5)
+      .fillColor('#0f3a5f')
+      .text(label, x + 5, startY + 8, { width: width - 10 });
+  });
+
+  return startY + 24;
+};
+
+const drawRepaymentScheduleRow = (doc, row, y, index) => {
+  const fill = index % 2 === 0 ? '#ffffff' : '#f8fafc';
+  const values = [
+    [row.emiNumber, 42, 42],
+    [formatDate(row.dueDate), 84, 78],
+    [money(row.emiAmount), 162, 82],
+    [money(row.principalComponent), 244, 82],
+    [money(row.interestComponent), 326, 78],
+    [money(row.outstandingBalance), 404, 86],
+    [String(row.status || 'pending').replace(/_/g, ' '), 490, 62],
+  ];
+
+  doc.rect(42, y, 510, 23).fillAndStroke(fill, '#e2e8f0');
+  values.forEach(([value, x, width]) => {
+    doc
+      .font('Helvetica')
+      .fontSize(7.2)
+      .fillColor('#334155')
+      .text(String(value || ''), x + 5, y + 7, { width: width - 10 });
+  });
+
+  return y + 23;
+};
+
+const generateRepaymentSchedulePdf = (loan) =>
+  new Promise((resolve, reject) => {
+    fs.mkdirSync(REPAYMENT_SCHEDULE_DIR, { recursive: true });
+
+    const fileName = `${loan.loanId}-repayment-schedule.pdf`;
+    const filePath = path.join(REPAYMENT_SCHEDULE_DIR, fileName);
+    const doc = new PDFDocument({ size: 'A4', margin: 42, bufferPages: true });
+    const stream = fs.createWriteStream(filePath);
+    const generatedAt = new Date();
+    const customer = loan.customer || {};
+    const schedule = loan.amortizationSchedule || [];
+
+    stream.on('finish', () => {
+      resolve({
+        fileName,
+        filePath,
+        fileUrl: `/uploads/repayment-schedules/${fileName}`,
+        generatedAt,
+      });
+    });
+    stream.on('error', reject);
+    doc.on('error', reject);
+    doc.pipe(stream);
+
+    drawSanctionHeader(doc, loan);
+    doc
+      .fillColor('#0f172a')
+      .font('Helvetica-Bold')
+      .fontSize(17)
+      .text('Repayment Schedule', 42, 138);
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#475569')
+      .text(
+        'This schedule is generated at loan disbursement and records EMI due dates, principal and interest components, and projected outstanding balance.',
+        42,
+        164,
+        { width: 510, lineGap: 4 }
+      );
+
+    drawInfoCard(
+      doc,
+      'Borrower',
+      [
+        { label: 'Name', value: customer.name },
+        { label: 'Customer ID', value: customer.customerId },
+        { label: 'Repayment Account', value: `${loan.disbursementAccountType || 'Account'} ${loan.disbursementAccountNumber || ''}`.trim() },
+      ],
+      42,
+      212,
+      238
+    );
+    drawInfoCard(
+      doc,
+      'Loan Terms',
+      [
+        { label: 'Loan ID', value: loan.loanId },
+        { label: 'Loan Amount', value: money(loan.amount) },
+        { label: 'Monthly EMI', value: money(loan.emiAmount) },
+      ],
+      304,
+      212,
+      248
+    );
+
+    let y = drawRepaymentScheduleHeader(doc, 340);
+    schedule.forEach((row, index) => {
+      if (y > 730) {
+        doc.addPage();
+        drawSanctionHeader(doc, loan);
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(13)
+          .fillColor('#0f172a')
+          .text('Repayment Schedule Continued', 42, 138);
+        y = drawRepaymentScheduleHeader(doc, 172);
+      }
+
+      y = drawRepaymentScheduleRow(doc, row, y, index);
+    });
+
+    if (schedule.length === 0) {
+      doc
+        .font('Helvetica')
+        .fontSize(10)
+        .fillColor('#64748b')
+        .text('No repayment schedule rows are available.', 54, y + 16);
+    }
+
+    const pageRange = doc.bufferedPageRange();
+    for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
+      doc.switchToPage(i);
+      addPdfFooter(doc, loan);
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#64748b')
+        .text(`Page ${i + 1} of ${pageRange.count}`, 482, doc.page.height - 54, {
+          width: 70,
+          align: 'right',
+        });
+    }
+
+    doc.end();
+  });
+
+const generateAndSendRepaymentSchedule = async (loan) => {
+  const pdf = await generateRepaymentSchedulePdf(loan);
+  const emailResult = loan.customer?.email
+    ? await sendEmail({
+      to: loan.customer.email,
+      subject: `Repayment schedule for loan ${loan.loanId}`,
+      text: `Your repayment schedule for loan ${loan.loanId} is attached.`,
+      html: `<p>Your repayment schedule for loan <strong>${loan.loanId}</strong> is attached.</p>`,
+      attachments: [
+        {
+          filename: pdf.fileName,
+          path: pdf.filePath,
+        },
+      ],
+    })
+    : { sent: false, message: 'Customer email is not available.' };
+
+  loan.repaymentScheduleDocument = {
+    ...(loan.repaymentScheduleDocument || {}),
+    status: emailResult?.sent ? 'sent' : 'generated',
+    fileName: pdf.fileName,
+    fileUrl: pdf.fileUrl,
+    filePath: pdf.filePath,
+    generatedAt: pdf.generatedAt,
+    sentAt: emailResult?.sent ? new Date() : loan.repaymentScheduleDocument?.sentAt,
+    emailStatus: emailResult?.sent ? 'sent' : emailResult?.message || 'Email not configured',
+  };
+
+  return emailResult;
+};
+
 const getRecommendation = (score, decisionBands) => {
   if (score >= decisionBands.highlyEligible) return 'Highly eligible';
   if (score >= decisionBands.eligible) return 'Eligible';
@@ -155,8 +947,39 @@ const makeLoanId = () =>
     .toUpperCase()}`;
 
 const getCustomerId = (loan) => loan.customer?.customerId || '';
+const getCustomerObjectId = (loan) => String(loan.customer?._id || loan.customer || '');
 
-const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = []) => {
+const getActiveLoanCount = async (customerId) => {
+  if (!customerId) return 0;
+
+  return Loan.countDocuments({
+    customer: customerId,
+    status: { $in: ACTIVE_LOAN_STATUSES },
+  });
+};
+
+const getActiveLoanCountsByCustomer = async (customerIds) => {
+  const objectIds = [...new Set(customerIds.filter(Boolean).map(String))];
+
+  if (!objectIds.length) return new Map();
+
+  const rows = await Loan.aggregate([
+    {
+      $match: {
+        customer: { $in: objectIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        status: { $in: ACTIVE_LOAN_STATUSES },
+      },
+    },
+    { $group: { _id: '$customer', count: { $sum: 1 } } },
+  ]);
+
+  return rows.reduce((map, row) => {
+    map.set(String(row._id), row.count);
+    return map;
+  }, new Map());
+};
+
+const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = [], activeLoanCount = 0) => {
   const classification = String(
     loan.customerClassification || loan.customer?.classification || ''
   ).toLowerCase();
@@ -175,6 +998,7 @@ const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = []) => {
     bankAccounts,
     monthlyIncome: loan.monthlyIncome,
     existingMonthlyLiabilities: loan.existingMonthlyLiabilities,
+    activeLoanCount,
     employmentDurationMonths: loan.employmentDurationMonths,
     loanAmount: loan.amount,
     emi: loan.emiAmount,
@@ -203,10 +1027,10 @@ const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = []) => {
 const shouldRefreshEligibility = (loan) =>
   ['submitted', 'under_review'].includes(loan.status);
 
-const refreshLoanEligibility = async (loan, loanRules, bankAccounts = []) => {
+const refreshLoanEligibility = async (loan, loanRules, bankAccounts = [], activeLoanCount = 0) => {
   if (!shouldRefreshEligibility(loan)) return loan;
 
-  const snapshot = buildEligibilitySnapshot(loan, loanRules, bankAccounts);
+  const snapshot = buildEligibilitySnapshot(loan, loanRules, bankAccounts, activeLoanCount);
   const currentScores = loan.eligibilityDetails?.componentScores || {};
   const nextScores = snapshot.details.componentScores || {};
   const hasChanged =
@@ -216,7 +1040,9 @@ const refreshLoanEligibility = async (loan, loanRules, bankAccounts = []) => {
     Number(loan.eligibilityDetails?.highestOdUsesThisMonth || 0) !==
       Number(snapshot.details.highestOdUsesThisMonth || 0) ||
     Number(loan.eligibilityDetails?.odBlockedAccounts || 0) !==
-      Number(snapshot.details.odBlockedAccounts || 0);
+      Number(snapshot.details.odBlockedAccounts || 0) ||
+    Number(loan.eligibilityDetails?.activeLoanCount || 0) !==
+      Number(snapshot.details.activeLoanCount || 0);
 
   if (!hasChanged) return loan;
 
@@ -228,7 +1054,7 @@ const refreshLoanEligibility = async (loan, loanRules, bankAccounts = []) => {
   return loan;
 };
 
-const serializeLoan = (loan) => ({
+const serializeLoan = (loan, activeLoanCount = loan.eligibilityDetails?.activeLoanCount || 0) => ({
   id: loan.loanId,
   customerId: loan.customer?._id || loan.customer,
   customerName: loan.customer?.name,
@@ -243,6 +1069,7 @@ const serializeLoan = (loan) => ({
   annualInterestRate: loan.annualInterestRate,
   monthlyIncome: loan.monthlyIncome,
   existingMonthlyLiabilities: loan.existingMonthlyLiabilities,
+  activeLoanCount,
   employmentType: loan.employmentType,
   employmentDurationMonths: loan.employmentDurationMonths,
   disbursementAccountNumber: loan.disbursementAccountNumber,
@@ -259,6 +1086,32 @@ const serializeLoan = (loan) => ({
   eligibilityScore: loan.eligibilityScore,
   eligibilityRecommendation: loan.eligibilityRecommendation,
   eligibilityDetails: loan.eligibilityDetails || {},
+  sanctionLetter: {
+    status: loan.sanctionLetter?.status || 'pending',
+    fileName: loan.sanctionLetter?.fileName || '',
+    fileUrl: loan.sanctionLetter?.fileUrl || '',
+    generatedAt: loan.sanctionLetter?.generatedAt,
+    sentAt: loan.sanctionLetter?.sentAt,
+    acceptedAt: loan.sanctionLetter?.acceptedAt,
+    emailStatus: loan.sanctionLetter?.emailStatus || '',
+  },
+  loanAgreement: {
+    status: loan.loanAgreement?.status || 'pending',
+    fileName: loan.loanAgreement?.fileName || '',
+    fileUrl: loan.loanAgreement?.fileUrl || '',
+    generatedAt: loan.loanAgreement?.generatedAt,
+    sentAt: loan.loanAgreement?.sentAt,
+    acceptedAt: loan.loanAgreement?.acceptedAt,
+    emailStatus: loan.loanAgreement?.emailStatus || '',
+  },
+  repaymentScheduleDocument: {
+    status: loan.repaymentScheduleDocument?.status || 'pending',
+    fileName: loan.repaymentScheduleDocument?.fileName || '',
+    fileUrl: loan.repaymentScheduleDocument?.fileUrl || '',
+    generatedAt: loan.repaymentScheduleDocument?.generatedAt,
+    sentAt: loan.repaymentScheduleDocument?.sentAt,
+    emailStatus: loan.repaymentScheduleDocument?.emailStatus || '',
+  },
   status: loan.status,
   additionalInfoRequested: loan.additionalInfoRequested,
   managerNote: loan.managerNote,
@@ -288,6 +1141,9 @@ const serializeLoan = (loan) => ({
   })),
 });
 
+const serializeLoanWithActiveLoanCount = async (loan) =>
+  serializeLoan(loan, await getActiveLoanCount(loan.customer?._id || loan.customer));
+
 const getLoans = async (req, res) => {
   const filter = req.user.role === 'customer' ? { customer: req.user._id } : {};
   const loans = await Loan.find(filter)
@@ -299,6 +1155,10 @@ const getLoans = async (req, res) => {
   const customerIds = [
     ...new Set(loans.map(getCustomerId).filter(Boolean)),
   ];
+  const customerObjectIds = [
+    ...new Set(loans.map(getCustomerObjectId).filter(Boolean)),
+  ];
+  const activeLoanCountsByCustomer = await getActiveLoanCountsByCustomer(customerObjectIds);
   const bankAccounts = customerIds.length
     ? await BankAccount.find({
       customerId: { $in: customerIds },
@@ -318,13 +1178,16 @@ const getLoans = async (req, res) => {
       refreshLoanEligibility(
         loan,
         loanRules,
-        bankAccountsByCustomerId.get(getCustomerId(loan)) || []
+        bankAccountsByCustomerId.get(getCustomerId(loan)) || [],
+        activeLoanCountsByCustomer.get(getCustomerObjectId(loan)) || 0
       )
     )
   );
 
   res.json({
-    loans: refreshedLoans.map(serializeLoan),
+    loans: refreshedLoans.map((loan) =>
+      serializeLoan(loan, activeLoanCountsByCustomer.get(getCustomerObjectId(loan)) || 0)
+    ),
     loanRules,
   });
 };
@@ -497,11 +1360,13 @@ const createLoan = async (req, res) => {
       accountStatus: 'active',
     })
     : [];
+  const activeLoanCount = await getActiveLoanCount(customer._id);
   const eligibility = calculateEligibility({
     customer,
     bankAccounts,
     monthlyIncome,
     existingMonthlyLiabilities,
+    activeLoanCount,
     employmentDurationMonths,
     loanAmount: amount,
     emi: emiAmount,
@@ -575,7 +1440,7 @@ const createLoan = async (req, res) => {
 
   res.status(201).json({
     message: 'Loan application submitted to manager review.',
-    loan: serializeLoan(responseLoan),
+    loan: serializeLoan(responseLoan, activeLoanCount),
   });
 };
 
@@ -593,7 +1458,7 @@ const reviewLoan = async (req, res) => {
 
   const loan = await Loan.findOne({ loanId: req.params.id }).populate(
     'customer',
-    'name customerId classification accounts account'
+    'name email customerId classification accounts account'
   );
 
   if (!loan) return res.status(404).json({ message: 'Loan application not found' });
@@ -609,8 +1474,9 @@ const reviewLoan = async (req, res) => {
       accountStatus: 'active',
     })
     : [];
+  const activeLoanCount = await getActiveLoanCount(loan.customer?._id);
 
-  await refreshLoanEligibility(loan, loanRules, bankAccounts);
+  await refreshLoanEligibility(loan, loanRules, bankAccounts, activeLoanCount);
 
   loan.status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'under_review';
   loan.assignedManager = req.user._id;
@@ -619,6 +1485,9 @@ const reviewLoan = async (req, res) => {
   loan.additionalInfoRequested = action === 'request_info';
   loan.managerNote = note;
   loan.rejectionReason = action === 'reject' ? note : '';
+  if (action === 'approve') {
+    await generateAndSendSanctionLetter(loan, req.user);
+  }
   await loan.save();
 
   await writeSystemLog({
@@ -676,7 +1545,7 @@ const reviewLoan = async (req, res) => {
         : action === 'reject'
           ? 'Loan application rejected.'
           : 'Additional information requested.',
-    loan: serializeLoan(responseLoan),
+    loan: serializeLoan(responseLoan, activeLoanCount),
   });
 };
 
@@ -736,7 +1605,107 @@ const reviewLoanDocument = async (req, res) => {
 
   res.json({
     message: 'Document review updated.',
-    loan: serializeLoan(responseLoan),
+    loan: await serializeLoanWithActiveLoanCount(responseLoan),
+  });
+};
+
+const acceptSanctionLetter = async (req, res) => {
+  const loan = await Loan.findOne({
+    loanId: req.params.id,
+    customer: req.user._id,
+  }).populate('customer', 'name email customerId classification accounts account');
+
+  if (!loan) return res.status(404).json({ message: 'Loan application not found' });
+  if (loan.status !== 'approved') {
+    return res.status(400).json({ message: 'Only approved loans can be accepted for disbursal' });
+  }
+  if (!loan.sanctionLetter?.fileUrl) {
+    return res.status(400).json({ message: 'Sanction letter is not available yet' });
+  }
+  if (loan.sanctionLetter.status === 'accepted') {
+    return res.json({
+      message: 'Sanction letter already accepted.',
+      loan: await serializeLoanWithActiveLoanCount(loan),
+    });
+  }
+
+  loan.sanctionLetter = {
+    ...(loan.sanctionLetter || {}),
+    status: 'accepted',
+    acceptedAt: new Date(),
+    acceptedBy: req.user._id,
+  };
+  await generateAndSendLoanAgreement(loan, req.user);
+  await loan.save();
+
+  await writeSystemLog({
+    action: 'loan.sanction.accepted.customer',
+    message: `${loan.customer?.name || 'Customer'} accepted sanction letter for loan ${loan.loanId}.`,
+    actor: req.user._id,
+    actorName: loan.customer?.name || req.user.name,
+    entityType: 'Loan',
+    entityId: loan.loanId,
+    severity: 'success',
+    metadata: {
+      loanId: loan.loanId,
+      acceptedAt: loan.sanctionLetter.acceptedAt,
+    },
+  });
+
+  res.json({
+    message: 'Sanction letter accepted. Loan agreement is ready for review.',
+    loan: await serializeLoanWithActiveLoanCount(loan),
+  });
+};
+
+const acceptLoanAgreement = async (req, res) => {
+  const loan = await Loan.findOne({
+    loanId: req.params.id,
+    customer: req.user._id,
+  }).populate('customer', 'name email customerId classification accounts account');
+
+  if (!loan) return res.status(404).json({ message: 'Loan application not found' });
+  if (loan.status !== 'approved') {
+    return res.status(400).json({ message: 'Only approved loans can be accepted for disbursal' });
+  }
+  if (loan.sanctionLetter?.status !== 'accepted') {
+    return res.status(400).json({ message: 'Accept the sanction letter before accepting the loan agreement' });
+  }
+  if (!loan.loanAgreement?.fileUrl) {
+    await generateAndSendLoanAgreement(loan, req.user);
+  }
+  if (loan.loanAgreement.status === 'accepted') {
+    return res.json({
+      message: 'Loan agreement already accepted.',
+      loan: await serializeLoanWithActiveLoanCount(loan),
+    });
+  }
+
+  loan.loanAgreement = {
+    ...(loan.loanAgreement || {}),
+    status: 'accepted',
+    acceptedAt: new Date(),
+    acceptedBy: req.user._id,
+  };
+  await loan.save();
+
+  await writeSystemLog({
+    action: 'loan.agreement.accepted.customer',
+    message: `${loan.customer?.name || 'Customer'} accepted loan agreement for loan ${loan.loanId}.`,
+    actor: req.user._id,
+    actorName: loan.customer?.name || req.user.name,
+    entityType: 'Loan',
+    entityId: loan.loanId,
+    severity: 'success',
+    metadata: {
+      loanId: loan.loanId,
+      acceptedAt: loan.loanAgreement.acceptedAt,
+    },
+  });
+
+  res.json({
+    message: 'Loan agreement accepted. Loan is ready for disbursal.',
+    loan: await serializeLoanWithActiveLoanCount(loan),
   });
 };
 
@@ -747,6 +1716,7 @@ const attemptLoanEmiDeduction = async ({
   emiNumber,
   paymentType = 'emi',
   markMissedOnFailure = false,
+  now = new Date(),
   session,
 }) => {
   const emiRow = emiNumber
@@ -775,10 +1745,81 @@ const attemptLoanEmiDeduction = async ({
       throw new Error('Insufficient balance to pay this EMI');
     }
 
+    if (isEmiGracePeriodActive(emiRow, now)) {
+      emiRow.status = 'overdue';
+
+      const [transaction] = await Transaction.create(
+        [
+          {
+            transactionId: `LNEMIGRACE${Date.now()}`,
+            sender: customer._id,
+            receiver: customer._id,
+            senderName: customer.name,
+            receiverName: customer.name,
+            fromAccountNumber: paymentAccount.accountNumber,
+            toAccountNumber: loan.loanId,
+            amount: Math.max(1, amountDue),
+            remarks: `EMI ${emiRow.emiNumber} auto deduction failed during grace period for loan ${loan.loanId}`,
+            status: 'failed',
+            failureReason: 'Insufficient balance during grace period',
+            type: 'loan-emi-payment',
+          },
+        ],
+        { session }
+      );
+
+      appendRepaymentHistory(loan, {
+        emiNumber: emiRow.emiNumber,
+        paymentType: 'failed_emi',
+        amount: amountDue,
+        status: 'failed',
+        transactionId: transaction.transactionId,
+        accountNumber: paymentAccount.accountNumber,
+        remarks: `Insufficient balance. EMI is overdue but within ${EMI_GRACE_PERIOD_DAYS}-day grace period.`,
+      });
+
+      await loan.save({ session });
+      await writeSystemLog(
+        {
+          action: 'loan.emi.grace_period.customer',
+          message: `EMI ${emiRow.emiNumber} for loan ${loan.loanId} could not be auto-paid due to insufficient balance. Grace period remains active.`,
+          actor: customer._id,
+          actorName: customer.name,
+          entityType: 'Loan',
+          entityId: loan.loanId,
+          severity: 'warning',
+          metadata: {
+            loanId: loan.loanId,
+            emiNumber: emiRow.emiNumber,
+            amount: amountDue,
+            gracePeriodDays: EMI_GRACE_PERIOD_DAYS,
+            transactionId: transaction.transactionId,
+            paymentAccountNumber: paymentAccount.accountNumber,
+          },
+        },
+        { session }
+      );
+
+      await sendLoanEmail({
+        customer,
+        subject: `EMI payment overdue for loan ${loan.loanId}`,
+        text: `Your EMI ${emiRow.emiNumber} payment could not be auto-paid due to insufficient balance. Please pay within ${EMI_GRACE_PERIOD_DAYS} days of the due date to avoid penalty.`,
+        html: `<p>Your EMI <strong>${emiRow.emiNumber}</strong> payment for loan <strong>${loan.loanId}</strong> could not be auto-paid due to insufficient balance.</p><p>Please pay within <strong>${EMI_GRACE_PERIOD_DAYS} days</strong> of the due date to avoid penalty.</p>`,
+      });
+
+      return {
+        paid: false,
+        gracePeriodActive: true,
+        emiRow,
+        transaction,
+        amountDue,
+      };
+    }
+
     const penaltyAmount = toNumber(emiRow.penaltyAmount) || calculateMissedEmiPenalty(emiRow.emiAmount);
 
     emiRow.status = 'missed';
-    emiRow.missedAt = emiRow.missedAt || new Date();
+    emiRow.missedAt = emiRow.missedAt || now;
     emiRow.penaltyAmount = penaltyAmount;
     loan.accruedPenalty = Math.max(0, toNumber(loan.accruedPenalty) + Math.max(0, penaltyAmount - unpaidPenalty));
 
@@ -952,6 +1993,12 @@ const disburseLoan = async (req, res) => {
 
     if (!loan) throw new Error('Loan application not found');
     if (loan.status !== 'approved') throw new Error('Only approved loans can be disbursed');
+    if (loan.sanctionLetter?.status !== 'accepted') {
+      throw new Error('Customer must accept the loan sanction letter before disbursal');
+    }
+    if (loan.loanAgreement?.status !== 'accepted') {
+      throw new Error('Customer must accept the loan agreement before disbursal');
+    }
 
     const customer = await User.findById(loan.customer).session(session);
     if (!customer) throw new Error('Customer not found');
@@ -1047,12 +2094,33 @@ const disburseLoan = async (req, res) => {
     await session.commitTransaction();
 
     const responseLoan = await Loan.findById(loan._id)
-      .populate('customer', 'name customerId')
+      .populate('customer', 'name customerId email classification')
       .populate('reviewedBy', 'name');
+    try {
+      await generateAndSendRepaymentSchedule(responseLoan);
+      await responseLoan.save();
+
+      await writeSystemLog({
+        action: 'loan.repayment_schedule.generated',
+        message: `Repayment schedule PDF generated for loan ${responseLoan.loanId}.`,
+        actor: req.user._id,
+        actorName: req.user.name,
+        entityType: 'Loan',
+        entityId: responseLoan.loanId,
+        severity: 'success',
+        metadata: {
+          loanId: responseLoan.loanId,
+          fileUrl: responseLoan.repaymentScheduleDocument?.fileUrl || '',
+          emailStatus: responseLoan.repaymentScheduleDocument?.emailStatus || '',
+        },
+      });
+    } catch (scheduleError) {
+      console.error('Repayment schedule PDF generation failed:', scheduleError.message);
+    }
 
     res.json({
-      message: 'Loan amount disbursed to customer account.',
-      loan: serializeLoan(responseLoan),
+      message: 'Loan amount disbursed to customer account. Repayment schedule PDF generated.',
+      loan: await serializeLoanWithActiveLoanCount(responseLoan),
     });
   } catch (error) {
     await session.abortTransaction();
@@ -1121,7 +2189,7 @@ const payLoanEmi = async (req, res) => {
       message: responseLoan.status === 'closed'
         ? 'Final EMI paid. Loan closed successfully.'
         : `EMI ${result.emiRow.emiNumber} paid successfully.`,
-      loan: serializeLoan(responseLoan),
+      loan: await serializeLoanWithActiveLoanCount(responseLoan),
       transaction: result.transaction,
     });
   } catch (error) {
@@ -1182,6 +2250,7 @@ const runDueEmiProcessing = async ({ now = new Date() } = {}) => {
         emiNumber: dueEmi.emiNumber,
         paymentType: 'auto_emi',
         markMissedOnFailure: true,
+        now,
         session,
       });
 
@@ -1190,7 +2259,7 @@ const runDueEmiProcessing = async ({ now = new Date() } = {}) => {
       results.push({
         loanId: loan.loanId,
         emiNumber: dueEmi.emiNumber,
-        status: result.paid ? 'paid' : 'missed',
+        status: result.paid ? 'paid' : result.gracePeriodActive ? 'overdue' : 'missed',
         amount: result.amountDue,
       });
     } catch (error) {
@@ -1208,12 +2277,146 @@ const runDueEmiProcessing = async ({ now = new Date() } = {}) => {
   return results;
 };
 
+const getPreviousMonthWindow = (now = new Date()) => {
+  const periodEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+  const periodStart = new Date(periodEnd);
+  periodStart.setMonth(periodStart.getMonth() - 1);
+
+  return { periodStart, periodEnd };
+};
+
+const runMonthlyRepaymentProcessing = async ({ now = new Date() } = {}) => {
+  const { periodStart, periodEnd } = getPreviousMonthWindow(now);
+  const dueProcessingResults = await runDueEmiProcessing({ now });
+  const loans = await Loan.find({
+    $or: [
+      {
+        amortizationSchedule: {
+          $elemMatch: {
+            dueDate: { $gte: periodStart, $lt: periodEnd },
+          },
+        },
+      },
+      {
+        repaymentHistory: {
+          $elemMatch: {
+            paidAt: { $gte: periodStart, $lt: periodEnd },
+          },
+        },
+      },
+    ],
+  }).populate('customer', 'name customerId email');
+
+  const summary = loans.reduce(
+    (result, loan) => {
+      const scheduleRows = (loan.amortizationSchedule || []).filter((row) => {
+        const dueDate = row.dueDate ? new Date(row.dueDate) : null;
+        return dueDate && dueDate >= periodStart && dueDate < periodEnd;
+      });
+      const repaymentRows = (loan.repaymentHistory || []).filter((entry) => {
+        const paidAt = entry.paidAt ? new Date(entry.paidAt) : null;
+        return paidAt && paidAt >= periodStart && paidAt < periodEnd;
+      });
+      const collectedAmount = repaymentRows.reduce(
+        (sum, entry) => sum + toNumber(entry.status === 'success' ? entry.amount : 0),
+        0
+      );
+      const penaltyCollected = repaymentRows.reduce(
+        (sum, entry) => sum + toNumber(entry.status === 'success' ? entry.penaltyPaid : 0),
+        0
+      );
+      const expectedAmount = scheduleRows.reduce(
+        (sum, row) => sum + toNumber(row.status === 'foreclosed' ? 0 : row.emiAmount),
+        0
+      );
+      const missedRows = scheduleRows.filter((row) => ['missed', 'overdue'].includes(row.status));
+
+      result.expectedAmount += expectedAmount;
+      result.collectedAmount += collectedAmount;
+      result.penaltyCollected += penaltyCollected;
+      result.dueEmiCount += scheduleRows.length;
+      result.paidEmiCount += scheduleRows.filter((row) => row.status === 'paid').length;
+      result.missedEmiCount += missedRows.length;
+      result.delinquentAmount += missedRows.reduce(
+        (sum, row) => sum + toNumber(row.emiAmount) + toNumber(row.penaltyAmount),
+        0
+      );
+
+      if (scheduleRows.length || repaymentRows.length) {
+        result.loanSummaries.push({
+          loanId: loan.loanId,
+          customerName: loan.customer?.name || 'Customer',
+          customerId: loan.customer?.customerId || '',
+          expectedAmount,
+          collectedAmount,
+          dueEmiCount: scheduleRows.length,
+          missedEmiCount: missedRows.length,
+        });
+      }
+
+      return result;
+    },
+    {
+      periodStart,
+      periodEnd,
+      expectedAmount: 0,
+      collectedAmount: 0,
+      penaltyCollected: 0,
+      dueEmiCount: 0,
+      paidEmiCount: 0,
+      missedEmiCount: 0,
+      delinquentAmount: 0,
+      loanSummaries: [],
+    }
+  );
+
+  summary.collectionRate =
+    summary.expectedAmount > 0
+      ? Math.round((summary.collectedAmount / summary.expectedAmount) * 100)
+      : 100;
+  summary.dueProcessingResults = dueProcessingResults;
+
+  await writeSystemLog({
+    action: 'loan.monthly_repayment_processing',
+    message: `Monthly loan repayment processing completed for ${formatDate(periodStart)} to ${formatDate(addDays(periodEnd, -1))}. Collection rate: ${summary.collectionRate}%.`,
+    actorName: 'System',
+    entityType: 'Loan',
+    entityId: `${periodStart.toISOString().slice(0, 7)}`,
+    severity: summary.missedEmiCount > 0 ? 'warning' : 'success',
+    metadata: {
+      periodStart,
+      periodEnd,
+      expectedAmount: summary.expectedAmount,
+      collectedAmount: summary.collectedAmount,
+      penaltyCollected: summary.penaltyCollected,
+      dueEmiCount: summary.dueEmiCount,
+      paidEmiCount: summary.paidEmiCount,
+      missedEmiCount: summary.missedEmiCount,
+      delinquentAmount: summary.delinquentAmount,
+      collectionRate: summary.collectionRate,
+      processedDueEmis: dueProcessingResults.length,
+      loanSummaries: summary.loanSummaries.slice(0, 25),
+    },
+  });
+
+  return summary;
+};
+
 const processDueEmis = async (req, res) => {
   const results = await runDueEmiProcessing();
 
   res.json({
     message: `Processed ${results.length} due EMI item(s).`,
     results,
+  });
+};
+
+const processMonthlyRepayments = async (req, res) => {
+  const summary = await runMonthlyRepaymentProcessing();
+
+  res.json({
+    message: `Monthly repayment processing completed with ${summary.collectionRate}% collection rate.`,
+    summary,
   });
 };
 
@@ -1337,7 +2540,7 @@ const forecloseLoan = async (req, res) => {
 
     res.json({
       message: 'Loan foreclosed successfully.',
-      loan: serializeLoan(responseLoan),
+      loan: await serializeLoanWithActiveLoanCount(responseLoan),
       transaction,
       quote,
     });
@@ -1480,7 +2683,7 @@ const makePartPayment = async (req, res) => {
 
     res.json({
       message: 'Part-payment posted successfully. Future schedule has been recalculated.',
-      loan: serializeLoan(responseLoan),
+      loan: await serializeLoanWithActiveLoanCount(responseLoan),
       transaction,
     });
   } catch (error) {
@@ -1492,6 +2695,8 @@ const makePartPayment = async (req, res) => {
 };
 
 module.exports = {
+  acceptLoanAgreement,
+  acceptSanctionLetter,
   createLoan,
   disburseLoan,
   forecloseLoan,
@@ -1499,7 +2704,9 @@ module.exports = {
   makePartPayment,
   payLoanEmi,
   processDueEmis,
+  processMonthlyRepayments,
   runDueEmiProcessing,
+  runMonthlyRepaymentProcessing,
   reviewLoanDocument,
   reviewLoan,
 };

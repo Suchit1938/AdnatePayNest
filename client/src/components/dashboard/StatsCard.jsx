@@ -13,13 +13,19 @@ const StatsCard = ({
   iconTone = "bg-blue-50 text-blue-600",
   badge,
   footer,
+  onClick,
 }) => {
   const isRich = Icon || badge || footer;
 
   if (!isRich) {
     return (
-      <div className="group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6">
-        <div className="absolute inset-x-0 top-0 h-1 bg-bank-accent" />
+      <div
+        onClick={onClick}
+        className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6 ${
+          onClick ? "cursor-pointer hover:border-bank-accent/40 active:scale-[0.99]" : ""
+        }`}
+      >
+        <div className={`absolute inset-x-0 top-0 h-1 ${accent}`} />
 
         <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
           {title}
@@ -33,7 +39,12 @@ const StatsCard = ({
   const FooterIcon = footer?.icon;
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6">
+    <div
+      onClick={onClick}
+      className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6 ${
+        onClick ? "cursor-pointer hover:border-bank-accent/40 active:scale-[0.99]" : ""
+      }`}
+    >
       <div className={`absolute inset-x-0 top-0 h-1 ${accent}`} />
 
       <div className="flex items-center gap-3 sm:gap-4">
@@ -45,7 +56,7 @@ const StatsCard = ({
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
             {title}
           </p>
-          <p className="mt-1 break-words text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{value}</p>
+          <p className="mt-1 break-words text-xl font-bold tracking-tight text-slate-950 sm:text-2xl">{value}</p>
         </div>
       </div>
 

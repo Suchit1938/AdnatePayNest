@@ -52,6 +52,7 @@ const navItemsByRole = {
     { label: "Manager Overview", path: "/manager", icon: LayoutDashboard },
     { label: "Pending Reviews", path: "/manager/approvals", icon: ListChecks },
     { label: "Loan Reviews", path: "/manager/loans", icon: BadgeIndianRupee },
+    { label: "Loan Portfolio", path: "/manager/loan-portfolio", icon: FileBarChart },
     { label: "Decision History", path: "/manager/approval-history", icon: ClipboardCheck },
     { label: "OD Monitoring", path: "/manager/overdraft", icon: CircleDollarSign },
     { label: "Tier Policies", path: "/manager/policies", icon: BadgeIndianRupee },

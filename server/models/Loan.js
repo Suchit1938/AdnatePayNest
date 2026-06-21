@@ -158,6 +158,115 @@ const loanDocumentSchema = new mongoose.Schema(
   }
 );
 
+const sanctionLetterSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['pending', 'generated', 'sent', 'accepted'],
+      default: 'pending',
+    },
+    fileName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    fileUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    filePath: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    generatedAt: Date,
+    sentAt: Date,
+    acceptedAt: Date,
+    acceptedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    emailStatus: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+  },
+  { _id: false }
+);
+
+const loanAgreementSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['pending', 'generated', 'sent', 'accepted'],
+      default: 'pending',
+    },
+    fileName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    fileUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    filePath: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    generatedAt: Date,
+    sentAt: Date,
+    acceptedAt: Date,
+    acceptedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    emailStatus: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+  },
+  { _id: false }
+);
+
+const repaymentScheduleDocumentSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['pending', 'generated', 'sent'],
+      default: 'pending',
+    },
+    fileName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    fileUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    filePath: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    generatedAt: Date,
+    sentAt: Date,
+    emailStatus: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+  },
+  { _id: false }
+);
+
 const loanSchema = new mongoose.Schema(
   {
     loanId: {
@@ -318,6 +427,18 @@ const loanSchema = new mongoose.Schema(
     reviewedAt: Date,
     disbursedAt: Date,
     closedAt: Date,
+    sanctionLetter: {
+      type: sanctionLetterSchema,
+      default: () => ({ status: 'pending' }),
+    },
+    loanAgreement: {
+      type: loanAgreementSchema,
+      default: () => ({ status: 'pending' }),
+    },
+    repaymentScheduleDocument: {
+      type: repaymentScheduleDocumentSchema,
+      default: () => ({ status: 'pending' }),
+    },
     amortizationSchedule: {
       type: [amortizationRowSchema],
       default: [],

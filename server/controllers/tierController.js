@@ -43,12 +43,12 @@ const numberFields = new Set([
 const formatTierValue = (field, value) => {
   if (field === 'accountTypeOdRules') {
     return (Array.isArray(value) ? value : [])
-      .map((rule) => `${rule.accountType}: OD INR ${Number(rule.odLimit || 0).toLocaleString('en-IN')}, minimum opening INR ${Number(rule.minOpeningBalance || 0).toLocaleString('en-IN')}, ${Number(rule.monthlyOdUses || DEFAULT_MONTHLY_OD_USES)} monthly uses`)
+      .map((rule) => `${rule.accountType}: OD ₹ ${Number(rule.odLimit || 0).toLocaleString('en-IN')}, minimum opening ₹ ${Number(rule.minOpeningBalance || 0).toLocaleString('en-IN')}, ${Number(rule.monthlyOdUses || DEFAULT_MONTHLY_OD_USES)} monthly uses`)
       .join(', ') || 'not set';
   }
 
   if (moneyFields.has(field)) {
-    return `INR ${Number(value || 0).toLocaleString('en-IN')}`;
+    return `₹ ${Number(value || 0).toLocaleString('en-IN')}`;
   }
 
   return String(value || '').trim() || 'not set';
@@ -168,7 +168,7 @@ const escapeHtml = (value) =>
     .replace(/'/g, '&#039;');
 
 const formatMoney = (value) =>
-  `INR ${Number(value || 0).toLocaleString('en-IN')}`;
+  `₹ ${Number(value || 0).toLocaleString('en-IN')}`;
 
 const buildAccountTypeOdRuleCards = (tier) =>
   getAccountTypeOdRules(tier)

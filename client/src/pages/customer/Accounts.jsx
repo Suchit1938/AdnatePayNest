@@ -9,11 +9,11 @@ import {
 } from "lucide-react";
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
-import ChartTooltip from "../../components/ui/ChartTooltip";
 import EmptyState from "../../components/ui/EmptyState";
 import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
+import { RechartsHorizontalBar } from "../../components/ui/RechartsReports";
 import SectionCard from "../../components/ui/SectionCard";
 import TablePagination from "../../components/ui/TablePagination";
 import usePaginatedRows from "../../components/ui/usePaginatedRows";
@@ -243,30 +243,29 @@ const Accounts = () => {
                   {account?.odBlocked ? "OD blocked" : accountOdUsed > 0 ? "OD active" : "OD available"}
                 </span>
               </div>
-              <div className="group relative mt-4 rounded-full outline-none" tabIndex={0}>
-              <div className="h-2 overflow-hidden rounded-full bg-white">
-                <div
-                  className={`h-full rounded-full ${
-                    accountOdPercent >= 90
-                      ? "bg-red-500"
-                      : accountOdPercent >= 70
-                        ? "bg-amber-500"
-                        : "bg-blue-500"
-                  }`}
-                  style={{
-                    width:
-                      accountOdPercent > 0
-                        ? `${Math.max(4, Math.min(100, accountOdPercent))}%`
-                        : "0%",
-                  }}
+              <div className="mt-4">
+                <RechartsHorizontalBar
+                  rows={[
+                    {
+                      label: "OD Used",
+                      value: accountOdUsed,
+                      color:
+                        accountOdPercent >= 90
+                          ? "#ef4444"
+                          : accountOdPercent >= 70
+                            ? "#f59e0b"
+                            : "#2563eb",
+                    },
+                    {
+                      label: "Available",
+                      value: Math.max(0, accountOdLimit - accountOdUsed),
+                      color: "#10b981",
+                    },
+                  ]}
+                  valueFormatter={formatCurrency}
+                  emptyMessage="No overdraft limit is available for this account."
+                  height={120}
                 />
-              </div>
-              <ChartTooltip
-                label="Account OD Usage"
-                value={`${accountOdPercent}% used`}
-                detail={`${formatCurrency(accountOdUsed)} used of ${formatCurrency(accountOdLimit)} limit`}
-                className="bottom-full right-0 mb-2 hidden group-hover:block group-focus:block"
-              />
               </div>
             </div>
           </SectionCard>

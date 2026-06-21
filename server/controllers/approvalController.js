@@ -11,7 +11,7 @@ const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
-const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
+const formatMoney = (value) => `₹ ${toWholeRupees(value).toLocaleString('en-IN')}`;
 const maskAccount = (value) => {
   const account = String(value || '');
   if (account.length <= 4) return account;
@@ -553,7 +553,7 @@ const updateApproval = async (req, res) => {
       await writeSystemLog(
         {
           action: 'approval.rejected.customer',
-          message: `Your transfer of INR ${toWholeRupees(transaction.amount).toLocaleString('en-IN')} was rejected. Reason: ${rejectionReason}`,
+          message: `Your transfer of ₹ ${toWholeRupees(transaction.amount).toLocaleString('en-IN')} was rejected. Reason: ${rejectionReason}`,
           actor: customer._id,
           actorName: customer.name,
           entityType: 'Approval',

@@ -47,7 +47,7 @@ const detailLabel = (value) =>
 
 const customerFactorLabels = {
   incomeStrength: "Income",
-  liabilities: "Existing Liabilities",
+  liabilities: "Active Loans",
   classification: "Customer Profile",
   employmentStability: "Employment Stability",
   accountHistory: "Account History",
@@ -205,6 +205,8 @@ const documentOptionsByLoanType = {
 const admissionStatusOptions = ["Confirmed", "Provisional", "Awaiting Result"];
 const allowedDocumentExtensions = [".pdf", ".png", ".jpg", ".jpeg"];
 const allowedDocumentMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
+const getUploadUrl = (fileUrl = "") =>
+  fileUrl ? `${api.defaults.baseURL.replace(/\/api$/, "")}${fileUrl}` : "";
 
 const supportingDetailFieldsByLoanType = {
   personal: [
@@ -246,6 +248,8 @@ const Loans = () => {
   const [partPaymentAmount, setPartPaymentAmount] = useState("");
   const [isPostingPartPayment, setIsPostingPartPayment] = useState(false);
   const [isForeclosing, setIsForeclosing] = useState(false);
+  const [acceptingSanctionId, setAcceptingSanctionId] = useState("");
+  const [acceptingAgreementId, setAcceptingAgreementId] = useState("");
 
   const customerAccounts = useMemo(
     () => (user?.accounts?.length ? user.accounts : [user?.account].filter(Boolean)),
@@ -685,6 +689,46 @@ const Loans = () => {
       toast.error(error.response?.data?.message || "Unable to foreclose loan.");
     } finally {
       setIsForeclosing(false);
+    }
+  };
+
+  const acceptSanctionLetter = async () => {
+    if (!selectedLoan) return;
+
+    setAcceptingSanctionId(selectedLoan.id);
+
+    try {
+      const { data } = await api.patch(`/loans/${selectedLoan.id}/sanction/accept`);
+
+      setLoans((current) =>
+        current.map((loan) => (loan.id === data.loan.id ? data.loan : loan))
+      );
+      setSelectedLoanId(data.loan.id);
+      toast.success(data.message || "Sanction letter accepted.");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to accept sanction letter.");
+    } finally {
+      setAcceptingSanctionId("");
+    }
+  };
+
+  const acceptLoanAgreement = async () => {
+    if (!selectedLoan) return;
+
+    setAcceptingAgreementId(selectedLoan.id);
+
+    try {
+      const { data } = await api.patch(`/loans/${selectedLoan.id}/agreement/accept`);
+
+      setLoans((current) =>
+        current.map((loan) => (loan.id === data.loan.id ? data.loan : loan))
+      );
+      setSelectedLoanId(data.loan.id);
+      toast.success(data.message || "Loan agreement accepted.");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to accept loan agreement.");
+    } finally {
+      setAcceptingAgreementId("");
     }
   };
 
@@ -1351,6 +1395,156 @@ const Loans = () => {
                 })}
               </div>
             </SectionCard>
+
+            {selectedLoan.sanctionLetter?.fileUrl && (
+              <SectionCard
+                title="Sanction Letter"
+                subtitle="Review and accept the sanctioned terms before disbursal."
+                icon={FileText}
+              >
+                <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                        {statusLabel(selectedLoan.sanctionLetter.status || "generated")}
+                      </p>
+                      <p className="mt-1 text-lg font-black text-slate-950">
+                        {selectedLoan.sanctionLetter.fileName || "Loan sanction letter"}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                        Generated on{" "}
+                        {selectedLoan.sanctionLetter.generatedAt
+                          ? new Date(selectedLoan.sanctionLetter.generatedAt).toLocaleDateString()
+                          : "approval"}.
+                        {selectedLoan.sanctionLetter.acceptedAt
+                          ? ` Accepted on ${new Date(selectedLoan.sanctionLetter.acceptedAt).toLocaleDateString()}.`
+                          : " Acceptance is required before the manager can disburse the loan."}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <a
+                        href={getUploadUrl(selectedLoan.sanctionLetter.fileUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-secondary justify-center px-4 py-2 text-sm"
+                      >
+                        <FileText size={16} />
+                        View PDF
+                      </a>
+                      <button
+                        type="button"
+                        onClick={acceptSanctionLetter}
+                        disabled={
+                          selectedLoan.sanctionLetter.status === "accepted" ||
+                          acceptingSanctionId === selectedLoan.id
+                        }
+                        className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        <CheckCircle2 size={16} />
+                        {selectedLoan.sanctionLetter.status === "accepted"
+                          ? "Accepted"
+                          : acceptingSanctionId === selectedLoan.id
+                            ? "Accepting..."
+                            : "Accept Terms"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </SectionCard>
+            )}
+
+            {selectedLoan.loanAgreement?.fileUrl && (
+              <SectionCard
+                title="Loan Agreement"
+                subtitle="Review and accept the legal repayment contract before disbursal."
+                icon={FileText}
+              >
+                <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                        {statusLabel(selectedLoan.loanAgreement.status || "generated")}
+                      </p>
+                      <p className="mt-1 text-lg font-black text-slate-950">
+                        {selectedLoan.loanAgreement.fileName || "Loan agreement"}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                        Generated on{" "}
+                        {selectedLoan.loanAgreement.generatedAt
+                          ? new Date(selectedLoan.loanAgreement.generatedAt).toLocaleDateString()
+                          : "sanction acceptance"}.
+                        {selectedLoan.loanAgreement.acceptedAt
+                          ? ` Accepted on ${new Date(selectedLoan.loanAgreement.acceptedAt).toLocaleDateString()}.`
+                          : " Manager disbursal is enabled only after agreement acceptance."}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <a
+                        href={getUploadUrl(selectedLoan.loanAgreement.fileUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-secondary justify-center px-4 py-2 text-sm"
+                      >
+                        <FileText size={16} />
+                        View PDF
+                      </a>
+                      <button
+                        type="button"
+                        onClick={acceptLoanAgreement}
+                        disabled={
+                          selectedLoan.loanAgreement.status === "accepted" ||
+                          acceptingAgreementId === selectedLoan.id
+                        }
+                        className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        <CheckCircle2 size={16} />
+                        {selectedLoan.loanAgreement.status === "accepted"
+                          ? "Accepted"
+                          : acceptingAgreementId === selectedLoan.id
+                            ? "Accepting..."
+                            : "Accept Agreement"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </SectionCard>
+            )}
+
+            {selectedLoan.repaymentScheduleDocument?.fileUrl && (
+              <SectionCard
+                title="Repayment Schedule PDF"
+                subtitle="Download the final EMI schedule generated at disbursal."
+                icon={CalendarClock}
+              >
+                <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                        {statusLabel(selectedLoan.repaymentScheduleDocument.status || "generated")}
+                      </p>
+                      <p className="mt-1 text-lg font-black text-slate-950">
+                        {selectedLoan.repaymentScheduleDocument.fileName || "Repayment schedule"}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                        Generated on{" "}
+                        {selectedLoan.repaymentScheduleDocument.generatedAt
+                          ? new Date(selectedLoan.repaymentScheduleDocument.generatedAt).toLocaleDateString()
+                          : "disbursal"}.
+                      </p>
+                    </div>
+                    <a
+                      href={getUploadUrl(selectedLoan.repaymentScheduleDocument.fileUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary justify-center px-4 py-2 text-sm"
+                    >
+                      <FileText size={16} />
+                      View PDF
+                    </a>
+                  </div>
+                </div>
+              </SectionCard>
+            )}
 
             <SectionCard
               title="Repayment Management"

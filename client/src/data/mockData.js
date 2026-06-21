@@ -362,7 +362,7 @@ export const statementEntries = transactions.map((transaction) => ({
 }));
 
 export const formatCurrency = (amount) =>
-  `INR ${Number(amount).toLocaleString("en-IN")}`;
+  `₹ ${Number(amount).toLocaleString("en-IN")}`;
 
 export const maskAccountNumber = (accountNumber) => {
   const value = String(accountNumber || "").trim();

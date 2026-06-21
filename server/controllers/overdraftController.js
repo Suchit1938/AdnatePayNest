@@ -13,7 +13,7 @@ const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
-const formatMoney = (value) => `INR ${toWholeRupees(value).toLocaleString('en-IN')}`;
+const formatMoney = (value) => `₹ ${toWholeRupees(value).toLocaleString('en-IN')}`;
 
 const payOffOverdraft = async (req, res) => {
   const { accountNumber, odAccountNumber, paymentAccountNumber, amount } = req.body || {};
