@@ -21,7 +21,48 @@ import { useAuth } from "../../context/useAuth";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { getCustomerAccounts } from "../../utils/overdraft";
-import { getTransactionStatusLabel } from "../../utils/ui";
+import { getCustomerTransactionTitle, getTransactionStatusLabel, isLoanTransaction } from "../../utils/ui";
+
+const getActivityDetail = (transaction) => {
+  if (transaction.type === "loan-disbursement") {
+    return [
+      `From ${transaction.sender || "Adnate Bank Settlement Account"}`,
+      transaction.toAccountNumber && `To ${maskAccountNumber(transaction.toAccountNumber)}`,
+    ]
+      .filter(Boolean)
+      .join(" - ");
+  }
+
+  if (isLoanTransaction(transaction)) {
+    return [
+      transaction.fromAccountNumber && `From ${maskAccountNumber(transaction.fromAccountNumber)}`,
+      `Loan ${transaction.businessRefId || transaction.toAccountNumber || "reference"}`,
+    ]
+      .filter(Boolean)
+      .join(" - ");
+  }
+
+  if (transaction.type === "overdraft-payoff") {
+    return [
+      transaction.fromAccountNumber && `From ${maskAccountNumber(transaction.fromAccountNumber)}`,
+      `To ${transaction.receiver || "Adnate Bank Settlement Account"}`,
+    ]
+      .filter(Boolean)
+      .join(" - ");
+  }
+
+  return (
+    transaction.remarks ||
+    [
+      transaction.fromAccountNumber &&
+        `From ${maskAccountNumber(transaction.fromAccountNumber)}`,
+      transaction.toAccountNumber &&
+        `To ${maskAccountNumber(transaction.toAccountNumber)}`,
+    ]
+      .filter(Boolean)
+      .join(" - ")
+  );
+};
 
 const Accounts = () => {
   const { user } = useAuth();
@@ -86,31 +127,14 @@ const Accounts = () => {
       const isDebit =
         transaction.sender === activeUser?.name ||
         accountNumbers.includes(transaction.fromAccountNumber);
-      const isSelfTransaction = transaction.sender === transaction.receiver;
-      const label = transaction.type === "overdraft-payoff" ? "Overdraft payoff" : "Transfer";
-      const counterparty = isSelfTransaction
-        ? maskAccountNumber(transaction.fromAccountNumber || account?.number)
-        : isDebit
-          ? transaction.receiver
-          : transaction.sender;
+      const isSelfTransaction =
+        transaction.sender === transaction.receiver && transaction.type !== "loan-emi-payment";
+      const isOwnTransfer = transaction.type === "own-account" || isSelfTransaction;
 
       return {
         id: transaction.id,
-        title: isSelfTransaction
-          ? label
-          : isDebit
-            ? `${label} to ${counterparty}`
-            : `${label} from ${counterparty}`,
-        detail:
-          transaction.remarks ||
-          [
-            transaction.fromAccountNumber &&
-              `From ${maskAccountNumber(transaction.fromAccountNumber)}`,
-            transaction.toAccountNumber &&
-              `To ${maskAccountNumber(transaction.toAccountNumber)}`,
-          ]
-            .filter(Boolean)
-            .join(" - "),
+        title: getCustomerTransactionTitle(transaction, { isDebit, isOwnTransfer }),
+        detail: getActivityDetail(transaction),
         amount: transaction.amount,
         date: transaction.date,
         type: isDebit ? "debit" : "credit",

@@ -21,7 +21,7 @@ const StatsCard = ({
     return (
       <div
         onClick={onClick}
-        className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6 ${
+        className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:scale-105 sm:p-6 ${
           onClick ? "cursor-pointer hover:border-bank-accent/40 active:scale-[0.99]" : ""
         }`}
       >

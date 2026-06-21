@@ -17,7 +17,11 @@ import DashboardLayout from "../../layouts/DashboardLayout";
 import { BANK_NAME, formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { useAuth } from "../../context/useAuth";
 import { getCustomerAccounts } from "../../utils/overdraft";
-import { getTransactionStatusLabel } from "../../utils/ui";
+import {
+  getCustomerTransactionTitle,
+  getTransactionStatusLabel,
+  isLoanTransaction,
+} from "../../utils/ui";
 
 const toDateInputValue = (date) => date.toISOString().slice(0, 10);
 
@@ -63,6 +67,33 @@ const buildStatementFilename = (statementReference, extension) =>
   `${statementReference}_${formatTimestamp(new Date())}.${extension}`;
 
 const getAccountTrail = (transaction, accountNumber) => {
+  if (transaction.type === "loan-disbursement") {
+    return [
+      `From ${transaction.sender || "Adnate Bank Settlement Account"}`,
+      transaction.toAccountNumber && `To ${maskAccountNumber(transaction.toAccountNumber)}`,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+  }
+
+  if (isLoanTransaction(transaction)) {
+    return [
+      transaction.fromAccountNumber && `From ${maskAccountNumber(transaction.fromAccountNumber)}`,
+      `Loan ${transaction.businessRefId || transaction.toAccountNumber || "reference"}`,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+  }
+
+  if (transaction.type === "overdraft-payoff") {
+    return [
+      transaction.fromAccountNumber && `From ${maskAccountNumber(transaction.fromAccountNumber)}`,
+      `To ${transaction.receiver || "Adnate Bank Settlement Account"}`,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+  }
+
   const parts = [];
 
   if (transaction.fromAccountNumber) {
@@ -114,8 +145,6 @@ const statusBadgeClass = (status) => {
 const formatTransactionType = (type) =>
   String(type || "bank-transfer").replaceAll("-", " ").toUpperCase();
 
-const isOverdraftPayoff = (transaction) => transaction.type === "overdraft-payoff";
-
 const getApprovalBadge = (transaction) => {
   if (transaction.approvalStatus === "approved") return "Manager Approved";
   if (transaction.approvalStatus === "rejected") return "Manager Rejected";
@@ -160,10 +189,11 @@ const Statement = () => {
       .then(({ data }) => {
         setStatementEntries(
           (data.transactions || []).map((transaction) => {
-            const payoff = isOverdraftPayoff(transaction);
+            const payoff = transaction.type === "overdraft-payoff";
+            const loanPayment = isLoanTransaction(transaction);
             const fromLinkedAccount = accountNumbers.has(transaction.fromAccountNumber);
             const toLinkedAccount = accountNumbers.has(transaction.toAccountNumber);
-            const isOwnLinkedTransfer = fromLinkedAccount && toLinkedAccount;
+            const isOwnLinkedTransfer = fromLinkedAccount && toLinkedAccount && !loanPayment;
             const entryType = isOwnLinkedTransfer
               ? "Transfer"
               : payoff || fromLinkedAccount || transaction.sender === userName
@@ -173,13 +203,12 @@ const Statement = () => {
             return {
               id: transaction.id,
               date: transaction.date,
-              detail: payoff
-                ? "Overdraft payoff"
-                : isOwnLinkedTransfer
-                  ? `Own account transfer to ${maskAccountNumber(transaction.toAccountNumber)}`
-                : transaction.sender === userName
-                  ? `Transfer to ${transaction.receiver}`
-                  : `Transfer from ${transaction.sender}`,
+              detail: isOwnLinkedTransfer
+                ? `Own account transfer to ${maskAccountNumber(transaction.toAccountNumber)}`
+                : getCustomerTransactionTitle(transaction, {
+                    isDebit: fromLinkedAccount || transaction.sender === userName,
+                    isOwnTransfer: isOwnLinkedTransfer,
+                  }),
               accountDetail: getAccountTrail(transaction, userAccountNumber),
               accountType: transaction.accountType || userAccountType || "Savings",
               type: entryType,

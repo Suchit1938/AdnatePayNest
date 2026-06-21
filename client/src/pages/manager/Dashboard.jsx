@@ -29,6 +29,8 @@ import {
   UserCircle,
   Users,
   X,
+  ChevronRight,
+  Copy,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -342,6 +344,20 @@ function ManagerDashboard() {
     transactions: [],
     notifications: [],
     tierDecisionHistory: [],
+    settlement: {
+      account: {
+        accountName: "Adnate Bank Settlement Account",
+        accountNumber: "BANK-SETTLEMENT-0001",
+        balance: 0,
+        minimumReserve: 0,
+        availableForDisbursement: 0,
+      },
+      totals: {
+        totalLoanDisbursed: 0,
+        totalLoanCollected: 0,
+        totalOdRecovered: 0,
+      },
+    },
   });
 
   const loadDashboard = useCallback(() => {
@@ -398,6 +414,8 @@ function ManagerDashboard() {
   );
   const approvedLoans = loans.filter((loan) => loan.status === "approved");
   const disbursedLoans = loans.filter((loan) => loan.status === "disbursed");
+  const settlementAccount = dashboardData.settlement?.account || {};
+  const settlementTotals = dashboardData.settlement?.totals || {};
   const loanPortfolioLoans = loans.filter((loan) =>
     ["approved", "disbursed", "closed", "rejected"].includes(loan.status)
   );
@@ -1154,6 +1172,11 @@ function ManagerDashboard() {
   const handleLogout = () => {
     logout();
     navigate("/login", { replace: true });
+  };
+
+  const handleCopyAccount = (number) => {
+    navigator.clipboard.writeText(number);
+    toast.success("Account number copied to clipboard!");
   };
 
   const approvalTable = (
@@ -2625,6 +2648,14 @@ function ManagerDashboard() {
           iconTone="bg-violet-50 text-violet-600"
           footer={{ text: `${disbursedLoans.length} active loan(s)` }}
         />
+        <StatsCard
+          title="Available Lending Funds"
+          value={formatCurrency(settlementAccount.availableForDisbursement || 0)}
+          icon={ShieldCheck}
+          accent="bg-blue-500"
+          iconTone="bg-blue-50 text-blue-600"
+          footer={{ text: `${formatCurrency(settlementAccount.balance || 0)} settlement balance` }}
+        />
       </div>
 
       <SectionCard
@@ -3008,11 +3039,43 @@ function ManagerDashboard() {
         subtitle="Disbursal credits the customer's primary account and starts the EMI schedule."
         icon={CircleDollarSign}
       >
+        <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-blue-700">Settlement Account</p>
+              <p className="mt-1 text-sm font-bold text-slate-950">
+                {settlementAccount.accountNumber || "BANK-SETTLEMENT-0001"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-blue-700">Available To Disburse</p>
+              <p className="mt-1 text-sm font-bold text-slate-950">
+                {formatCurrency(settlementAccount.availableForDisbursement || 0)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-blue-700">Recovered</p>
+              <p className="mt-1 text-sm font-bold text-slate-950">
+                {formatCurrency(
+                  Number(settlementTotals.totalLoanCollected || 0) +
+                    Number(settlementTotals.totalOdRecovered || 0)
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
         {approvedLoans.length === 0 ? (
           <EmptyState message="No approved loans are waiting for disbursal." />
         ) : (
           <div className="space-y-3">
-            {approvedLoanPagination.pageRows.map((loan) => (
+            {approvedLoanPagination.pageRows.map((loan) => {
+              const hasAcceptedDocuments =
+                loan.sanctionLetter?.status === "accepted" &&
+                loan.loanAgreement?.status === "accepted";
+              const hasSettlementFunds =
+                Number(settlementAccount.availableForDisbursement || 0) >= Number(loan.amount || 0);
+
+              return (
               <div key={loan.id} className="flex flex-col gap-3 rounded-xl border border-bank-card-border bg-white p-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
                   <p className="font-bold text-slate-950">{loan.customerName} / {loan.loanTypeLabel}</p>
@@ -3029,6 +3092,11 @@ function ManagerDashboard() {
                     loan.loanAgreement?.status !== "accepted") && (
                     <p className="mt-1 text-xs font-semibold text-amber-700">
                       Waiting for customer sanction and agreement acceptance before disbursal.
+                    </p>
+                  )}
+                  {hasAcceptedDocuments && !hasSettlementFunds && (
+                    <p className="mt-1 text-xs font-semibold text-red-700">
+                      Insufficient bank settlement funds for this disbursal.
                     </p>
                   )}
                 </div>
@@ -3058,17 +3126,15 @@ function ManagerDashboard() {
                   <button
                     type="button"
                     onClick={() => disburseLoan(loan.id)}
-                    disabled={
-                      loan.sanctionLetter?.status !== "accepted" ||
-                      loan.loanAgreement?.status !== "accepted"
-                    }
+                    disabled={!hasAcceptedDocuments || !hasSettlementFunds}
                     className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     Disburse
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
             <TablePagination {...approvedLoanPagination} />
           </div>
         )}
@@ -3531,44 +3597,119 @@ function ManagerDashboard() {
 
   const dashboardWorkbench = (
     <div className="space-y-6">
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatsCard
-          title="Pending Decisions"
-          value={pendingApprovals.length}
-          icon={ListChecks}
-          accent="bg-violet-500"
-          iconTone="bg-violet-50 text-violet-600"
-          badge={{
-            text: pendingApprovals.length > 0 ? "Needs review" : "Queue clear",
-            tone: pendingApprovals.length > 0 ? "warning" : "success",
-          }}
-          footer={{ text: `${formatCurrency(pendingApprovalValue)} total waiting` }}
-        />
-        <StatsCard
-          title="Transactions Today"
-          value={dashboardData.stats.transactionsToday || 0}
-          icon={ReceiptText}
-          accent="bg-blue-500"
-          iconTone="bg-blue-50 text-blue-600"
-          badge={{ text: "Live activity", tone: "neutral" }}
-        />
-        <StatsCard
-          title="OD Attention"
-          value={odCustomerSummary.attentionCount}
-          icon={CircleDollarSign}
-          accent="bg-amber-500"
-          iconTone="bg-amber-50 text-amber-600"
-          footer={{ text: `${formatCurrency(utilizedOd)} utilized OD` }}
-        />
-        <StatsCard
-          title="Decisions Today"
-          value={decisionsToday}
-          icon={CalendarClock}
-          accent="bg-emerald-500"
-          iconTone="bg-emerald-50 text-emerald-600"
-          badge={{ text: "Recorded actions", tone: "success" }}
-        />
-      </section>
+      {/* Top Split Hero & Stats Grid */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* Lending Pool Card (Left) */}
+        <div className="lg:col-span-1">
+          <div
+            className="relative flex h-60 w-full flex-col justify-between overflow-hidden rounded-2xl border border-white/10 p-6 text-white shadow-xl shadow-slate-950/25"
+            style={{
+              background: "linear-gradient(135deg, #0b192c 0%, #1e3e62 48%, #002244 100%)",
+            }}
+          >
+            {/* Card Decorative background overlay */}
+            <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-white/5 blur-3xl -mr-16 -mt-16 pointer-events-none" />
+            <div className="absolute left-0 bottom-0 h-32 w-32 rounded-full bg-white/5 blur-2xl -ml-16 -mb-16 pointer-events-none" />
+            
+            {/* Header */}
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-[10px] font-extrabold tracking-widest text-white/60">ADNATE BANK</p>
+                <p className="text-[9px] font-bold text-white/40 italic">Lending & Liquidity</p>
+              </div>
+              <span className="text-[10px] font-extrabold tracking-wider bg-white/10 px-2 py-0.5 rounded backdrop-blur">
+                Manager View
+              </span>
+            </div>
+
+            {/* Balance */}
+            <div>
+              <p className="text-[11px] font-bold text-white/50 uppercase tracking-wider">Available lending funds</p>
+              <p className="text-3xl font-black text-white mt-1 select-all">
+                {formatCurrency(settlementAccount.availableForDisbursement || 0)}
+              </p>
+            </div>
+
+            {/* Footer details */}
+            <div className="flex justify-between items-end">
+              <div>
+                <p className="text-[9px] font-semibold text-white/40 uppercase">Total Pool Balance</p>
+                <p className="text-sm font-bold text-white tracking-wide truncate max-w-[150px]">
+                  {formatCurrency(settlementAccount.balance || 0)}
+                </p>
+              </div>
+              {settlementAccount.accountNumber && (
+                <div className="text-right">
+                  <p className="text-[9px] font-semibold text-white/40 uppercase">Account Number</p>
+                  <div className="flex items-center gap-1.5 justify-end">
+                    <p className="text-xs font-bold text-white tracking-wider">
+                      {maskAccountNumber(settlementAccount.accountNumber)}
+                    </p>
+                    <button
+                      onClick={() => handleCopyAccount(settlementAccount.accountNumber)}
+                      className="rounded p-1 hover:bg-white/15 active:scale-95 text-white/65 hover:text-white transition cursor-pointer"
+                      title="Copy Account Number"
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 2x2 Stats Cards (Right) */}
+        <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <StatsCard
+            title="Pending Decisions"
+            value={pendingApprovals.length}
+            icon={ListChecks}
+            accent="bg-amber-500"
+            iconTone="bg-amber-50 text-amber-600"
+            onClick={() => navigate("/manager/approvals")}
+            badge={{
+              text: pendingApprovals.length > 0 ? "Needs review" : "Queue clear",
+              tone: pendingApprovals.length > 0 ? "warning" : "success",
+            }}
+            footer={{ text: `${formatCurrency(pendingApprovalValue)} total waiting` }}
+          />
+
+          <StatsCard
+            title="Transactions Today"
+            value={dashboardData.stats.transactionsToday || 0}
+            icon={ReceiptText}
+            accent="bg-blue-500"
+            iconTone="bg-blue-50 text-blue-600"
+            onClick={() => navigate("/manager/transactions")}
+            badge={{ text: "Live activity", tone: "neutral" }}
+          />
+
+          <StatsCard
+            title="OD Attention"
+            value={odCustomerSummary.attentionCount}
+            icon={CircleDollarSign}
+            accent="bg-violet-500"
+            iconTone="bg-violet-50 text-violet-600"
+            onClick={() => navigate("/manager/overdraft")}
+            badge={{
+              text: odCustomerSummary.attentionCount > 0 ? "Needs action" : "All clean",
+              tone: odCustomerSummary.attentionCount > 0 ? "warning" : "success",
+            }}
+            footer={{ text: `${formatCurrency(utilizedOd)} utilized OD` }}
+          />
+
+          <StatsCard
+            title="Decisions Today"
+            value={decisionsToday}
+            icon={CalendarClock}
+            accent="bg-emerald-500"
+            iconTone="bg-emerald-50 text-emerald-600"
+            onClick={() => navigate("/manager/approval-history")}
+            badge={{ text: "Recorded actions", tone: "success" }}
+          />
+        </div>
+      </div>
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <SectionCard
@@ -3824,27 +3965,36 @@ function ManagerDashboard() {
           title={activeSection === "dashboard" ? "Manager Operations" : pageTitle}
           subtitle="Monitor approvals, overdraft activity, customer activity, and alerts."
         >
-          <div className="stat-chip flex items-center gap-3 px-4 py-3">
+          <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => navigate("/manager/notifications")}
-              className="group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+              className="group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 cursor-pointer shadow-sm"
               aria-label="Open manager alerts"
               title="Open manager alerts"
             >
               <Bell size={20} />
             </button>
-            <div className="flex min-w-0 items-center gap-2">
-              <UserCircle size={28} className="shrink-0 text-slate-600" />
-              <span className="max-w-44 truncate font-semibold text-slate-950">
-                {user?.name || "Manager"}
-              </span>
+
+            <div
+              onClick={() => navigate("/manager/profile")}
+              className="flex items-center gap-3 bg-white border border-bank-card-border p-2 pr-4 rounded-full shadow-sm hover:border-bank-accent/45 transition cursor-pointer"
+            >
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bank-sidebar text-xs font-bold text-white shadow-sm">
+                {user?.name ? user.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "MG"}
+              </div>
+              <div className="hidden sm:block text-left">
+                <p className="text-xs font-bold text-slate-800 leading-tight">{user?.name || "Branch Manager"}</p>
+                <p className="text-[10px] font-semibold text-slate-400 mt-0.5 leading-none">{user?.email || "manager@adnatebank.com"}</p>
+              </div>
+              <ChevronRight size={14} className="text-slate-400" />
             </div>
+
+            <button type="button" onClick={handleLogout} className="btn-danger-soft cursor-pointer" aria-label="Logout">
+              <LogOut size={16} />
+              <span className="hidden md:inline">Logout</span>
+            </button>
           </div>
-          <button type="button" onClick={handleLogout} className="btn-danger-soft">
-            <LogOut size={18} />
-            Logout
-          </button>
         </PageHeader>
 
         {![
@@ -3856,6 +4006,7 @@ function ManagerDashboard() {
           "loan",
           "loans",
           "loan-portfolio",
+          "settlement",
         ].includes(section) && (
           <div className="stat-grid">
             <StatsCard

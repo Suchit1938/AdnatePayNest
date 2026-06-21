@@ -12,7 +12,7 @@ import DashboardLayout from "../../layouts/DashboardLayout";
 import { useAuth } from "../../context/useAuth";
 import { BANK_NAME, formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { getCustomerAccounts } from "../../utils/overdraft";
-import { getTransactionStatusLabel } from "../../utils/ui";
+import { getCustomerTransactionTitle, getTransactionStatusLabel, isLoanTransaction } from "../../utils/ui";
 
 const statusBadge = (status) => {
   const normalized = String(status).toLowerCase();
@@ -34,7 +34,24 @@ const formatAccount = (accountNumber) =>
 const formatTransactionType = (type) =>
   String(type || "bank-transfer").replaceAll("-", " ").toUpperCase();
 
-const isOverdraftPayoff = (transaction) => transaction.type === "overdraft-payoff";
+const getLoanReference = (transaction) =>
+  transaction.businessRefId || transaction.toAccountNumber || "Loan";
+
+const getRouteDetail = (transaction) => {
+  if (transaction.type === "loan-disbursement") {
+    return `From ${transaction.sender || "Adnate Bank Settlement Account"} | To ${formatAccount(transaction.toAccountNumber)}`;
+  }
+
+  if (isLoanTransaction(transaction)) {
+    return `From ${formatAccount(transaction.fromAccountNumber)} | Loan ${getLoanReference(transaction)}`;
+  }
+
+  if (transaction.type === "overdraft-payoff") {
+    return `From ${formatAccount(transaction.fromAccountNumber)} | To ${transaction.receiver || "Adnate Bank Settlement Account"}`;
+  }
+
+  return `From ${formatAccount(transaction.fromAccountNumber)} | To ${formatAccount(transaction.toAccountNumber)}`;
+};
 
 const getApprovalBadge = (transaction) => {
   if (transaction.approvalStatus === "approved") return "Manager Approved";
@@ -99,10 +116,11 @@ const Transactions = () => {
       const fromIsCustomer = customerAccounts.has(fromAccount);
       const toIsCustomer = customerAccounts.has(toAccount);
       const isSuccessful = ["success", "completed"].includes(String(transaction.status).toLowerCase());
-      const isPayoff = isOverdraftPayoff(transaction);
+      const isPayoff = transaction.type === "overdraft-payoff";
+      const isLoanPayment = isLoanTransaction(transaction);
       const isOwnTransfer = fromIsCustomer && toIsCustomer && !isPayoff;
       const isDebit = fromIsCustomer;
-      const isCredit = !isOwnTransfer && toIsCustomer;
+      const isCredit = !isOwnTransfer && !isLoanPayment && toIsCustomer;
       const balanceAccount = isDebit ? fromAccount : isCredit ? toAccount : "";
       const balanceAfter =
         isSuccessful && balanceAccount && runningBalances.has(balanceAccount)
@@ -127,13 +145,7 @@ const Transactions = () => {
         dateDisplay: transaction.createdAt
           ? new Date(transaction.createdAt).toISOString().slice(0, 10)
           : transaction.date || "Recently",
-        title: isPayoff
-          ? "Overdraft payoff"
-          : isOwnTransfer
-          ? "Own account transfer"
-          : isDebit
-            ? `Transfer to ${transaction.receiver || "Receiver"}`
-            : `Transfer from ${transaction.sender || "Sender"}`,
+        title: getCustomerTransactionTitle(transaction, { isDebit, isOwnTransfer }),
         accountType,
         debit: isDebit && !isCredit && isSuccessful ? Number(transaction.amount || 0) : 0,
         credit: isCredit && isSuccessful ? Number(transaction.amount || 0) : 0,
@@ -225,8 +237,7 @@ const Transactions = () => {
                         </p>
                         <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
                           {transaction.accountType} account | From{" "}
-                          {formatAccount(transaction.fromAccountNumber)} | To{" "}
-                          {formatAccount(transaction.toAccountNumber)} | Ref {transaction.id}
+                          {getRouteDetail(transaction).replace(/^From\s+/, "")} | Ref {transaction.id}
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <span className={statusBadge(transaction.status)}>

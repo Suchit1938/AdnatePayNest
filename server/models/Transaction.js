@@ -10,12 +10,20 @@ const transactionSchema = new mongoose.Schema(
     sender: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
     },
     receiver: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+    },
+    senderType: {
+      type: String,
+      enum: ['customer', 'bank', 'system'],
+      default: 'customer',
+    },
+    receiverType: {
+      type: String,
+      enum: ['customer', 'bank', 'system'],
+      default: 'customer',
     },
     senderName: {
       type: String,
@@ -56,6 +64,36 @@ const transactionSchema = new mongoose.Schema(
     type: {
       type: String,
       default: 'bank-transfer',
+    },
+    category: {
+      type: String,
+      default: 'transfer',
+      trim: true,
+    },
+    direction: {
+      type: String,
+      enum: ['debit', 'credit', 'internal'],
+      default: 'debit',
+    },
+    businessRefType: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    businessRefId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    displayTitle: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    displaySubtitle: {
+      type: String,
+      trim: true,
+      default: '',
     },
   },
   { timestamps: true }

@@ -17,6 +17,8 @@ const serializeTransaction = (transaction, approvalDetail = {}) => ({
   id: transaction.transactionId,
   sender: transaction.senderName,
   receiver: transaction.receiverName,
+  senderType: transaction.senderType || 'customer',
+  receiverType: transaction.receiverType || 'customer',
   fromAccountNumber: transaction.fromAccountNumber,
   toAccountNumber: transaction.toAccountNumber,
   amount: transaction.amount,
@@ -30,6 +32,12 @@ const serializeTransaction = (transaction, approvalDetail = {}) => ({
   date: transaction.createdAt?.toISOString().slice(0, 10),
   remarks: transaction.remarks,
   createdAt: transaction.createdAt,
+  category: transaction.category || 'transfer',
+  direction: transaction.direction || 'debit',
+  businessRefType: transaction.businessRefType || '',
+  businessRefId: transaction.businessRefId || '',
+  displayTitle: transaction.displayTitle || '',
+  displaySubtitle: transaction.displaySubtitle || '',
 });
 
 const formatMoney = (value) => `₹ ${toWholeRupees(value).toLocaleString('en-IN')}`;

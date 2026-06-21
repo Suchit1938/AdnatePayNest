@@ -6,6 +6,7 @@ const {
     runMonthlyRepaymentProcessing,
 } = require('./controllers/loanController');
 const seedDatabase = require('./utils/seedData');
+const { backfillSettlementLedger } = require('./utils/bankSettlementAccount');
 
 const PORT = process.env.PORT || 5000;
 const DB_RETRY_MS = Number(process.env.DB_RETRY_MS || 10000);
@@ -14,6 +15,23 @@ const EMI_PROCESS_TIMEZONE = process.env.EMI_PROCESS_TIMEZONE || 'Asia/Kolkata';
 const EMI_PROCESS_RUN_ON_START = process.env.EMI_PROCESS_RUN_ON_START !== 'false';
 const MONTHLY_REPAYMENT_CRON = process.env.MONTHLY_REPAYMENT_CRON || '0 1 1 * *';
 const MONTHLY_REPAYMENT_RUN_ON_START = process.env.MONTHLY_REPAYMENT_RUN_ON_START === 'true';
+const DISABLE_SETTLEMENT_BACKFILL = process.env.DISABLE_SETTLEMENT_BACKFILL === 'true';
+
+const runSettlementBackfill = async () => {
+    if (DISABLE_SETTLEMENT_BACKFILL) return;
+
+    const result = await backfillSettlementLedger();
+    const totalTouched =
+        result.loanRepaymentsUpdated +
+        result.overdraftRepaymentsUpdated +
+        result.loanDisbursementsCreated;
+
+    if (totalTouched > 0) {
+        console.log(
+            `Settlement backfill completed: ${result.loanRepaymentsUpdated} loan repayment transaction(s), ${result.overdraftRepaymentsUpdated} OD transaction(s), ${result.loanDisbursementsCreated} loan disbursement ledger row(s).`
+        );
+    }
+};
 
 const startRepaymentProcessor = () => {
     if (process.env.DISABLE_EMI_PROCESSOR === 'true') return;
@@ -99,6 +117,7 @@ const startServer = async () => {
     try {
         await connectDB();
         await seedDatabase();
+        await runSettlementBackfill();
 
         app.listen(PORT, () => {
             console.log(`Starting the server at port ${PORT}`);

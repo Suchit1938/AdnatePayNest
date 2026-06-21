@@ -5,6 +5,10 @@ const Loan = require('../models/Loan');
 const Tier = require('../models/Tier');
 const User = require('../models/User');
 const {
+  ensureBankSettlementAccount,
+  serializeBankSettlementAccount,
+} = require('../utils/bankSettlementAccount');
+const {
   DEFAULT_MONTHLY_OD_USES,
   getAccountTypeOdRule,
   getAccountTypeOdRules,
@@ -137,6 +141,17 @@ const serializeLog = (log) => {
   };
 };
 
+const monthKeyFromTimestamp = (value) => {
+  const date = value ? new Date(value) : null;
+
+  if (!date || Number.isNaN(date.getTime())) return 'Unknown';
+
+  return date.toLocaleDateString('en-IN', {
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
 const getAdminLogs = async (req, res) => {
   const logs = await SystemLog.find()
     .populate('actor', 'name email role')
@@ -167,6 +182,134 @@ const getAdminActivity = async (req, res) => {
   );
 
   res.json({ activityPoints });
+};
+
+const getSettlementSummary = async () => {
+  const settlementAccount = await ensureBankSettlementAccount();
+  const [
+    loanDisbursed,
+    loanCollected,
+    odRecovered,
+    settlementTransactionCount,
+  ] = await Promise.all([
+    Transaction.aggregate([
+      { $match: { type: 'loan-disbursement', status: 'success' } },
+      { $group: { _id: null, amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Transaction.aggregate([
+      {
+        $match: {
+          type: { $in: ['loan-emi-payment', 'loan-part-payment', 'loan-foreclosure'] },
+          status: 'success',
+        },
+      },
+      { $group: { _id: null, amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Transaction.aggregate([
+      { $match: { type: 'overdraft-payoff', status: 'success' } },
+      { $group: { _id: null, amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Transaction.countDocuments({
+      $or: [{ senderType: 'bank' }, { receiverType: 'bank' }],
+    }),
+  ]);
+
+  return {
+    account: serializeBankSettlementAccount(settlementAccount),
+    totals: {
+      totalLoanDisbursed: toWholeRupees(loanDisbursed[0]?.amount),
+      loanDisbursementCount: toWholeRupees(loanDisbursed[0]?.count),
+      totalLoanCollected: toWholeRupees(loanCollected[0]?.amount),
+      loanCollectionCount: toWholeRupees(loanCollected[0]?.count),
+      totalOdRecovered: toWholeRupees(odRecovered[0]?.amount),
+      odRecoveryCount: toWholeRupees(odRecovered[0]?.count),
+      settlementTransactionCount,
+    },
+  };
+};
+
+const getAdminSettlementSummary = async (req, res) => {
+  res.json({ settlement: await getSettlementSummary() });
+};
+
+const serializeSettlementTransaction = (transaction) => {
+  const isBankCredit = transaction.receiverType === 'bank';
+  const isBankDebit = transaction.senderType === 'bank';
+
+  return {
+    id: transaction.transactionId,
+    title: transaction.displayTitle || transaction.remarks || transaction.type,
+    subtitle: transaction.displaySubtitle || transaction.remarks || '',
+    type: transaction.type,
+    category: transaction.category || '',
+    status: transaction.status,
+    amount: toWholeRupees(transaction.amount),
+    bankDebit: isBankDebit && transaction.status === 'success' ? toWholeRupees(transaction.amount) : 0,
+    bankCredit: isBankCredit && transaction.status === 'success' ? toWholeRupees(transaction.amount) : 0,
+    customerName:
+      transaction.senderType === 'customer'
+        ? transaction.senderName
+        : transaction.receiverType === 'customer'
+          ? transaction.receiverName
+          : '',
+    fromAccountNumber: transaction.fromAccountNumber || '',
+    toAccountNumber: transaction.toAccountNumber || '',
+    businessRefType: transaction.businessRefType || '',
+    businessRefId: transaction.businessRefId || '',
+    createdAt: transaction.createdAt,
+  };
+};
+
+const getSettlementReport = async (req, res) => {
+  const settlement = await getSettlementSummary();
+  const settlementTransactions = await Transaction.find({
+    $or: [
+      { senderType: 'bank' },
+      { receiverType: 'bank' },
+      { type: { $in: ['loan-disbursement', 'loan-emi-payment', 'loan-part-payment', 'loan-foreclosure', 'overdraft-payoff'] } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .limit(500);
+  const rows = settlementTransactions.map(serializeSettlementTransaction);
+  const monthlyRows = Array.from(
+    rows.reduce((map, row) => {
+      const key = monthKeyFromTimestamp(row.createdAt);
+      const current = map.get(key) || { label: key, bankDebit: 0, bankCredit: 0, net: 0 };
+
+      current.bankDebit += row.bankDebit;
+      current.bankCredit += row.bankCredit;
+      current.net = current.bankCredit - current.bankDebit;
+      map.set(key, current);
+      return map;
+    }, new Map()).values()
+  ).slice(-12);
+  const typeRows = Array.from(
+    rows.reduce((map, row) => {
+      const key = row.type || 'other';
+      const current = map.get(key) || {
+        label: key.replaceAll('-', ' '),
+        count: 0,
+        amount: 0,
+        bankDebit: 0,
+        bankCredit: 0,
+      };
+
+      current.count += 1;
+      current.amount += row.amount;
+      current.bankDebit += row.bankDebit;
+      current.bankCredit += row.bankCredit;
+      map.set(key, current);
+      return map;
+    }, new Map()).values()
+  ).sort((left, right) => right.amount - left.amount);
+
+  res.json({
+    settlement,
+    rows,
+    monthlyRows,
+    typeRows,
+  });
 };
 
 const getAdminLoanAnalytics = async (req, res) => {
@@ -291,6 +434,7 @@ const getManagerDashboard = async (req, res) => {
     escalationLogs,
     notificationLogs,
     tierDecisionLogs,
+    settlement,
   ] =
     await Promise.all([
       User.find({ role: 'customer' }).select(
@@ -347,6 +491,7 @@ const getManagerDashboard = async (req, res) => {
       })
         .sort({ createdAt: -1 })
         .limit(50),
+      getSettlementSummary(),
     ]);
 
   const customerById = new Map(
@@ -545,6 +690,7 @@ const getManagerDashboard = async (req, res) => {
       assignedRegion: req.user.assignedRegion,
       employeeId: req.user.employeeId,
     },
+    settlement,
     odUtilizers,
     overdraftCustomers,
     overdraftRisk: riskCounts,
@@ -610,5 +756,7 @@ module.exports = {
   getAdminActivity,
   getAdminLoanAnalytics,
   getAdminLogs,
+  getAdminSettlementSummary,
+  getSettlementReport,
   getManagerDashboard,
 };

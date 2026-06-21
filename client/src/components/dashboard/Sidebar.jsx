@@ -45,6 +45,7 @@ const navItemsByRole = {
     { label: "Tier Policies", path: "/admin/classifications", icon: BadgeIndianRupee },
     { label: "Business Rules", path: "/admin/business-rules", icon: SlidersHorizontal },
     { label: "Reports", path: "/admin/reports", icon: FileBarChart },
+    { label: "Settlement Ledger", path: "/admin/settlement", icon: Landmark },
     { label: "System Alerts", path: "/admin/notifications", icon: Bell },
     { label: "Profile", path: "/admin/profile", icon: UserCircle },
   ],

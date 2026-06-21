@@ -11,6 +11,11 @@ const {
 } = require('../utils/overdraftInterest');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { writeSystemLog } = require('../utils/systemLog');
+const {
+  SETTLEMENT_ACCOUNT_NAME,
+  SETTLEMENT_ACCOUNT_NUMBER,
+  creditBankSettlement,
+} = require('../utils/bankSettlementAccount');
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 const formatMoney = (value) => `₹ ${toWholeRupees(value).toLocaleString('en-IN')}`;
@@ -114,17 +119,18 @@ const payOffOverdraft = async (req, res) => {
         ? null
         : overdraftAccount.save({ session }),
     ].filter(Boolean));
+    await creditBankSettlement(requestedAmount, { session });
 
     const [transaction] = await Transaction.create(
       [
         {
           transactionId: `ODPAY${Date.now()}`,
           sender: user._id,
-          receiver: user._id,
           senderName: user.name,
-          receiverName: user.name,
+          receiverName: SETTLEMENT_ACCOUNT_NAME,
+          receiverType: 'bank',
           fromAccountNumber: paymentAccount.accountNumber,
-          toAccountNumber: overdraftAccount.accountNumber,
+          toAccountNumber: SETTLEMENT_ACCOUNT_NUMBER,
           amount: requestedAmount,
           remarks:
             remainingOverdraft > 0
@@ -132,6 +138,12 @@ const payOffOverdraft = async (req, res) => {
               : `${overdraftAccount.accountType} overdraft payoff. Interest paid: ${interestPaid}`,
           status: 'success',
           type: 'overdraft-payoff',
+          category: 'overdraft',
+          direction: 'debit',
+          businessRefType: 'overdraft',
+          businessRefId: overdraftAccount.accountNumber,
+          displayTitle: 'Overdraft repayment',
+          displaySubtitle: `${overdraftAccount.accountType} overdraft principal paid: ${principalPayment}. Interest paid: ${interestPaid}.`,
         },
       ],
       { session }

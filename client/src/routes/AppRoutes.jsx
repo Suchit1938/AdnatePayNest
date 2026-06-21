@@ -7,6 +7,7 @@ import AdminDashboard from "../pages/admin/Dashboard";
 import AdminCustomers from "../pages/admin/Customers";
 import AdminClassifications from "../pages/admin/Classifications";
 import AdminReports from "../pages/admin/Reports";
+import AdminSettlement from "../pages/admin/Settlement";
 import AdminNotifications from "../pages/admin/Notifications";
 import AdminProfile from "../pages/admin/Profile";
 import AdminBusinessRules from "../pages/admin/BusinessRules";
@@ -66,6 +67,10 @@ const AppRoutes = () => {
           <Route
             path="/admin/reports"
             element={adminRoute(<AdminReports />)}
+          />
+          <Route
+            path="/admin/settlement"
+            element={adminRoute(<AdminSettlement />)}
           />
           <Route
             path="/admin/business-rules"

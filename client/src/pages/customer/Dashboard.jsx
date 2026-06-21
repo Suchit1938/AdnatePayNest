@@ -25,7 +25,7 @@ import SectionCard from "../../components/ui/SectionCard";
 import { useAuth } from "../../context/useAuth";
 import { BANK_NAME, formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { getCustomerAccounts, getCustomerOverdraftSummary } from "../../utils/overdraft";
-import { getTierTone } from "../../utils/ui";
+import { getCustomerTransactionTitle, getTierTone } from "../../utils/ui";
 import { useToast } from "../../components/ui/useToast";
 
 const Dashboard = () => {
@@ -408,11 +408,7 @@ const Dashboard = () => {
                   <div key={txn.id} className="flex items-center justify-between gap-4 p-3 rounded-lg border border-bank-card-border bg-white hover:bg-bank-surface/30 transition">
                     <div className="min-w-0">
                       <p className="text-sm font-bold text-slate-900 truncate">
-                        {txn.type === "overdraft-payoff"
-                          ? "Overdraft Payoff"
-                          : isDebit
-                          ? `Transfer to ${txn.receiver || "Beneficiary"}`
-                          : `Received from ${txn.sender || "Sender"}`}
+                        {getCustomerTransactionTitle(txn, { isDebit })}
                       </p>
                       <p className="text-xs text-slate-500">
                         {txn.createdAt ? new Date(txn.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' }) : txn.date || "Recent"} • Ref {txn.id}

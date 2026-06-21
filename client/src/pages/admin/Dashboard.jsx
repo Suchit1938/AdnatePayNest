@@ -6,6 +6,7 @@ import {
   LogOut,
   ShieldCheck,
   Users,
+  ChevronRight,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -23,31 +24,30 @@ import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { useAuth } from "../../context/useAuth";
 import { formatCurrency } from "../../data/mockData";
+import { useToast } from "../../components/ui/useToast";
 import { getTierTone } from "../../utils/ui";
 
 const isToday = (value) => {
   if (!value) return false;
-
-  const datePart = String(value).slice(0, 10);
+  const date = new Date(value);
   const today = new Date();
-  const todayPart = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, "0"),
-    String(today.getDate()).padStart(2, "0"),
-  ].join("-");
-
-  return datePart === todayPart;
+  return date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
 };
 
 const toNumber = (value) => Number(value || 0);
 
-const formatCompactCurrency = (value) =>
-  new Intl.NumberFormat("en-IN", {
+const formatCompactCurrency = (value) => {
+  const num = toNumber(value);
+  const formatted = new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
     maximumFractionDigits: 0,
-    notation: toNumber(value) >= 100000 ? "compact" : "standard",
-  }).format(toNumber(value));
+    notation: num >= 100000 ? "compact" : "standard",
+  }).format(num);
+  return formatted.replace(/INR|Rs\./g, "₹").trim();
+};
 
 const percentOf = (value, total) =>
   total > 0 ? Math.round((toNumber(value) / total) * 100) : 0;
@@ -166,6 +166,7 @@ const DonutChart = ({ rows }) => {
 function AdminDashboard() {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
+  const toast = useToast();
   const [dashboardUsers, setDashboardUsers] = useState({
     customers: [],
     managers: [],
@@ -174,6 +175,22 @@ function AdminDashboard() {
   const [approvals, setApprovals] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [recentLogs, setRecentLogs] = useState([]);
+  const [settlement, setSettlement] = useState({
+    account: {
+      accountName: "Adnate Bank Settlement Account",
+      accountNumber: "BANK-SETTLEMENT-0001",
+      balance: 0,
+      openingBalance: 0,
+      minimumReserve: 0,
+      availableForDisbursement: 0,
+    },
+    totals: {
+      totalLoanDisbursed: 0,
+      totalLoanCollected: 0,
+      totalOdRecovered: 0,
+      settlementTransactionCount: 0,
+    },
+  });
 
   useEffect(() => {
     Promise.allSettled([
@@ -182,7 +199,15 @@ function AdminDashboard() {
       api.get("/approvals"),
       api.get("/transfers/transactions"),
       api.get("/dashboard/admin/logs"),
-    ]).then(([usersResult, tiersResult, approvalsResult, transactionsResult, logsResult]) => {
+      api.get("/dashboard/admin/settlement"),
+    ]).then(([usersResult, tiersResult, approvalsResult, transactionsResult, logsResult, settlementResult]) => {
+      if (usersResult.status !== "fulfilled") toast.error("Failed to load users");
+      if (tiersResult.status !== "fulfilled") toast.error("Failed to load tiers");
+      if (approvalsResult.status !== "fulfilled") toast.error("Failed to load approvals");
+      if (transactionsResult.status !== "fulfilled") toast.error("Failed to load transactions");
+      if (logsResult.status !== "fulfilled") toast.error("Failed to load recent logs");
+      if (settlementResult.status !== "fulfilled") toast.error("Failed to load settlement data");
+
       const usersData =
         usersResult.status === "fulfilled" ? usersResult.value.data : {};
       const tiersData =
@@ -193,6 +218,8 @@ function AdminDashboard() {
         transactionsResult.status === "fulfilled" ? transactionsResult.value.data : {};
       const logsData =
         logsResult.status === "fulfilled" ? logsResult.value.data : {};
+      const settlementData =
+        settlementResult.status === "fulfilled" ? settlementResult.value.data : {};
       const nextUsers = {
         customers: usersData.customers || [],
         managers: usersData.managers || [],
@@ -206,6 +233,7 @@ function AdminDashboard() {
       setApprovals(nextApprovals);
       setTransactions(nextTransactions);
       setRecentLogs(logsData.logs || []);
+      setSettlement((current) => settlementData.settlement || current);
     });
   }, []);
 
@@ -284,24 +312,116 @@ function AdminDashboard() {
           title="Admin Dashboard"
           subtitle="Full system visibility across users, tiers, transactions, and approvals."
         >
-          <div className="stat-chip">
-            <p className="text-sm font-semibold text-slate-500">Access Level</p>
-            <p className="mt-2 text-2xl font-bold text-slate-950">{user?.name || "Admin"}</p>
+          <div
+            onClick={() => navigate("/admin/profile")}
+            className="flex items-center gap-3 bg-white border border-bank-card-border p-2 pr-4 rounded-full shadow-sm hover:border-bank-accent/45 transition cursor-pointer"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bank-sidebar text-xs font-bold text-white shadow-sm">
+              {user?.name ? user.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "AD"}
+            </div>
+            <div className="hidden sm:block text-left">
+              <p className="text-xs font-bold text-slate-800 leading-tight">{user?.name || "System Admin"}</p>
+              <p className="text-[10px] font-semibold text-slate-400 mt-0.5 leading-none">{user?.email || "admin@adnatebank.com"}</p>
+            </div>
+            <ChevronRight size={14} className="text-slate-400" />
           </div>
-          <button type="button" onClick={handleLogout} className="btn-danger-soft">
-            <LogOut size={18} />
-            Logout
+          <button type="button" onClick={handleLogout} className="btn-danger-soft cursor-pointer" aria-label="Logout">
+            <LogOut size={16} />
+            <span className="hidden md:inline">Logout</span>
           </button>
         </PageHeader>
 
-        <div className="stat-grid">
+        {/* Settlement & Liquidity Section (Consolidated Hero Layout) */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Settlement Balance Hero Card (1 Column) */}
+          <div
+            onClick={() => navigate("/admin/settlement")}
+            className="relative flex h-64 w-full flex-col justify-between overflow-hidden rounded-2xl border border-white/10 p-6 text-white shadow-xl shadow-blue-950/15 cursor-pointer transition hover:-translate-y-0.5 hover:shadow-2xl"
+            style={{
+              background: "linear-gradient(135deg, #0b192c 0%, #1e3e62 50%, #002244 100%)",
+            }}
+          >
+            <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-white/5 blur-3xl -mr-16 -mt-16 pointer-events-none" />
+            
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-[10px] font-extrabold tracking-widest text-blue-200/60 uppercase">Settlement Account</p>
+                <p className="text-[9px] font-bold text-blue-200/40 italic">Internal Liquidity Pool</p>
+              </div>
+              <span className="rounded-full bg-blue-500/20 px-3 py-1 text-xs font-bold text-blue-200 backdrop-blur ring-1 ring-blue-400/30">
+                {settlement.account.accountNumber}
+              </span>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-bold text-blue-200/50 uppercase tracking-wider">Settlement Balance</p>
+              <p className="text-3xl font-black text-white mt-1 select-all">
+                {formatCurrency(settlement.account.balance)}
+              </p>
+            </div>
+
+            <div className="flex justify-between items-end border-t border-white/10 pt-4">
+              <div>
+                <p className="text-[9px] font-semibold text-blue-200/40 uppercase">Lendable Funds</p>
+                <p className="text-sm font-bold text-emerald-400">
+                  {formatCurrency(settlement.account.availableForDisbursement)}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 text-xs font-bold text-blue-300">
+                <span>Ledger Details</span>
+                <ChevronRight size={14} />
+              </div>
+            </div>
+          </div>
+
+          {/* Settlement Metrics (2 Columns) */}
+          <div className="lg:col-span-2 rounded-2xl border border-bank-card-border bg-white p-6 shadow-sm flex flex-col justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Bank Settlement Ledger</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Internal tracking of loan payouts, principal collections, penalty/overdraft recoveries, and reserves.
+              </p>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Opening Bal</p>
+                <p className="mt-2 text-lg font-extrabold text-slate-800">
+                  {formatCurrency(settlement.account.openingBalance)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Min Reserve</p>
+                <p className="mt-2 text-lg font-extrabold text-slate-800">
+                  {formatCurrency(settlement.account.minimumReserve)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-red-50 bg-red-50/20 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-red-500/70">Loan Disbursed</p>
+                <p className="mt-2 text-lg font-extrabold text-red-600">
+                  {formatCurrency(settlement.totals.totalLoanDisbursed)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-emerald-50 bg-emerald-50/20 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500/70">Recovered</p>
+                <p className="mt-2 text-lg font-extrabold text-emerald-600">
+                  {formatCurrency(settlement.totals.totalLoanCollected + settlement.totals.totalOdRecovered)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Operational Dashboard Stats Grid */}
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <StatsCard
             title="Total Customers"
             value={totalCustomers}
             icon={BadgeCheck}
             accent="bg-emerald-500"
             iconTone="bg-emerald-50 text-emerald-600"
-            footer={{ text: "Registered customers" }}
+            footer={{ text: "Manage customers", icon: ChevronRight, iconClassName: "text-emerald-500" }}
+            onClick={() => navigate("/admin/customers")}
           />
           <StatsCard
             title="Total System Balance"
@@ -309,7 +429,8 @@ function AdminDashboard() {
             icon={CreditCard}
             accent="bg-violet-500"
             iconTone="bg-violet-50 text-violet-600"
-            footer={{ text: `Across ${totalCustomers} customers` }}
+            footer={{ text: "View customer reports", icon: ChevronRight, iconClassName: "text-violet-500" }}
+            onClick={() => navigate("/admin/reports#customers")}
           />
           <StatsCard
             title="Today's Transactions"
@@ -328,6 +449,8 @@ function AdminDashboard() {
                     tone: "success",
                   }
             }
+            footer={{ text: "Audit transactions", icon: ChevronRight, iconClassName: "text-amber-500" }}
+            onClick={() => navigate("/admin/reports#transactions")}
           />
           <StatsCard
             title="Pending Approvals"
@@ -336,12 +459,14 @@ function AdminDashboard() {
             accent="bg-red-500"
             iconTone="bg-red-50 text-red-600"
             footer={{
-              icon: Clock3,
+              icon: ChevronRight,
+              iconClassName: "text-red-500",
               text:
                 pendingApprovals.length > 0
                   ? "Needs review"
-                  : "Queue clear",
+                  : "Queue clear · View history",
             }}
+            onClick={() => navigate("/admin/reports#approvals")}
           />
         </div>
 
@@ -352,7 +477,13 @@ function AdminDashboard() {
                 <h2 className="text-xl font-bold">Transaction Status</h2>
                 <p className="text-sm text-slate-500">Volume and value by outcome.</p>
               </div>
-              <CreditCard className="shrink-0 text-blue-600" size={24} />
+              <button
+                onClick={() => navigate("/admin/reports#transactions")}
+                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-bank-sidebar hover:bg-bank-surface transition cursor-pointer"
+              >
+                <span>Analytics</span>
+                <ChevronRight size={14} />
+              </button>
             </div>
             <HorizontalBarChart
               rows={transactionStatusRows}
@@ -367,7 +498,13 @@ function AdminDashboard() {
                 <h2 className="text-xl font-bold">Customers By Tier</h2>
                 <p className="text-sm text-slate-500">Customer classification distribution.</p>
               </div>
-              <Users className="shrink-0 text-blue-600" size={24} />
+              <button
+                onClick={() => navigate("/admin/reports#classifications")}
+                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-bank-sidebar hover:bg-bank-surface transition cursor-pointer"
+              >
+                <span>Tiers</span>
+                <ChevronRight size={14} />
+              </button>
             </div>
             <HorizontalBarChart
               rows={tierCustomerRows}
@@ -381,7 +518,13 @@ function AdminDashboard() {
                 <h2 className="text-xl font-bold">Overdraft Exposure</h2>
                 <p className="text-sm text-slate-500">Used overdraft grouped by tier.</p>
               </div>
-              <ShieldCheck className="shrink-0 text-blue-600" size={24} />
+              <button
+                onClick={() => navigate("/admin/reports#overdraft")}
+                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-bank-sidebar hover:bg-bank-surface transition cursor-pointer"
+              >
+                <span>Exposure</span>
+                <ChevronRight size={14} />
+              </button>
             </div>
             <HorizontalBarChart
               rows={overdraftByTierRows}
@@ -398,7 +541,13 @@ function AdminDashboard() {
                 <h2 className="text-xl font-bold">Approval Pipeline</h2>
                 <p className="text-sm text-slate-500">Review status by approval outcome.</p>
               </div>
-              <AlertTriangle className="shrink-0 text-blue-600" size={24} />
+              <button
+                onClick={() => navigate("/admin/reports#approvals")}
+                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-bank-sidebar hover:bg-bank-surface transition cursor-pointer"
+              >
+                <span>Pipeline</span>
+                <ChevronRight size={14} />
+              </button>
             </div>
             <DonutChart rows={approvalStatusRows} />
           </div>
@@ -422,7 +571,7 @@ function AdminDashboard() {
               const activity = buildActivityDisplay(log);
 
               return (
-                <div key={log.id || `${log.action}-${log.createdAt}`} className="activity-item">
+                <div key={log.id || `${log.action}-${log.createdAt}`} className="activity-item cursor-pointer transition-transform hover:scale-105" onClick={() => console.log('Log clicked', log.id)}>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -436,7 +585,7 @@ function AdminDashboard() {
                       <span
                         className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold capitalize ring-1 ${toneClass}`}
                       >
-                        {log.severity || "info"}
+                        {log.severity?.charAt(0).toUpperCase() + log.severity?.slice(1) || "Info"}
                       </span>
                     </div>
                     <p className="mt-1 text-sm text-slate-500">

@@ -17,6 +17,12 @@ const { getLoanTypeRule, normalizeLoanRules } = require('../utils/loanRules');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { sendEmail } = require('../utils/email');
 const { writeSystemLog } = require('../utils/systemLog');
+const {
+  SETTLEMENT_ACCOUNT_NAME,
+  SETTLEMENT_ACCOUNT_NUMBER,
+  creditBankSettlement,
+  debitBankSettlement,
+} = require('../utils/bankSettlementAccount');
 
 const toNumber = (value) => Number(value || 0);
 const money = (value) => `₹ ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
@@ -166,6 +172,15 @@ const sendLoanEmail = async ({ customer, subject, text, html }) => {
   if (!customer?.email) return;
   await sendEmail({ to: customer.email, subject, text, html });
 };
+
+const getLoanTransactionMeta = ({ loan, title, subtitle = '', direction = 'debit' }) => ({
+  category: 'loan',
+  direction,
+  businessRefType: 'loan',
+  businessRefId: loan.loanId,
+  displayTitle: title,
+  displaySubtitle: subtitle,
+});
 
 const addPdfFooter = (doc, loan) => {
   const bottom = doc.page.height - 54;
@@ -1753,9 +1768,9 @@ const attemptLoanEmiDeduction = async ({
           {
             transactionId: `LNEMIGRACE${Date.now()}`,
             sender: customer._id,
-            receiver: customer._id,
             senderName: customer.name,
-            receiverName: customer.name,
+            receiverName: SETTLEMENT_ACCOUNT_NAME,
+            receiverType: 'bank',
             fromAccountNumber: paymentAccount.accountNumber,
             toAccountNumber: loan.loanId,
             amount: Math.max(1, amountDue),
@@ -1763,6 +1778,11 @@ const attemptLoanEmiDeduction = async ({
             status: 'failed',
             failureReason: 'Insufficient balance during grace period',
             type: 'loan-emi-payment',
+            ...getLoanTransactionMeta({
+              loan,
+              title: `Failed EMI payment for loan ${loan.loanId}`,
+              subtitle: `EMI ${emiRow.emiNumber} could not be auto-deducted during grace period`,
+            }),
           },
         ],
         { session }
@@ -1828,9 +1848,9 @@ const attemptLoanEmiDeduction = async ({
         {
           transactionId: `LNEMIFAIL${Date.now()}`,
           sender: customer._id,
-          receiver: customer._id,
           senderName: customer.name,
-          receiverName: customer.name,
+          receiverName: SETTLEMENT_ACCOUNT_NAME,
+          receiverType: 'bank',
           fromAccountNumber: paymentAccount.accountNumber,
           toAccountNumber: loan.loanId,
           amount: Math.max(1, amountDue),
@@ -1838,6 +1858,11 @@ const attemptLoanEmiDeduction = async ({
           status: 'failed',
           failureReason: 'Insufficient balance',
           type: 'loan-emi-payment',
+          ...getLoanTransactionMeta({
+            loan,
+            title: `Failed EMI payment for loan ${loan.loanId}`,
+            subtitle: `EMI ${emiRow.emiNumber} failed due to insufficient balance`,
+          }),
         },
       ],
       { session }
@@ -1913,21 +1938,27 @@ const attemptLoanEmiDeduction = async ({
   }
 
   await paymentAccount.save({ session });
+  await creditBankSettlement(amountDue, { session });
 
   const [transaction] = await Transaction.create(
     [
       {
         transactionId: `LNEMI${Date.now()}`,
         sender: customer._id,
-        receiver: customer._id,
         senderName: customer.name,
-        receiverName: customer.name,
+        receiverName: SETTLEMENT_ACCOUNT_NAME,
+        receiverType: 'bank',
         fromAccountNumber: paymentAccount.accountNumber,
         toAccountNumber: loan.loanId,
         amount: amountDue,
         remarks: `EMI ${emiRow.emiNumber} payment for loan ${loan.loanId}`,
         status: 'success',
         type: 'loan-emi-payment',
+        ...getLoanTransactionMeta({
+          loan,
+          title: `Loan EMI payment for loan ${loan.loanId}`,
+          subtitle: `EMI ${emiRow.emiNumber}: principal ${money(principalPaid)}, interest ${money(interestPaid)}`,
+        }),
       },
     ],
     { session }
@@ -2015,13 +2046,18 @@ const disburseLoan = async (req, res) => {
     const bankAccount = await BankAccount.findOne({
       customerId: customer.customerId,
       accountNumber: targetAccount.accountNumber,
+      accountStatus: 'active',
     }).session(session);
 
-    if (bankAccount) {
-      bankAccount.walletBalance = toNumber(bankAccount.walletBalance) + loan.amount;
-      bankAccount.availableBalance = toNumber(bankAccount.availableBalance) + loan.amount;
-      await bankAccount.save({ session });
+    if (!bankAccount) {
+      throw new Error('Active customer bank account was not found for disbursement');
     }
+
+    await debitBankSettlement(loan.amount, { session });
+
+    bankAccount.walletBalance = toNumber(bankAccount.walletBalance) + loan.amount;
+    bankAccount.availableBalance = toNumber(bankAccount.availableBalance) + loan.amount;
+    await bankAccount.save({ session });
 
     if (customer.accounts?.length) {
       customer.accounts = customer.accounts.map((account) =>
@@ -2054,6 +2090,31 @@ const disburseLoan = async (req, res) => {
     await customer.save({ session });
     await loan.save({ session });
 
+    const [transaction] = await Transaction.create(
+      [
+        {
+          transactionId: `LNDISB${Date.now()}`,
+          receiver: customer._id,
+          senderType: 'bank',
+          senderName: SETTLEMENT_ACCOUNT_NAME,
+          receiverName: customer.name,
+          fromAccountNumber: SETTLEMENT_ACCOUNT_NUMBER,
+          toAccountNumber: targetAccount.accountNumber,
+          amount: loan.amount,
+          remarks: `Loan ${loan.loanId} disbursed to customer account`,
+          status: 'success',
+          type: 'loan-disbursement',
+          ...getLoanTransactionMeta({
+            loan,
+            title: `Loan disbursement for loan ${loan.loanId}`,
+            subtitle: `${money(loan.amount)} credited to ${targetAccount.accountNumber}`,
+            direction: 'credit',
+          }),
+        },
+      ],
+      { session }
+    );
+
     await writeSystemLog(
       {
         action: 'loan.disbursed',
@@ -2068,6 +2129,7 @@ const disburseLoan = async (req, res) => {
           amount: loan.amount,
           customerName: customer.name,
           accountNumber: targetAccount.accountNumber,
+          transactionId: transaction.transactionId,
         },
       },
       { session }
@@ -2086,6 +2148,7 @@ const disburseLoan = async (req, res) => {
           loanId: loan.loanId,
           amount: loan.amount,
           accountNumber: targetAccount.accountNumber,
+          transactionId: transaction.transactionId,
         },
       },
       { session }
@@ -2461,21 +2524,27 @@ const forecloseLoan = async (req, res) => {
     paymentAccount.walletBalance = toNumber(paymentAccount.walletBalance) - quote.totalPayable;
     paymentAccount.availableBalance = paymentAccount.walletBalance;
     await paymentAccount.save({ session });
+    await creditBankSettlement(quote.totalPayable, { session });
 
     const [transaction] = await Transaction.create(
       [
         {
           transactionId: `LNFORE${Date.now()}`,
           sender: customer._id,
-          receiver: customer._id,
           senderName: customer.name,
-          receiverName: customer.name,
+          receiverName: SETTLEMENT_ACCOUNT_NAME,
+          receiverType: 'bank',
           fromAccountNumber: paymentAccount.accountNumber,
           toAccountNumber: loan.loanId,
           amount: quote.totalPayable,
           remarks: `Foreclosure payment for loan ${loan.loanId}`,
           status: 'success',
           type: 'loan-foreclosure',
+          ...getLoanTransactionMeta({
+            loan,
+            title: `Loan foreclosure for loan ${loan.loanId}`,
+            subtitle: `Principal ${money(quote.outstandingPrincipal)}, interest ${money(quote.accruedInterest)}, fees ${money(quote.foreclosureFee + quote.unpaidPenalties)}`,
+          }),
         },
       ],
       { session }
@@ -2597,21 +2666,27 @@ const makePartPayment = async (req, res) => {
     paymentAccount.walletBalance = toNumber(paymentAccount.walletBalance) - amount;
     paymentAccount.availableBalance = paymentAccount.walletBalance;
     await paymentAccount.save({ session });
+    await creditBankSettlement(amount, { session });
 
     const [transaction] = await Transaction.create(
       [
         {
           transactionId: `LNPART${Date.now()}`,
           sender: customer._id,
-          receiver: customer._id,
           senderName: customer.name,
-          receiverName: customer.name,
+          receiverName: SETTLEMENT_ACCOUNT_NAME,
+          receiverType: 'bank',
           fromAccountNumber: paymentAccount.accountNumber,
           toAccountNumber: loan.loanId,
           amount,
           remarks: `Part-payment for loan ${loan.loanId}`,
           status: 'success',
           type: 'loan-part-payment',
+          ...getLoanTransactionMeta({
+            loan,
+            title: `Loan part-payment for loan ${loan.loanId}`,
+            subtitle: `${money(amount)} reduced outstanding principal`,
+          }),
         },
       ],
       { session }

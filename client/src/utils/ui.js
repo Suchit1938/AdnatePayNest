@@ -34,3 +34,57 @@ export const transactionStatusLabels = {
 
 export const getTransactionStatusLabel = (status) =>
   transactionStatusLabels[String(status || "").toLowerCase()] || status || "Unknown";
+
+export const loanTransactionTypes = new Set([
+  "loan-emi-payment",
+  "loan-part-payment",
+  "loan-foreclosure",
+]);
+
+export const isLoanTransaction = (transaction) =>
+  loanTransactionTypes.has(String(transaction?.type || "").toLowerCase());
+
+export const getLoanTransactionTitle = (transaction) => {
+  const type = String(transaction?.type || "").toLowerCase();
+  const loanId = transaction?.toAccountNumber ? ` for loan ${transaction.toAccountNumber}` : "";
+  const status = String(transaction?.status || "").toLowerCase();
+
+  if (type === "loan-emi-payment") {
+    return status === "failed" ? `Failed EMI payment${loanId}` : `Loan EMI payment${loanId}`;
+  }
+
+  if (type === "loan-part-payment") {
+    return `Loan part-payment${loanId}`;
+  }
+
+  if (type === "loan-foreclosure") {
+    return `Loan foreclosure${loanId}`;
+  }
+
+  return `Loan repayment${loanId}`;
+};
+
+export const getCustomerTransactionTitle = (
+  transaction,
+  { isDebit = false, isOwnTransfer = false } = {}
+) => {
+  if (transaction?.displayTitle) {
+    return transaction.displayTitle;
+  }
+
+  if (isLoanTransaction(transaction)) {
+    return getLoanTransactionTitle(transaction);
+  }
+
+  if (transaction?.type === "overdraft-payoff") {
+    return "Overdraft payoff";
+  }
+
+  if (isOwnTransfer || transaction?.type === "own-account") {
+    return "Own account transfer";
+  }
+
+  return isDebit
+    ? `Transfer to ${transaction?.receiver || "Receiver"}`
+    : `Transfer from ${transaction?.sender || "Sender"}`;
+};

@@ -30,13 +30,16 @@ import { getTierTone, getTransactionStatusLabel } from "../../utils/ui";
 
 const toNumber = (value) => Number(value || 0);
 
-const formatCompactCurrency = (value) =>
-  new Intl.NumberFormat("en-IN", {
+const formatCompactCurrency = (value) => {
+  const num = toNumber(value);
+  const formatted = new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
     maximumFractionDigits: 0,
-    notation: toNumber(value) >= 100000 ? "compact" : "standard",
-  }).format(toNumber(value));
+    notation: num >= 100000 ? "compact" : "standard",
+  }).format(num);
+  return formatted.replace(/INR|Rs\./g, "₹").trim();
+};
 
 const percentOf = (value, total) =>
   total > 0 ? Math.round((toNumber(value) / total) * 100) : 0;
@@ -256,20 +259,22 @@ const EmptyTableRow = ({ colSpan, message }) => (
 );
 
 const StatusBadge = ({ status }) => {
+  const normalized = String(status || "").toLowerCase();
   const label = formatReportLabel(getTransactionStatusLabel(status));
   const toneByStatus = {
-    success: "bg-emerald-50 text-emerald-700",
-    approved: "bg-emerald-50 text-emerald-700",
-    active: "bg-emerald-50 text-emerald-700",
-    pending: "bg-amber-50 text-amber-700",
-    failed: "bg-red-50 text-red-700",
-    rejected: "bg-red-50 text-red-700",
-    inactive: "bg-slate-100 text-slate-600",
-    suspended: "bg-red-50 text-red-700",
+    success: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100",
+    approved: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100",
+    active: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100",
+    completed: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100",
+    pending: "bg-amber-50 text-amber-700 ring-1 ring-amber-100",
+    failed: "bg-red-50 text-red-700 ring-1 ring-red-100",
+    rejected: "bg-red-50 text-red-700 ring-1 ring-red-100",
+    inactive: "bg-slate-100 text-slate-600 ring-1 ring-slate-200",
+    suspended: "bg-red-50 text-red-700 ring-1 ring-red-100",
   };
 
   return (
-    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${toneByStatus[status] || "bg-slate-100 text-slate-600"}`}>
+    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${toneByStatus[normalized] || "bg-slate-100 text-slate-600 ring-1 ring-slate-200"}`}>
       {label}
     </span>
   );
@@ -448,6 +453,7 @@ const defaultLoanAnalytics = {
 const loanChartColors = ["#2563eb", "#0891b2", "#10b981", "#f59e0b", "#ef4444", "#7c3aed"];
 
 const AdminReports = () => {
+  const [activeHash, setActiveHash] = useState(window.location.hash || "#transactions");
   const [users, setUsers] = useState({ customers: [] });
   const [tiers, setTiers] = useState([]);
   const [approvals, setApprovals] = useState([]);
@@ -458,6 +464,14 @@ const AdminReports = () => {
     startDate: "",
     endDate: "",
   });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActiveHash(window.location.hash || "#transactions");
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   useEffect(() => {
     Promise.allSettled([
@@ -1047,7 +1061,6 @@ const AdminReports = () => {
           title="Reports & Analytics"
           subtitle="Operational reporting for transfers, overdraft monitoring, approval workflow, and customer accounts."
         />
-
         <div className="flex flex-wrap gap-2 rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
           {[
             ["Transactions", "#transactions"],
@@ -1056,15 +1069,22 @@ const AdminReports = () => {
             ["Approvals", "#approvals"],
             ["Customers", "#customers"],
             ["Classifications", "#classifications"],
-          ].map(([label, href]) => (
-            <a
-              key={label}
-              href={href}
-              className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-bank-surface hover:text-bank-eyebrow"
-            >
-              {label}
-            </a>
-          ))}
+          ].map(([label, href]) => {
+            const isActive = activeHash === href;
+            return (
+              <a
+                key={label}
+                href={href}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                  isActive
+                    ? "bg-bank-sidebar text-white shadow-sm hover:bg-bank-sidebar-hover"
+                    : "text-slate-600 hover:bg-bank-surface hover:text-bank-eyebrow"
+                }`}
+              >
+                {label}
+              </a>
+            );
+          })}
         </div>
 
         <section className="rounded-2xl border border-bank-card-border bg-white p-4 shadow-sm">
@@ -1148,25 +1168,27 @@ const AdminReports = () => {
             iconTone="bg-amber-50 text-amber-600"
             footer={{ text: `${reportData.odBlocked} blocked accounts` }}
           />
-          <StatsCard
-            title="Active Loans"
-            value={loanAnalytics.summary.activeLoans}
-            icon={BadgeIndianRupee}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            footer={{ text: `${loanAnalytics.summary.disbursedLoans} disbursed` }}
-          />
-          <StatsCard
-            title="Outstanding Balances"
-            value={formatCompactCurrency(loanAnalytics.summary.outstandingBalance)}
-            icon={FileBarChart}
-            accent="bg-violet-500"
-            iconTone="bg-violet-50 text-violet-600"
-            footer={{ text: `${loanAnalytics.summary.collectionRate}% collection performance` }}
-          />
         </div>
 
         <section id="loans" className="scroll-mt-8 space-y-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <StatsCard
+              title="Active Loans"
+              value={loanAnalytics.summary.activeLoans}
+              icon={BadgeIndianRupee}
+              accent="bg-emerald-500"
+              iconTone="bg-emerald-50 text-emerald-600"
+              footer={{ text: `${loanAnalytics.summary.disbursedLoans} disbursed` }}
+            />
+            <StatsCard
+              title="Outstanding Balances"
+              value={formatCompactCurrency(loanAnalytics.summary.outstandingBalance)}
+              icon={FileBarChart}
+              accent="bg-violet-500"
+              iconTone="bg-violet-50 text-violet-600"
+              footer={{ text: `${loanAnalytics.summary.collectionRate}% collection performance` }}
+            />
+          </div>
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.9fr_1.1fr]">
             <div className="card-padded min-h-[380px]">
               <SectionHeader
@@ -1451,60 +1473,60 @@ const AdminReports = () => {
             />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left">
-              <thead className="table-head">
+              <table className="w-full min-w-[760px] text-left">
+                <thead className="table-head">
                   <tr>
                     <th className="px-6 py-4">Transfer</th>
                     <th className="px-6 py-4">Route</th>
                     <th className="px-6 py-4">Amount</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {highValuePagination.pageRows.map((transaction) => (
-                  <tr key={transaction.id} className="table-row">
-                    <td className="px-6 py-4">
-                      <p className="font-semibold text-slate-900">{transaction.id}</p>
-                      <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
-                        {transaction.type || "transfer"}
-                      </p>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="space-y-2">
-                        <div>
-                          <p className="text-xs font-bold uppercase text-slate-500">From</p>
-                          <p className="font-semibold text-slate-900">{transaction.sender}</p>
-                          <p className="text-sm text-slate-500">
-                            {transaction.fromAccountDisplay}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-bank-surface px-3 py-2">
-                          <p className="text-xs font-bold uppercase text-slate-500">To</p>
-                          <p className="mt-1 font-semibold text-slate-900">{transaction.receiver}</p>
-                          <p className="text-sm text-slate-500">
-                            {transaction.toAccountDisplay}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-bold">{formatCurrency(transaction.amount)}</td>
-                    <td className="px-6 py-4">
-                      <StatusBadge status={transaction.status} />
-                    </td>
-                    <td className="px-6 py-4">{transaction.date || "Recently"}</td>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Date</th>
                   </tr>
-                ))}
-                {reportData.highValueTransfers.length === 0 && (
-                  <EmptyTableRow colSpan={5} message="No transfer records match the selected period." />
-                )}
-              </tbody>
-            </table>
-            <TablePagination {...highValuePagination} />
-          </div>
-        </section>
+                </thead>
+                <tbody>
+                  {highValuePagination.pageRows.map((transaction) => (
+                    <tr key={transaction.id} className="table-row">
+                      <td className="px-6 py-4">
+                        <p className="font-semibold text-slate-900">{transaction.id}</p>
+                        <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                          {transaction.type || "transfer"}
+                        </p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="space-y-2">
+                          <div>
+                            <p className="text-xs font-bold uppercase text-slate-500">From</p>
+                            <p className="font-semibold text-slate-900">{transaction.sender}</p>
+                            <p className="text-sm text-slate-500">
+                              {transaction.fromAccountDisplay}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-bank-surface px-3 py-2">
+                            <p className="text-xs font-bold uppercase text-slate-500">To</p>
+                            <p className="mt-1 font-semibold text-slate-900">{transaction.receiver}</p>
+                            <p className="text-sm text-slate-500">
+                              {transaction.toAccountDisplay}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 font-bold">{formatCurrency(transaction.amount)}</td>
+                      <td className="px-6 py-4">
+                        <StatusBadge status={transaction.status} />
+                      </td>
+                      <td className="px-6 py-4">{transaction.date || "Recently"}</td>
+                    </tr>
+                  ))}
+                  {reportData.highValueTransfers.length === 0 && (
+                    <EmptyTableRow colSpan={5} message="No transfer records match the selected period." />
+                  )}
+                </tbody>
+              </table>
+              <TablePagination {...highValuePagination} />
+            </div>
+          </section>
 
-        <section id="overdraft" className="grid scroll-mt-8 grid-cols-1 gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <section id="overdraft" className="scroll-mt-8 space-y-6">
           <div className="card-padded min-h-[370px]">
             <SectionHeader
               icon={Wallet}
@@ -1630,7 +1652,7 @@ const AdminReports = () => {
         </section>
 
         <section id="approvals" className="scroll-mt-8">
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+          <div className="space-y-6">
             <div className="card-padded min-h-[360px]">
               <SectionHeader
                 icon={Clock3}
