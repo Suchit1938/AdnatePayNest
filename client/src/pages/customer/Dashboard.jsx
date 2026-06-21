@@ -84,20 +84,17 @@ const Dashboard = () => {
   };
 
   const primaryAccount = accounts[0];
+  const customerMasterColor = "oklch(0.32 0.17 287.7)";
 
   // Dynamic Tier Card Colors
   const tier = (user?.classification || "standard").toLowerCase();
-  let cardBg = "from-sky-950 via-blue-900 to-blue-950 border-blue-800/30 text-white shadow-xl shadow-blue-950/30";
   let tierLabel = "STANDARD TIER";
   
   if (tier === "platinum") {
-    cardBg = "from-slate-950 via-indigo-950 to-slate-900 border-indigo-500/20 text-white shadow-xl shadow-indigo-950/30";
     tierLabel = "PLATINUM TIER";
   } else if (tier === "gold") {
-    cardBg = "from-yellow-950 via-amber-900 to-amber-950 border-amber-500/20 text-white shadow-xl shadow-amber-950/30";
     tierLabel = "GOLD TIER";
   } else if (tier === "silver") {
-    cardBg = "from-slate-900 via-slate-800 to-slate-900 border-slate-700 text-white shadow-xl shadow-slate-900/30";
     tierLabel = "SILVER TIER";
   }
 
@@ -127,7 +124,12 @@ const Dashboard = () => {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           {/* Virtual Card (Left) */}
           <div className="lg:col-span-1">
-            <div className={`relative h-60 w-full rounded-2xl bg-gradient-to-tr ${cardBg} p-6 flex flex-col justify-between shadow-lg overflow-hidden`}>
+            <div
+              className="relative flex h-60 w-full flex-col justify-between overflow-hidden rounded-2xl border border-white/10 p-6 text-white shadow-xl shadow-slate-950/25"
+              style={{
+                background: `linear-gradient(135deg, #1d2c4c 0%, #45659f 48%, ${customerMasterColor} 100%)`,
+              }}
+            >
               {/* Card Decorative background overlay */}
               <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-white/5 blur-3xl -mr-16 -mt-16 pointer-events-none" />
               <div className="absolute left-0 bottom-0 h-32 w-32 rounded-full bg-white/5 blur-2xl -ml-16 -mb-16 pointer-events-none" />
