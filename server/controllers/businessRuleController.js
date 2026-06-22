@@ -8,6 +8,7 @@ const {
   DEFAULT_LOAN_DECISION_BANDS,
   DEFAULT_LOAN_SCORE_WEIGHTS,
   DEFAULT_LOAN_TYPE_RULES,
+  DEFAULT_PART_PAYMENT_POLICY,
   normalizeLoanRules,
 } = require('../utils/loanRules');
 const { writeSystemLog } = require('../utils/systemLog');
@@ -41,6 +42,7 @@ const getBusinessRuleConfig = async () => {
           scoreWeights: DEFAULT_LOAN_SCORE_WEIGHTS,
           decisionBands: DEFAULT_LOAN_DECISION_BANDS,
           classificationBenefits: DEFAULT_CLASSIFICATION_BENEFITS,
+          partPaymentPolicy: DEFAULT_PART_PAYMENT_POLICY,
         },
       },
     },
@@ -133,6 +135,23 @@ const updateBusinessRules = async (req, res) => {
     }),
     {}
   );
+  const incomingPartPaymentPolicy = incomingLoanRules.partPaymentPolicy || {};
+  const nextPartPaymentPolicy = {
+    enabled: incomingPartPaymentPolicy.enabled !== false,
+    minimumAmount: Math.max(0, Number(
+      incomingPartPaymentPolicy.minimumAmount ?? currentLoanRules.partPaymentPolicy.minimumAmount
+    )),
+    minimumPrincipalPercentage: Math.min(100, Math.max(0, Number(
+      incomingPartPaymentPolicy.minimumPrincipalPercentage ??
+        currentLoanRules.partPaymentPolicy.minimumPrincipalPercentage
+    ))),
+    lockInMonths: Math.max(0, Math.round(Number(
+      incomingPartPaymentPolicy.lockInMonths ?? currentLoanRules.partPaymentPolicy.lockInMonths
+    ))),
+    chargePercentage: Math.min(100, Math.max(0, Number(
+      incomingPartPaymentPolicy.chargePercentage ?? currentLoanRules.partPaymentPolicy.chargePercentage
+    ))),
+  };
 
   const config = await BusinessRuleConfig.findOneAndUpdate(
     { key: 'global' },
@@ -144,6 +163,7 @@ const updateBusinessRules = async (req, res) => {
           scoreWeights: nextScoreWeights,
           decisionBands: nextDecisionBands,
           classificationBenefits: nextClassificationBenefits,
+          partPaymentPolicy: nextPartPaymentPolicy,
         },
         updatedBy: req.user._id,
         updatedByName: req.user.name,
@@ -154,7 +174,7 @@ const updateBusinessRules = async (req, res) => {
 
   await writeSystemLog({
     action: 'business.rules.updated',
-    message: `${req.user.name} updated manager tier-edit permissions.`,
+    message: `${req.user.name} updated business permissions and loan policy rules.`,
     actor: req.user._id,
     actorName: req.user.name,
     entityType: 'BusinessRuleConfig',
@@ -167,6 +187,7 @@ const updateBusinessRules = async (req, res) => {
         scoreWeights: nextScoreWeights,
         decisionBands: nextDecisionBands,
         classificationBenefits: nextClassificationBenefits,
+        partPaymentPolicy: nextPartPaymentPolicy,
       },
     },
   });

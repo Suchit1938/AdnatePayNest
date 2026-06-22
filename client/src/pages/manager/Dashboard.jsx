@@ -3371,6 +3371,7 @@ function ManagerDashboard() {
                             <p><span className="font-bold text-slate-500">Type:</span> {loan.loanTypeLabel}</p>
                             <p><span className="font-bold text-slate-500">Amount:</span> {formatCurrency(loan.amount)}</p>
                             <p><span className="font-bold text-slate-500">Tenure:</span> {loan.tenureMonths} months</p>
+                            <p><span className="font-bold text-slate-500">EMIs Remaining:</span> {loan.remainingTenureMonths ?? 0}</p>
                             <p><span className="font-bold text-slate-500">EMI:</span> {formatCurrency(loan.emiAmount)}</p>
                             <p><span className="font-bold text-slate-500">Total Repayment:</span> {formatCurrency(loan.totalRepayment)}</p>
                             <p><span className="font-bold text-slate-500">Outstanding:</span> {formatCurrency(loan.outstandingPrincipal ?? 0)}</p>
@@ -3512,19 +3513,22 @@ function ManagerDashboard() {
                         <div className="rounded-xl border border-bank-card-border bg-white p-4">
                           <p className="font-bold text-slate-950">Repayment History</p>
                           <div className="mt-3 max-h-80 overflow-auto rounded-lg border border-slate-100">
-                            <table className="w-full min-w-[560px] text-left text-sm">
+                            <table className="w-full min-w-[760px] text-left text-sm">
                               <thead className="table-head">
                                 <tr>
                                   <th className="px-3 py-2">Date</th>
                                   <th className="px-3 py-2">Type</th>
-                                  <th className="px-3 py-2">Amount</th>
+                                  <th className="px-3 py-2">Principal</th>
+                                  <th className="px-3 py-2">Charge</th>
+                                  <th className="px-3 py-2">Impact</th>
                                   <th className="px-3 py-2">Status</th>
+                                  <th className="px-3 py-2">Receipt</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {(loan.repaymentHistory || []).length === 0 ? (
                                   <tr className="table-row">
-                                    <td colSpan={4} className="px-3 py-3 text-sm font-semibold text-slate-500">
+                                    <td colSpan={7} className="px-3 py-3 text-sm font-semibold text-slate-500">
                                       No repayment activity yet.
                                     </td>
                                   </tr>
@@ -3534,7 +3538,30 @@ function ManagerDashboard() {
                                       <td className="px-3 py-2">{entry.paidAt ? formatDateTime(entry.paidAt) : "Not set"}</td>
                                       <td className="px-3 py-2 font-bold">{formatStatusLabel(entry.paymentType)}</td>
                                       <td className="px-3 py-2">{formatCurrency(entry.amount)}</td>
+                                      <td className="px-3 py-2">{formatCurrency(entry.partPaymentCharge || 0)}</td>
+                                      <td className="px-3 py-2">
+                                        {entry.repaymentImpact === "reduce_tenure"
+                                          ? `${entry.previousRemainingTenure} to ${entry.revisedRemainingTenure} EMIs`
+                                          : entry.repaymentImpact === "reduce_emi"
+                                            ? `${formatCurrency(entry.previousEmiAmount)} to ${formatCurrency(entry.revisedEmiAmount)}`
+                                            : "-"}
+                                      </td>
                                       <td className="px-3 py-2">{formatStatusLabel(entry.status)}</td>
+                                      <td className="px-3 py-2">
+                                        {entry.receiptFileUrl ? (
+                                          <a
+                                            href={getUploadUrl(entry.receiptFileUrl)}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="btn-secondary justify-center px-3 py-2 text-xs"
+                                          >
+                                            <FileText size={14} />
+                                            View
+                                          </a>
+                                        ) : (
+                                          <span className="text-slate-400">-</span>
+                                        )}
+                                      </td>
                                     </tr>
                                   ))
                                 )}

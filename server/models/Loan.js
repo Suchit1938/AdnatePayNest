@@ -87,6 +87,58 @@ const repaymentHistorySchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    repaymentImpact: {
+      type: String,
+      enum: ['reduce_emi', 'reduce_tenure'],
+    },
+    previousEmiAmount: {
+      type: Number,
+      min: 0,
+    },
+    revisedEmiAmount: {
+      type: Number,
+      min: 0,
+    },
+    previousRemainingTenure: {
+      type: Number,
+      min: 0,
+    },
+    revisedRemainingTenure: {
+      type: Number,
+      min: 0,
+    },
+    projectedInterestSaved: {
+      type: Number,
+      min: 0,
+    },
+    partPaymentCharge: {
+      type: Number,
+      min: 0,
+    },
+    totalDebited: {
+      type: Number,
+      min: 0,
+    },
+    policySnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+    },
+    receiptFileName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    receiptFileUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    receiptFilePath: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    receiptGeneratedAt: Date,
     paidAt: {
       type: Date,
       default: Date.now,

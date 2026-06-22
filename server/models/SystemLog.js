@@ -21,6 +21,10 @@ const systemLogSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    recipient: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
     entityType: {
       type: String,
       trim: true,

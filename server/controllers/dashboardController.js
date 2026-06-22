@@ -331,6 +331,14 @@ const getAdminLoanAnalytics = async (req, res) => {
       interestPaid: toWholeRupees(entry.interestPaid),
       penaltyPaid: toWholeRupees(entry.penaltyPaid),
       foreclosureFeePaid: toWholeRupees(entry.foreclosureFeePaid),
+      partPaymentCharge: toWholeRupees(entry.partPaymentCharge),
+      totalDebited: toWholeRupees(entry.totalDebited),
+      repaymentImpact: entry.repaymentImpact || '',
+      previousEmiAmount: toWholeRupees(entry.previousEmiAmount),
+      revisedEmiAmount: toWholeRupees(entry.revisedEmiAmount),
+      previousRemainingTenure: toWholeRupees(entry.previousRemainingTenure),
+      revisedRemainingTenure: toWholeRupees(entry.revisedRemainingTenure),
+      receiptFileUrl: entry.receiptFileUrl || '',
       status: entry.status,
       transactionId: entry.transactionId || '',
       accountNumber: entry.accountNumber || '',
@@ -481,6 +489,10 @@ const getManagerDashboard = async (req, res) => {
             },
             actor: req.user._id,
           },
+          {
+            action: 'loan.part_payment.manager',
+            recipient: req.user._id,
+          },
         ],
       })
         .sort({ createdAt: -1 })
@@ -616,6 +628,8 @@ const getManagerDashboard = async (req, res) => {
       customer: customer?.name || transaction.senderName,
       type: transaction.type,
       amount: transaction.amount,
+      principalAmount: transaction.principalAmount || 0,
+      feeAmount: transaction.feeAmount || 0,
       status: transaction.status,
       createdAt: transaction.createdAt,
     };
@@ -725,10 +739,12 @@ const getManagerDashboard = async (req, res) => {
     })),
     notifications: notificationLogs.map((log) => ({
       id: log._id,
-      title: log.action
-        .split('.')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' '),
+      title: log.action === 'loan.part_payment.manager'
+        ? 'Customer Part-Payment'
+        : log.action
+          .split('.')
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' '),
       message: log.message,
       type: log.severity,
       action: log.action,

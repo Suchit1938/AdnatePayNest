@@ -179,6 +179,38 @@ const classificationBenefitsSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const partPaymentPolicySchema = new mongoose.Schema(
+  {
+    enabled: {
+      type: Boolean,
+      default: true,
+    },
+    minimumAmount: {
+      type: Number,
+      default: 1000,
+      min: 0,
+    },
+    minimumPrincipalPercentage: {
+      type: Number,
+      default: 1,
+      min: 0,
+      max: 100,
+    },
+    lockInMonths: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    chargePercentage: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+    },
+  },
+  { _id: false }
+);
+
 const businessRuleConfigSchema = new mongoose.Schema(
   {
     key: {
@@ -206,6 +238,10 @@ const businessRuleConfigSchema = new mongoose.Schema(
       },
       classificationBenefits: {
         type: classificationBenefitsSchema,
+        default: () => ({}),
+      },
+      partPaymentPolicy: {
+        type: partPaymentPolicySchema,
         default: () => ({}),
       },
     },

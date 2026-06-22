@@ -25,6 +25,7 @@ const {
 } = require('../utils/bankSettlementAccount');
 
 const toNumber = (value) => Number(value || 0);
+const pdfMoney = (value) => `INR ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
 const money = (value) => `₹ ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
 const MISSED_EMI_FIXED_PENALTY = 500;
 const MISSED_EMI_PENALTY_RATE = 0.02;
@@ -34,6 +35,7 @@ const EMI_GRACE_PERIOD_DAYS = 5;
 const SANCTION_LETTER_DIR = path.join(__dirname, '..', 'uploads', 'sanction-letters');
 const LOAN_AGREEMENT_DIR = path.join(__dirname, '..', 'uploads', 'loan-agreements');
 const REPAYMENT_SCHEDULE_DIR = path.join(__dirname, '..', 'uploads', 'repayment-schedules');
+const PART_PAYMENT_RECEIPT_DIR = path.join(__dirname, '..', 'uploads', 'part-payment-receipts');
 
 const calculateMissedEmiPenalty = (emiAmount) =>
   Math.round(Math.max(MISSED_EMI_FIXED_PENALTY, toNumber(emiAmount) * MISSED_EMI_PENALTY_RATE));
@@ -98,6 +100,26 @@ const buildReducedTenureSchedule = ({
 
   return rows;
 };
+
+const sumScheduleField = (rows, field) =>
+  (rows || []).reduce((sum, row) => sum + toNumber(row[field]), 0);
+
+const buildReducedEmiSchedule = ({
+  principal,
+  annualInterestRate,
+  remainingInstallments,
+  startDate,
+  startingEmiNumber,
+}) =>
+  buildAmortizationSchedule({
+    principal,
+    annualInterestRate,
+    tenureMonths: remainingInstallments,
+    startDate,
+  }).map((row, index) => ({
+    ...row,
+    emiNumber: startingEmiNumber + index,
+  }));
 
 const getLoanOutstandingPrincipal = (loan) => {
   const paidPrincipal = (loan.repaymentHistory || []).reduce(
@@ -182,7 +204,7 @@ const getLoanTransactionMeta = ({ loan, title, subtitle = '', direction = 'debit
   displaySubtitle: subtitle,
 });
 
-const addPdfFooter = (doc, loan) => {
+const addPdfFooter = (doc, loan, documentTitle = 'Loan Sanction Letter') => {
   const bottom = doc.page.height - 54;
 
   doc
@@ -195,13 +217,13 @@ const addPdfFooter = (doc, loan) => {
     .font('Helvetica')
     .fontSize(8)
     .fillColor('#64748b')
-    .text(`AdnatePayNest Loan Sanction Letter - ${loan.loanId}`, 42, bottom, {
+    .text(`AdnatePayNest ${documentTitle} - ${loan.loanId}`, 42, bottom, {
       width: doc.page.width - 84,
       align: 'center',
     });
 };
 
-const drawSanctionHeader = (doc, loan) => {
+const drawSanctionHeader = (doc, loan, documentTitle = 'LOAN SANCTION LETTER') => {
   doc.rect(0, 0, doc.page.width, 112).fill('#0f3a5f');
   doc.circle(64, 52, 24).fill('#ffffff');
   doc
@@ -223,7 +245,7 @@ const drawSanctionHeader = (doc, loan) => {
     .font('Helvetica-Bold')
     .fontSize(11)
     .fillColor('#ffffff')
-    .text('LOAN SANCTION LETTER', 392, 34, { width: 150, align: 'right' });
+    .text(documentTitle, 362, 34, { width: 180, align: 'right' });
   doc
     .font('Helvetica')
     .fontSize(9)
@@ -557,7 +579,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
     doc.on('error', reject);
     doc.pipe(stream);
 
-    drawSanctionHeader(doc, loan);
+    drawSanctionHeader(doc, loan, 'LOAN AGREEMENT');
     doc
       .fillColor('#0f172a')
       .font('Helvetica-Bold')
@@ -620,7 +642,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
     });
 
     doc.addPage();
-    drawSanctionHeader(doc, loan);
+    drawSanctionHeader(doc, loan, 'LOAN AGREEMENT');
     y = 138;
 
     const clauses = [
@@ -657,7 +679,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
     clauses.forEach(([title, body], index) => {
       if (y > 660) {
         doc.addPage();
-        drawSanctionHeader(doc, loan);
+        drawSanctionHeader(doc, loan, 'LOAN AGREEMENT');
         y = 138;
       }
       y = drawAgreementClause(doc, index + 4, title, body, 42, y, clauseWidth);
@@ -665,7 +687,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
 
     if (y > 560) {
       doc.addPage();
-      drawSanctionHeader(doc, loan);
+      drawSanctionHeader(doc, loan, 'LOAN AGREEMENT');
       y = 138;
     }
 
@@ -718,7 +740,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
     const pageRange = doc.bufferedPageRange();
     for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
       doc.switchToPage(i);
-      addPdfFooter(doc, loan);
+      addPdfFooter(doc, loan, 'Loan Agreement');
       doc
         .font('Helvetica')
         .fontSize(8)
@@ -834,7 +856,7 @@ const generateRepaymentSchedulePdf = (loan) =>
     doc.on('error', reject);
     doc.pipe(stream);
 
-    drawSanctionHeader(doc, loan);
+    drawSanctionHeader(doc, loan, 'REPAYMENT SCHEDULE');
     doc
       .fillColor('#0f172a')
       .font('Helvetica-Bold')
@@ -845,7 +867,7 @@ const generateRepaymentSchedulePdf = (loan) =>
       .fontSize(9.5)
       .fillColor('#475569')
       .text(
-        'This schedule is generated at loan disbursement and records EMI due dates, principal and interest components, and projected outstanding balance.',
+        'This is the latest repayment schedule and records EMI due dates, principal and interest components, and projected outstanding balance.',
         42,
         164,
         { width: 510, lineGap: 4 }
@@ -858,6 +880,7 @@ const generateRepaymentSchedulePdf = (loan) =>
         { label: 'Name', value: customer.name },
         { label: 'Customer ID', value: customer.customerId },
         { label: 'Repayment Account', value: `${loan.disbursementAccountType || 'Account'} ${loan.disbursementAccountNumber || ''}`.trim() },
+        { label: 'Schedule Date', value: formatDate(generatedAt) },
       ],
       42,
       212,
@@ -870,17 +893,18 @@ const generateRepaymentSchedulePdf = (loan) =>
         { label: 'Loan ID', value: loan.loanId },
         { label: 'Loan Amount', value: money(loan.amount) },
         { label: 'Monthly EMI', value: money(loan.emiAmount) },
+        { label: 'EMIs Remaining', value: String(schedule.filter((row) => !['paid', 'foreclosed'].includes(row.status)).length) },
       ],
       304,
       212,
       248
     );
 
-    let y = drawRepaymentScheduleHeader(doc, 340);
+    let y = drawRepaymentScheduleHeader(doc, 360);
     schedule.forEach((row, index) => {
       if (y > 730) {
         doc.addPage();
-        drawSanctionHeader(doc, loan);
+        drawSanctionHeader(doc, loan, 'REPAYMENT SCHEDULE');
         doc
           .font('Helvetica-Bold')
           .fontSize(13)
@@ -903,7 +927,7 @@ const generateRepaymentSchedulePdf = (loan) =>
     const pageRange = doc.bufferedPageRange();
     for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
       doc.switchToPage(i);
-      addPdfFooter(doc, loan);
+      addPdfFooter(doc, loan, 'Repayment Schedule');
       doc
         .font('Helvetica')
         .fontSize(8)
@@ -917,14 +941,14 @@ const generateRepaymentSchedulePdf = (loan) =>
     doc.end();
   });
 
-const generateAndSendRepaymentSchedule = async (loan) => {
+const generateAndSendRepaymentSchedule = async (loan, emailContent = {}) => {
   const pdf = await generateRepaymentSchedulePdf(loan);
   const emailResult = loan.customer?.email
     ? await sendEmail({
       to: loan.customer.email,
-      subject: `Repayment schedule for loan ${loan.loanId}`,
-      text: `Your repayment schedule for loan ${loan.loanId} is attached.`,
-      html: `<p>Your repayment schedule for loan <strong>${loan.loanId}</strong> is attached.</p>`,
+      subject: emailContent.subject || `Repayment schedule for loan ${loan.loanId}`,
+      text: emailContent.text || `Your repayment schedule for loan ${loan.loanId} is attached.`,
+      html: emailContent.html || `<p>Your repayment schedule for loan <strong>${loan.loanId}</strong> is attached.</p>`,
       attachments: [
         {
           filename: pdf.fileName,
@@ -946,6 +970,175 @@ const generateAndSendRepaymentSchedule = async (loan) => {
   };
 
   return emailResult;
+};
+
+const generatePartPaymentReceiptPdf = ({ loan, transaction, recalculation }) =>
+  new Promise((resolve, reject) => {
+    fs.mkdirSync(PART_PAYMENT_RECEIPT_DIR, { recursive: true });
+
+    const fileName = `${loan.loanId}-${transaction.transactionId}-part-payment-receipt.pdf`;
+    const filePath = path.join(PART_PAYMENT_RECEIPT_DIR, fileName);
+    const doc = new PDFDocument({ size: 'A4', margin: 42, bufferPages: true });
+    const stream = fs.createWriteStream(filePath);
+    const generatedAt = new Date();
+    const customer = loan.customer || {};
+
+    stream.on('finish', () => resolve({
+      fileName,
+      filePath,
+      fileUrl: `/uploads/part-payment-receipts/${fileName}`,
+      generatedAt,
+    }));
+    stream.on('error', reject);
+    doc.on('error', reject);
+    doc.pipe(stream);
+
+    drawSanctionHeader(doc, loan, 'PART-PAYMENT RECEIPT');
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(17)
+      .fillColor('#0f172a')
+      .text('Official Part-Payment Receipt', 42, 138);
+    doc
+      .roundedRect(442, 136, 110, 24, 6)
+      .fill('#dcfce7')
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#166534')
+      .text('PAYMENT POSTED', 450, 144, { width: 94, align: 'center' });
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#475569')
+      .text('This receipt confirms that the payment below was credited to the loan account and the future repayment schedule was recalculated.', 42, 168, {
+        width: 510,
+        lineGap: 4,
+      });
+
+    drawInfoCard(doc, 'Borrower', [
+      { label: 'Name', value: customer.name },
+      { label: 'Customer ID', value: customer.customerId },
+      { label: 'Loan ID', value: loan.loanId },
+    ], 42, 214, 238);
+    drawInfoCard(doc, 'Payment Reference', [
+      { label: 'Transaction ID', value: transaction.transactionId },
+      { label: 'Payment Date', value: formatDate(transaction.createdAt || generatedAt) },
+      { label: 'Debit Account', value: transaction.fromAccountNumber },
+    ], 304, 214, 248);
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(11)
+      .fillColor('#0f172a')
+      .text('Payment Allocation', 42, 330);
+
+    const allocationRows = [
+      ['Principal part-payment', pdfMoney(recalculation.principalPaid)],
+      ['Part-payment charge', pdfMoney(recalculation.partPaymentCharge)],
+      ['Total debited', pdfMoney(recalculation.totalDebited)],
+      ['Revised outstanding principal', pdfMoney(recalculation.outstandingPrincipal)],
+    ];
+    allocationRows.forEach(([label, value], index) => {
+      const y = 352 + index * 30;
+      doc.rect(42, y, 510, 30).fillAndStroke(index === 2 ? '#eff6ff' : '#ffffff', '#dbe3ef');
+      doc
+        .font(index === 2 ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(9)
+        .fillColor('#334155')
+        .text(label, 54, y + 10, { width: 300 });
+      doc
+        .font('Helvetica-Bold')
+        .fillColor(index === 2 ? '#1d4ed8' : '#0f172a')
+        .text(value, 382, y + 10, { width: 158, align: 'right' });
+    });
+
+    const impactLabel = recalculation.repaymentImpact === 'reduce_tenure'
+      ? 'SHORTER TENURE'
+      : 'LOWER EMI';
+    const impactDetail = recalculation.repaymentImpact === 'reduce_tenure'
+      ? `Remaining installments changed from ${recalculation.previousRemainingTenure} to ${recalculation.revisedRemainingTenure}. The regular EMI remains ${pdfMoney(recalculation.revisedEmiAmount)} except for the final adjustment.`
+      : `Regular EMI changed from ${pdfMoney(recalculation.previousEmiAmount)} to ${pdfMoney(recalculation.revisedEmiAmount)}. The remaining installment count stays at ${recalculation.revisedRemainingTenure}.`;
+
+    doc.roundedRect(42, 492, 510, 102, 8).fillAndStroke('#f8fafc', '#cbd5e1');
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(8.5)
+      .fillColor('#2563eb')
+      .text(`REPAYMENT IMPACT: ${impactLabel}`, 58, 508);
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#334155')
+      .text(impactDetail, 58, 530, { width: 478, lineGap: 4 });
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#166534')
+      .text(`Projected future interest saved: ${pdfMoney(recalculation.projectedInterestSaved)}`, 58, 572, {
+        width: 478,
+      });
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(10)
+      .fillColor('#0f172a')
+      .text('Important', 42, 620);
+    doc
+      .font('Helvetica')
+      .fontSize(8.8)
+      .fillColor('#475569')
+      .text('This receipt does not replace the original sanction letter or loan agreement. The revised repayment schedule governs future EMI collection from the next due installment. Previously paid installments remain unchanged.', 42, 640, {
+        width: 510,
+        lineGap: 4,
+      });
+
+    addPdfFooter(doc, loan, 'Part-Payment Receipt');
+    doc.end();
+  });
+
+const generatePartPaymentDocuments = async ({ loan, transaction, recalculation }) => {
+  const [schedulePdf, receiptPdf] = await Promise.all([
+    generateRepaymentSchedulePdf(loan),
+    generatePartPaymentReceiptPdf({ loan, transaction, recalculation }),
+  ]);
+  const impactText = recalculation.repaymentImpact === 'reduce_tenure'
+    ? `The remaining tenure changed from ${recalculation.previousRemainingTenure} to ${recalculation.revisedRemainingTenure} months.`
+    : `The EMI changed from ${money(recalculation.previousEmiAmount)} to ${money(recalculation.revisedEmiAmount)}.`;
+  const emailResult = loan.customer?.email
+    ? await sendEmail({
+      to: loan.customer.email,
+      subject: `Part-payment receipt and revised schedule for loan ${loan.loanId}`,
+      text: `Your principal part-payment of ${money(recalculation.principalPaid)} was posted. ${impactText} Total debited: ${money(recalculation.totalDebited)}. The receipt and revised schedule are attached.`,
+      html: `<p>Your principal part-payment of <strong>${money(recalculation.principalPaid)}</strong> was posted for loan <strong>${loan.loanId}</strong>.</p><p>${impactText}</p><p>Total debited: <strong>${money(recalculation.totalDebited)}</strong>.</p><p>Your official receipt and revised repayment schedule are attached.</p>`,
+      attachments: [
+        { filename: receiptPdf.fileName, path: receiptPdf.filePath },
+        { filename: schedulePdf.fileName, path: schedulePdf.filePath },
+      ],
+    })
+    : { sent: false, message: 'Customer email is not available.' };
+
+  loan.repaymentScheduleDocument = {
+    ...(loan.repaymentScheduleDocument || {}),
+    status: emailResult?.sent ? 'sent' : 'generated',
+    fileName: schedulePdf.fileName,
+    fileUrl: schedulePdf.fileUrl,
+    filePath: schedulePdf.filePath,
+    generatedAt: schedulePdf.generatedAt,
+    sentAt: emailResult?.sent ? new Date() : undefined,
+    emailStatus: emailResult?.sent ? 'sent' : emailResult?.message || 'Email not configured',
+  };
+
+  const historyEntry = [...(loan.repaymentHistory || [])]
+    .reverse()
+    .find((entry) => entry.transactionId === transaction.transactionId);
+  if (historyEntry) {
+    historyEntry.receiptFileName = receiptPdf.fileName;
+    historyEntry.receiptFileUrl = receiptPdf.fileUrl;
+    historyEntry.receiptFilePath = receiptPdf.filePath;
+    historyEntry.receiptGeneratedAt = receiptPdf.generatedAt;
+  }
+
+  return { receiptPdf, schedulePdf, emailResult };
 };
 
 const getRecommendation = (score, decisionBands) => {
@@ -1092,6 +1285,17 @@ const serializeLoan = (loan, activeLoanCount = loan.eligibilityDetails?.activeLo
   emiAmount: loan.emiAmount,
   totalInterest: loan.totalInterest,
   totalRepayment: loan.totalRepayment,
+  remainingTenureMonths: (loan.amortizationSchedule || []).filter((row) =>
+    !['paid', 'foreclosed'].includes(row.status)
+  ).length,
+  remainingInterest: sumScheduleField(
+    (loan.amortizationSchedule || []).filter((row) => !['paid', 'foreclosed'].includes(row.status)),
+    'interestComponent'
+  ),
+  remainingRepayment: sumScheduleField(
+    (loan.amortizationSchedule || []).filter((row) => !['paid', 'foreclosed'].includes(row.status)),
+    'emiAmount'
+  ),
   outstandingPrincipal: getLoanOutstandingPrincipal(loan),
   accruedInterest: getTotalAccruedInterest(loan),
   accruedPenalty: loan.accruedPenalty || 0,
@@ -2624,6 +2828,9 @@ const forecloseLoan = async (req, res) => {
 const makePartPayment = async (req, res) => {
   const paymentAccountNumber = String(req.body.paymentAccountNumber || '').trim();
   const amount = Math.round(toNumber(req.body.amount));
+  const repaymentImpact = ['reduce_emi', 'reduce_tenure'].includes(req.body.repaymentImpact)
+    ? req.body.repaymentImpact
+    : 'reduce_emi';
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -2639,10 +2846,40 @@ const makePartPayment = async (req, res) => {
     }
     if (amount <= 0) throw new Error('Enter a valid part-payment amount');
 
+    const config = await getBusinessRuleConfig();
+    const partPaymentPolicy = normalizeLoanRules(config.loanRules).partPaymentPolicy;
+    if (!partPaymentPolicy.enabled) {
+      throw new Error('Part-payment is currently disabled by bank policy');
+    }
+
+    const lockInEndsAt = addMonths(loan.disbursedAt || loan.createdAt, partPaymentPolicy.lockInMonths);
+    if (partPaymentPolicy.lockInMonths > 0 && new Date() < lockInEndsAt) {
+      throw new Error(`Part-payment is available after ${formatDate(lockInEndsAt)}`);
+    }
+
+    const delinquentRows = (loan.amortizationSchedule || []).filter((row) =>
+      ['overdue', 'missed', 'part_paid'].includes(row.status)
+    );
+    if (delinquentRows.length > 0 || toNumber(loan.accruedPenalty) > 0) {
+      throw new Error('Clear overdue EMIs and penalties before making a part-payment');
+    }
+
     const outstandingPrincipal = getLoanOutstandingPrincipal(loan);
+    const accruedInterestAtPayment = getTotalAccruedInterest(loan);
     if (amount >= outstandingPrincipal) {
       throw new Error('Use foreclosure to clear the full outstanding principal');
     }
+    const minimumPartPayment = Math.max(
+      Math.round(toNumber(partPaymentPolicy.minimumAmount)),
+      Math.ceil(outstandingPrincipal * toNumber(partPaymentPolicy.minimumPrincipalPercentage) / 100)
+    );
+    if (amount < minimumPartPayment) {
+      throw new Error(`Minimum part-payment for this loan is ${money(minimumPartPayment)}`);
+    }
+    const partPaymentCharge = Math.round(
+      amount * toNumber(partPaymentPolicy.chargePercentage) / 100
+    );
+    const totalDebited = amount + partPaymentCharge;
 
     const customer = await User.findById(req.user._id).session(session);
     if (!customer) throw new Error('Customer not found');
@@ -2659,14 +2896,14 @@ const makePartPayment = async (req, res) => {
       bankAccounts[0];
 
     if (!paymentAccount) throw new Error('Active payment account not found');
-    if (toNumber(paymentAccount.walletBalance) < amount) {
-      throw new Error('Insufficient balance for this part-payment');
+    if (toNumber(paymentAccount.walletBalance) < totalDebited) {
+      throw new Error(`Insufficient balance. Total payable is ${money(totalDebited)}`);
     }
 
-    paymentAccount.walletBalance = toNumber(paymentAccount.walletBalance) - amount;
+    paymentAccount.walletBalance = toNumber(paymentAccount.walletBalance) - totalDebited;
     paymentAccount.availableBalance = paymentAccount.walletBalance;
     await paymentAccount.save({ session });
-    await creditBankSettlement(amount, { session });
+    await creditBankSettlement(totalDebited, { session });
 
     const [transaction] = await Transaction.create(
       [
@@ -2678,14 +2915,16 @@ const makePartPayment = async (req, res) => {
           receiverType: 'bank',
           fromAccountNumber: paymentAccount.accountNumber,
           toAccountNumber: loan.loanId,
-          amount,
-          remarks: `Part-payment for loan ${loan.loanId}`,
+          amount: totalDebited,
+          principalAmount: amount,
+          feeAmount: partPaymentCharge,
+          remarks: `Part-payment for loan ${loan.loanId}; principal ${money(amount)}; charge ${money(partPaymentCharge)}`,
           status: 'success',
           type: 'loan-part-payment',
           ...getLoanTransactionMeta({
             loan,
             title: `Loan part-payment for loan ${loan.loanId}`,
-            subtitle: `${money(amount)} reduced outstanding principal`,
+            subtitle: `${money(amount)} principal + ${money(partPaymentCharge)} charge`,
           }),
         },
       ],
@@ -2693,20 +2932,59 @@ const makePartPayment = async (req, res) => {
     );
 
     const paidRows = loan.amortizationSchedule.filter((row) => row.status === 'paid');
+    const futureRows = loan.amortizationSchedule.filter((row) => row.status !== 'paid');
     const nextDueDate =
       loan.amortizationSchedule.find((row) => row.status !== 'paid')?.dueDate || new Date();
     const nextOutstandingPrincipal = Math.max(0, outstandingPrincipal - amount);
-    const rebuiltRows = buildReducedTenureSchedule({
-      principal: nextOutstandingPrincipal,
-      annualInterestRate: loan.annualInterestRate,
-      emiAmount: loan.emiAmount,
-      startDate: addMonths(nextDueDate, -1),
-      startingEmiNumber: paidRows.length + 1,
-    });
+    const previousEmiAmount = toNumber(futureRows[0]?.emiAmount || loan.emiAmount);
+    const previousRemainingTenure = futureRows.length;
+    const previousFutureInterest = sumScheduleField(futureRows, 'interestComponent');
+    const scheduleStartDate = addMonths(nextDueDate, -1);
+    const startingEmiNumber = paidRows.length + 1;
+    const rebuiltRows = repaymentImpact === 'reduce_tenure'
+      ? buildReducedTenureSchedule({
+        principal: nextOutstandingPrincipal,
+        annualInterestRate: loan.annualInterestRate,
+        emiAmount: previousEmiAmount,
+        startDate: scheduleStartDate,
+        startingEmiNumber,
+      })
+      : buildReducedEmiSchedule({
+        principal: nextOutstandingPrincipal,
+        annualInterestRate: loan.annualInterestRate,
+        remainingInstallments: previousRemainingTenure,
+        startDate: scheduleStartDate,
+        startingEmiNumber,
+      });
+    const revisedEmiAmount = toNumber(rebuiltRows[0]?.emiAmount);
+    const revisedRemainingTenure = rebuiltRows.length;
+    const revisedFutureInterest = sumScheduleField(rebuiltRows, 'interestComponent');
+    const projectedInterestSaved = Math.max(0, previousFutureInterest - revisedFutureInterest);
+    const interestPaid = (loan.repaymentHistory || []).reduce(
+      (sum, entry) => sum + toNumber(entry.status === 'success' ? entry.interestPaid : 0),
+      0
+    );
+    const recalculation = {
+      repaymentImpact,
+      principalPaid: amount,
+      partPaymentCharge,
+      totalDebited,
+      outstandingPrincipal: nextOutstandingPrincipal,
+      previousEmiAmount,
+      revisedEmiAmount,
+      previousRemainingTenure,
+      revisedRemainingTenure,
+      projectedInterestSaved,
+      minimumPartPayment,
+      policySnapshot: { ...partPaymentPolicy },
+    };
 
     loan.outstandingPrincipal = nextOutstandingPrincipal;
+    loan.emiAmount = revisedEmiAmount;
+    loan.totalInterest = Math.max(0, interestPaid + revisedFutureInterest);
+    loan.totalRepayment = loan.amount + loan.totalInterest;
     loan.foreclosureFee = calculateForeclosureFee(nextOutstandingPrincipal);
-    loan.accruedInterest = getTotalAccruedInterest(loan);
+    loan.accruedInterest = accruedInterestAtPayment;
     loan.lastInterestCalculatedAt = new Date();
     loan.amortizationSchedule = [
       ...paidRows.map((row) => row.toObject?.() || row),
@@ -2719,7 +2997,18 @@ const makePartPayment = async (req, res) => {
       status: 'success',
       transactionId: transaction.transactionId,
       accountNumber: paymentAccount.accountNumber,
-      remarks: 'Part-payment reduced outstanding principal and future tenure.',
+      repaymentImpact,
+      previousEmiAmount,
+      revisedEmiAmount,
+      previousRemainingTenure,
+      revisedRemainingTenure,
+      projectedInterestSaved,
+      partPaymentCharge,
+      totalDebited,
+      policySnapshot: { ...partPaymentPolicy },
+      remarks: repaymentImpact === 'reduce_tenure'
+        ? 'Part-payment reduced outstanding principal and shortened the remaining tenure.'
+        : 'Part-payment reduced outstanding principal and lowered future EMIs.',
     });
     await loan.save({ session });
 
@@ -2736,30 +3025,65 @@ const makePartPayment = async (req, res) => {
           loanId: loan.loanId,
           transactionId: transaction.transactionId,
           amount,
+          partPaymentCharge,
+          totalDebited,
           outstandingPrincipal: nextOutstandingPrincipal,
+          repaymentImpact,
+          previousEmiAmount,
+          revisedEmiAmount,
+          previousRemainingTenure,
+          revisedRemainingTenure,
+          projectedInterestSaved,
         },
       },
       { session }
     );
 
-    await sendLoanEmail({
-      customer,
-      subject: `Part-payment posted for loan ${loan.loanId}`,
-      text: `Your part-payment of ${money(amount)} was posted. Outstanding principal: ${money(nextOutstandingPrincipal)}.`,
-      html: `<p>Your part-payment of <strong>${money(amount)}</strong> was posted for loan <strong>${loan.loanId}</strong>.</p><p>Outstanding principal: <strong>${money(nextOutstandingPrincipal)}</strong>.</p>`,
-    });
+    await writeSystemLog(
+      {
+        action: 'loan.part_payment.manager',
+        message: `${customer.name} posted ${money(amount)} principal part-payment on loan ${loan.loanId}.`,
+        actor: customer._id,
+        actorName: customer.name,
+        recipient: loan.assignedManager || loan.reviewedBy,
+        entityType: 'Loan',
+        entityId: loan.loanId,
+        severity: 'info',
+        metadata: {
+          loanId: loan.loanId,
+          customerName: customer.name,
+          transactionId: transaction.transactionId,
+          ...recalculation,
+        },
+      },
+      { session }
+    );
 
     await syncCustomerAccounts(customer, { session });
     await session.commitTransaction();
 
     const responseLoan = await Loan.findById(loan._id)
-      .populate('customer', 'name customerId classification accounts account')
+      .populate('customer', 'name customerId email classification accounts account')
       .populate('reviewedBy', 'name');
 
+    try {
+      await generatePartPaymentDocuments({
+        loan: responseLoan,
+        transaction,
+        recalculation,
+      });
+      await responseLoan.save();
+    } catch (documentError) {
+      console.error('Part-payment document generation failed:', documentError.message);
+    }
+
     res.json({
-      message: 'Part-payment posted successfully. Future schedule has been recalculated.',
+      message: repaymentImpact === 'reduce_tenure'
+        ? `Part-payment posted. Remaining tenure is now ${revisedRemainingTenure} months.`
+        : `Part-payment posted. Revised EMI is ${money(revisedEmiAmount)}.`,
       loan: await serializeLoanWithActiveLoanCount(responseLoan),
       transaction,
+      recalculation,
     });
   } catch (error) {
     await session.abortTransaction();
@@ -2775,6 +3099,7 @@ module.exports = {
   createLoan,
   disburseLoan,
   forecloseLoan,
+  generatePartPaymentReceiptPdf,
   getLoans,
   makePartPayment,
   payLoanEmi,

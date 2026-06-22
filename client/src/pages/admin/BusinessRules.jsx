@@ -97,6 +97,13 @@ const defaultLoanRules = {
       maxAmountMultiplier: 1.5,
     },
   },
+  partPaymentPolicy: {
+    enabled: true,
+    minimumAmount: 1000,
+    minimumPrincipalPercentage: 1,
+    lockInMonths: 0,
+    chargePercentage: 0,
+  },
 };
 
 const BusinessRules = () => {
@@ -240,6 +247,16 @@ const BusinessRules = () => {
       ...current,
       decisionBands: {
         ...current.decisionBands,
+        [field]: value,
+      },
+    }));
+  };
+
+  const updatePartPaymentPolicy = (field, value) => {
+    setLoanRules((current) => ({
+      ...current,
+      partPaymentPolicy: {
+        ...current.partPaymentPolicy,
         [field]: value,
       },
     }));
@@ -483,6 +500,71 @@ const BusinessRules = () => {
           </div>
 
           <div className="mt-5 grid grid-cols-1 gap-4">
+            <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-950">Part-Payment Policy</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Applied automatically before a customer can reduce loan principal.
+                  </p>
+                </div>
+                <label className="inline-flex items-center gap-3 text-sm font-semibold text-slate-700">
+                  Enabled
+                  <input
+                    type="checkbox"
+                    checked={loanRules.partPaymentPolicy?.enabled !== false}
+                    onChange={(event) => updatePartPaymentPolicy("enabled", event.target.checked)}
+                    className="h-5 w-5 accent-blue-600"
+                  />
+                </label>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <label className="label-field">
+                  Minimum Amount
+                  <input
+                    type="number"
+                    min="0"
+                    value={loanRules.partPaymentPolicy?.minimumAmount ?? 0}
+                    onChange={(event) => updatePartPaymentPolicy("minimumAmount", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+                <label className="label-field">
+                  Minimum Principal (%)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={loanRules.partPaymentPolicy?.minimumPrincipalPercentage ?? 0}
+                    onChange={(event) => updatePartPaymentPolicy("minimumPrincipalPercentage", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+                <label className="label-field">
+                  Lock-In (Months)
+                  <input
+                    type="number"
+                    min="0"
+                    value={loanRules.partPaymentPolicy?.lockInMonths ?? 0}
+                    onChange={(event) => updatePartPaymentPolicy("lockInMonths", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+                <label className="label-field">
+                  Charge (%)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={loanRules.partPaymentPolicy?.chargePercentage ?? 0}
+                    onChange={(event) => updatePartPaymentPolicy("chargePercentage", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+              </div>
+            </div>
             <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
               <h3 className="font-bold text-slate-950">Eligibility Score Weights</h3>
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">

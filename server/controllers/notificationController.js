@@ -18,6 +18,7 @@ const titlesByAction = {
   'loan.emi.failed.customer': 'EMI Payment Failed',
   'loan.foreclosed.customer': 'Loan Foreclosed',
   'loan.part_payment.customer': 'Part-Payment Posted',
+  'loan.part_payment.manager': 'Customer Part-Payment',
   'loan.closed.customer': 'Loan Closed',
   'overdraft.payoff.completed': 'Overdraft Paid Off',
   'overdraft.payoff.partial': 'Overdraft Payoff Posted',
@@ -78,10 +79,11 @@ const getNotifications = async (req, res) => {
     'overdraft.third_attempt',
     'tier.policy.updated.admin',
   ];
-  const filter =
-    req.user.role === 'admin'
-      ? { action: { $in: adminActions } }
-      : { actor: req.user._id };
+  const filter = req.user.role === 'admin'
+    ? { action: { $in: adminActions } }
+    : req.user.role === 'manager'
+      ? { $or: [{ recipient: req.user._id }, { actor: req.user._id }] }
+      : { actor: req.user._id, action: { $ne: 'loan.part_payment.manager' } };
 
   const logs = await SystemLog.find(filter).sort({ createdAt: -1 }).limit(50);
 

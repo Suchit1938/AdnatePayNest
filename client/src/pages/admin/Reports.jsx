@@ -1003,6 +1003,9 @@ const AdminReports = () => {
     "Principal": formatCurrency(entry.principalPaid),
     "Interest": formatCurrency(entry.interestPaid),
     "Penalty": formatCurrency(entry.penaltyPaid),
+    "Part-Payment Charge": formatCurrency(entry.partPaymentCharge),
+    "Total Debited": formatCurrency(entry.totalDebited || entry.amount),
+    "Repayment Impact": formatReportLabel(entry.repaymentImpact),
     "Foreclosure Fee": formatCurrency(entry.foreclosureFeePaid),
     "Status": formatReportLabel(entry.status),
     "Transaction ID": entry.transactionId,
@@ -1388,7 +1391,7 @@ const AdminReports = () => {
               />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1180px] text-left">
+              <table className="w-full min-w-[1380px] text-left">
                 <thead className="table-head">
                   <tr>
                     <th className="px-6 py-4">Loan</th>
@@ -1397,6 +1400,8 @@ const AdminReports = () => {
                     <th className="px-6 py-4">Principal</th>
                     <th className="px-6 py-4">Interest</th>
                     <th className="px-6 py-4">Penalty</th>
+                    <th className="px-6 py-4">Charge</th>
+                    <th className="px-6 py-4">Impact</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Date</th>
                   </tr>
@@ -1419,6 +1424,10 @@ const AdminReports = () => {
                       <td className="px-6 py-4">{formatCurrency(entry.principalPaid)}</td>
                       <td className="px-6 py-4">{formatCurrency(entry.interestPaid)}</td>
                       <td className="px-6 py-4">{formatCurrency(entry.penaltyPaid)}</td>
+                      <td className="px-6 py-4">{formatCurrency(entry.partPaymentCharge)}</td>
+                      <td className="px-6 py-4">
+                        {entry.repaymentImpact ? formatReportLabel(entry.repaymentImpact) : "-"}
+                      </td>
                       <td className="px-6 py-4">
                         <StatusBadge status={entry.status} />
                       </td>
@@ -1426,7 +1435,7 @@ const AdminReports = () => {
                     </tr>
                   ))}
                   {filteredRepaymentRows.length === 0 && (
-                    <EmptyTableRow colSpan={8} message="No repayment records match the selected period." />
+                    <EmptyTableRow colSpan={10} message="No repayment records match the selected period." />
                   )}
                 </tbody>
               </table>

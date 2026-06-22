@@ -8,6 +8,7 @@ const writeSystemLog = async (payload, options = {}) => {
         message: payload.message,
         actor: payload.actor,
         actorName: payload.actorName,
+        recipient: payload.recipient,
         entityType: payload.entityType,
         entityId: payload.entityId,
         severity: payload.severity || 'info',

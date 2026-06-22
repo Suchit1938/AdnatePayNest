@@ -70,6 +70,14 @@ const DEFAULT_CLASSIFICATION_BENEFITS = {
   },
 };
 
+const DEFAULT_PART_PAYMENT_POLICY = {
+  enabled: true,
+  minimumAmount: 1000,
+  minimumPrincipalPercentage: 1,
+  lockInMonths: 0,
+  chargePercentage: 0,
+};
+
 const normalizeLoanRules = (loanRules = {}) => ({
   loanTypes:
     Array.isArray(loanRules.loanTypes) && loanRules.loanTypes.length
@@ -87,6 +95,10 @@ const normalizeLoanRules = (loanRules = {}) => ({
     ...DEFAULT_CLASSIFICATION_BENEFITS,
     ...(loanRules.classificationBenefits?.toObject?.() || loanRules.classificationBenefits || {}),
   },
+  partPaymentPolicy: {
+    ...DEFAULT_PART_PAYMENT_POLICY,
+    ...(loanRules.partPaymentPolicy?.toObject?.() || loanRules.partPaymentPolicy || {}),
+  },
 });
 
 const getLoanTypeRule = (loanRules, loanType) => {
@@ -102,6 +114,7 @@ module.exports = {
   DEFAULT_LOAN_DECISION_BANDS,
   DEFAULT_LOAN_SCORE_WEIGHTS,
   DEFAULT_LOAN_TYPE_RULES,
+  DEFAULT_PART_PAYMENT_POLICY,
   getLoanTypeRule,
   normalizeLoanRules,
 };

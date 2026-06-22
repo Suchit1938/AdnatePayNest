@@ -246,6 +246,7 @@ const Loans = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [payingEmiNumber, setPayingEmiNumber] = useState(null);
   const [partPaymentAmount, setPartPaymentAmount] = useState("");
+  const [partPaymentImpact, setPartPaymentImpact] = useState("reduce_emi");
   const [isPostingPartPayment, setIsPostingPartPayment] = useState(false);
   const [isForeclosing, setIsForeclosing] = useState(false);
   const [acceptingSanctionId, setAcceptingSanctionId] = useState("");
@@ -346,6 +347,37 @@ const Loans = () => {
   const selectedLoanForeclosureQuote = selectedLoan?.foreclosureQuote || {};
   const canManageRepayment = selectedLoan?.status === "disbursed";
   const isApprovedAwaitingDisbursal = selectedLoan?.status === "approved";
+  const partPaymentPolicy = loanRules.partPaymentPolicy || {
+    enabled: true,
+    minimumAmount: 1000,
+    minimumPrincipalPercentage: 1,
+    lockInMonths: 0,
+    chargePercentage: 0,
+  };
+  const selectedOutstandingPrincipal = Number(
+    selectedLoan?.outstandingPrincipal ?? selectedLoan?.amount ?? 0
+  );
+  const minimumPartPayment = Math.max(
+    Number(partPaymentPolicy.minimumAmount || 0),
+    Math.ceil(
+      selectedOutstandingPrincipal *
+        Number(partPaymentPolicy.minimumPrincipalPercentage || 0) /
+        100
+    )
+  );
+  const partPaymentPreviewAmount = Number(partPaymentAmount || 0);
+  const partPaymentCharge = Math.round(
+    partPaymentPreviewAmount * Number(partPaymentPolicy.chargePercentage || 0) / 100
+  );
+  const partPaymentTotalDebit = partPaymentPreviewAmount + partPaymentCharge;
+  const partPaymentLockEndsAt = selectedLoan?.disbursedAt
+    ? new Date(new Date(selectedLoan.disbursedAt).setMonth(
+      new Date(selectedLoan.disbursedAt).getMonth() + Number(partPaymentPolicy.lockInMonths || 0)
+    ))
+    : null;
+  const isPartPaymentLocked = Boolean(
+    partPaymentLockEndsAt && partPaymentLockEndsAt > new Date()
+  );
 
   const validateLoanForm = () => {
     const errors = {};
@@ -646,12 +678,29 @@ const Loans = () => {
       toast.warning("Enter a valid part-payment amount.");
       return;
     }
+    if (partPaymentPolicy.enabled === false) {
+      toast.warning("Part-payment is currently disabled by bank policy.");
+      return;
+    }
+    if (isPartPaymentLocked) {
+      toast.warning(`Part-payment is available after ${partPaymentLockEndsAt.toLocaleDateString()}.`);
+      return;
+    }
+    if (amount < minimumPartPayment) {
+      toast.warning(`Minimum part-payment is ${formatCurrency(minimumPartPayment)}.`);
+      return;
+    }
+    if (amount >= selectedOutstandingPrincipal) {
+      toast.warning("Use foreclosure to clear the full outstanding principal.");
+      return;
+    }
 
     setIsPostingPartPayment(true);
 
     try {
       const { data } = await api.post(`/loans/${selectedLoan.id}/part-payments`, {
         amount,
+        repaymentImpact: partPaymentImpact,
         paymentAccountNumber:
           selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
       });
@@ -1558,6 +1607,15 @@ const Loans = () => {
                   tone="accent"
                 />
                 <MetricTile
+                  label="Current EMI"
+                  value={formatCurrency(selectedLoan.emiAmount || 0)}
+                  tone="success"
+                />
+                <MetricTile
+                  label="EMIs Remaining"
+                  value={String(selectedLoan.remainingTenureMonths || 0)}
+                />
+                <MetricTile
                   label="Accrued Interest"
                   value={formatCurrency(selectedLoanForeclosureQuote.accruedInterest || 0)}
                   tone="warning"
@@ -1581,23 +1639,66 @@ const Loans = () => {
                     </p>
                     <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">
                       {canManageRepayment
-                        ? "Extra amount reduces outstanding principal and recalculates the remaining schedule with the same EMI."
+                        ? "Choose whether the recalculation lowers future EMIs or keeps the EMI and finishes the loan sooner."
                         : "Part-payment starts after the manager disburses the approved loan."}
                     </p>
+                    <div className="mt-4 grid grid-cols-2 rounded-lg border border-bank-card-border bg-bank-surface p-1">
+                      <button
+                        type="button"
+                        onClick={() => setPartPaymentImpact("reduce_emi")}
+                        disabled={!canManageRepayment}
+                        className={`min-h-10 rounded-md px-3 text-sm font-bold transition ${
+                          partPaymentImpact === "reduce_emi"
+                            ? "bg-white text-bank-accent shadow-sm"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        Lower EMI
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPartPaymentImpact("reduce_tenure")}
+                        disabled={!canManageRepayment}
+                        className={`min-h-10 rounded-md px-3 text-sm font-bold transition ${
+                          partPaymentImpact === "reduce_tenure"
+                            ? "bg-white text-bank-accent shadow-sm"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        Shorter Tenure
+                      </button>
+                    </div>
+                    <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm font-semibold leading-6 text-blue-800">
+                      <p>Minimum: {formatCurrency(minimumPartPayment)}</p>
+                      <p>Charge: {Number(partPaymentPolicy.chargePercentage || 0)}%</p>
+                      {isPartPaymentLocked && (
+                        <p>Available after {partPaymentLockEndsAt.toLocaleDateString()}.</p>
+                      )}
+                      {partPaymentPreviewAmount > 0 && (
+                        <p className="mt-1 font-bold text-blue-950">
+                          Principal {formatCurrency(partPaymentPreviewAmount)} + charge {formatCurrency(partPaymentCharge)} = debit {formatCurrency(partPaymentTotalDebit)}
+                        </p>
+                      )}
+                    </div>
                     <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                       <input
                         type="number"
-                        min="1"
+                        min={minimumPartPayment || 1}
                         value={partPaymentAmount}
                         onChange={(event) => setPartPaymentAmount(event.target.value)}
                         className="input-field"
                         placeholder="Amount"
-                        disabled={!canManageRepayment}
+                        disabled={!canManageRepayment || partPaymentPolicy.enabled === false || isPartPaymentLocked}
                       />
                       <button
                         type="button"
                         onClick={postPartPayment}
-                        disabled={!canManageRepayment || isPostingPartPayment}
+                        disabled={
+                          !canManageRepayment ||
+                          partPaymentPolicy.enabled === false ||
+                          isPartPaymentLocked ||
+                          isPostingPartPayment
+                        }
                         className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
                       >
                         <BadgeIndianRupee size={16} />
@@ -1632,7 +1733,7 @@ const Loans = () => {
               )}
 
               <div className="mt-4 overflow-x-auto rounded-xl border border-bank-card-border bg-white">
-                <table className="w-full min-w-[760px] text-left text-sm">
+                <table className="w-full min-w-[900px] text-left text-sm">
                   <thead className="table-head">
                     <tr>
                       <th className="px-4 py-3">Date</th>
@@ -1640,14 +1741,15 @@ const Loans = () => {
                       <th className="px-4 py-3">Amount</th>
                       <th className="px-4 py-3">Principal</th>
                       <th className="px-4 py-3">Interest</th>
-                      <th className="px-4 py-3">Penalty</th>
+                      <th className="px-4 py-3">Fees / Penalty</th>
                       <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Receipt</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(selectedLoan.repaymentHistory || []).length === 0 ? (
                       <tr className="table-row">
-                        <td className="px-4 py-4 text-sm font-semibold text-slate-500" colSpan={7}>
+                        <td className="px-4 py-4 text-sm font-semibold text-slate-500" colSpan={8}>
                           No repayment activity recorded yet.
                         </td>
                       </tr>
@@ -1657,11 +1759,22 @@ const Loans = () => {
                           <td className="px-4 py-3">
                             {entry.paidAt ? new Date(entry.paidAt).toLocaleDateString() : "Not set"}
                           </td>
-                          <td className="px-4 py-3 font-bold">{statusLabel(entry.paymentType)}</td>
+                          <td className="px-4 py-3 font-bold">
+                            {statusLabel(entry.paymentType)}
+                            {entry.paymentType === "part_payment" && entry.repaymentImpact && (
+                              <p className="mt-1 text-xs font-semibold text-slate-500">
+                                {entry.repaymentImpact === "reduce_tenure"
+                                  ? `${entry.previousRemainingTenure} to ${entry.revisedRemainingTenure} EMIs`
+                                  : `${formatCurrency(entry.previousEmiAmount)} to ${formatCurrency(entry.revisedEmiAmount)}`}
+                              </p>
+                            )}
+                          </td>
                           <td className="px-4 py-3">{formatCurrency(entry.amount)}</td>
                           <td className="px-4 py-3">{formatCurrency(entry.principalPaid)}</td>
                           <td className="px-4 py-3">{formatCurrency(entry.interestPaid)}</td>
-                          <td className="px-4 py-3">{formatCurrency(entry.penaltyPaid)}</td>
+                          <td className="px-4 py-3">
+                            {formatCurrency(Number(entry.penaltyPaid || 0) + Number(entry.partPaymentCharge || 0))}
+                          </td>
                           <td className="px-4 py-3">
                             <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
                               entry.status === "failed"
@@ -1670,6 +1783,21 @@ const Loans = () => {
                             }`}>
                               {statusLabel(entry.status)}
                             </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            {entry.receiptFileUrl ? (
+                              <a
+                                href={getUploadUrl(entry.receiptFileUrl)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="btn-secondary justify-center px-3 py-2 text-xs"
+                              >
+                                <FileText size={14} />
+                                View
+                              </a>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
                           </td>
                         </tr>
                       ))

@@ -46,6 +46,16 @@ const transactionSchema = new mongoose.Schema(
       required: true,
       min: 1,
     },
+    principalAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    feeAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     remarks: {
       type: String,
       trim: true,
