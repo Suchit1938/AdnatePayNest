@@ -18,6 +18,7 @@ import {
   WalletCards,
   UserRoundCheck,
   BadgeIndianRupee,
+  PiggyBank,
   SlidersHorizontal,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -31,6 +32,7 @@ const navItemsByRole = {
     { label: "My Accounts", path: "/accounts", icon: WalletCards },
     { label: "Overdraft Facility", path: "/overdraft", icon: Landmark },
     { label: "Loans", path: "/loans", icon: BadgeIndianRupee },
+    { label: "Fixed Deposits", path: "/fixed-deposits", icon: PiggyBank },
     { label: "Payees", path: "/beneficiaries", icon: UserRoundCheck },
     { label: "Transaction Activity", path: "/transactions", icon: History },
     { label: "Account Statement", path: "/statement", icon: ReceiptText },
@@ -44,6 +46,7 @@ const navItemsByRole = {
     { label: "Managers", path: "/admin/managers", icon: ShieldCheck },
     { label: "Tier Policies", path: "/admin/classifications", icon: BadgeIndianRupee },
     { label: "Business Rules", path: "/admin/business-rules", icon: SlidersHorizontal },
+    { label: "Fixed Deposits", path: "/admin/fixed-deposits", icon: PiggyBank },
     { label: "Reports", path: "/admin/reports", icon: FileBarChart },
     { label: "Settlement Ledger", path: "/admin/settlement", icon: Landmark },
     { label: "System Alerts", path: "/admin/notifications", icon: Bell },

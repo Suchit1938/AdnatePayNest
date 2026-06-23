@@ -211,6 +211,42 @@ const partPaymentPolicySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const depositRateRuleSchema = new mongoose.Schema(
+  {
+    productType: {
+      type: String,
+      enum: ['fd', 'rd'],
+      required: true,
+    },
+    label: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    minTenureMonths: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+    maxTenureMonths: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+    annualInterestRate: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    minAmount: {
+      type: Number,
+      default: 1000,
+      min: 0,
+    },
+  },
+  { _id: false }
+);
+
 const businessRuleConfigSchema = new mongoose.Schema(
   {
     key: {
@@ -243,6 +279,12 @@ const businessRuleConfigSchema = new mongoose.Schema(
       partPaymentPolicy: {
         type: partPaymentPolicySchema,
         default: () => ({}),
+      },
+    },
+    depositRules: {
+      rateCards: {
+        type: [depositRateRuleSchema],
+        default: undefined,
       },
     },
     updatedBy: {

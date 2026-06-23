@@ -11,6 +11,7 @@ import AdminSettlement from "../pages/admin/Settlement";
 import AdminNotifications from "../pages/admin/Notifications";
 import AdminProfile from "../pages/admin/Profile";
 import AdminBusinessRules from "../pages/admin/BusinessRules";
+import AdminFixedDeposits from "../pages/admin/FixedDeposits";
 import ManagerDashboard from "../pages/manager/Dashboard";
 import Dashboard from "../pages/customer/Dashboard";
 import TransferFunds from "../pages/customer/TransferFunds";
@@ -22,6 +23,7 @@ import Statement from "../pages/customer/Statement";
 import Profile from "../pages/customer/Profile";
 import Overdraft from "../pages/customer/Overdraft";
 import Loans from "../pages/customer/Loans";
+import FixedDeposits from "../pages/customer/FixedDeposits";
 
 const customerRoute = (element) => (
   <ProtectedRoutes allowedRoles={["customer"]}>
@@ -77,6 +79,10 @@ const AppRoutes = () => {
             element={adminRoute(<AdminBusinessRules />)}
           />
           <Route
+            path="/admin/fixed-deposits"
+            element={adminRoute(<AdminFixedDeposits />)}
+          />
+          <Route
             path="/admin/notifications"
             element={adminRoute(<AdminNotifications />)}
           />
@@ -119,6 +125,7 @@ const AppRoutes = () => {
           <Route path="/accounts" element={customerRoute(<Accounts />)} />
           <Route path="/overdraft" element={customerRoute(<Overdraft />)} />
           <Route path="/loans" element={customerRoute(<Loans />)} />
+          <Route path="/fixed-deposits" element={customerRoute(<FixedDeposits />)} />
           <Route path="/beneficiaries" element={customerRoute(<Beneficiaries />)} />
           <Route path="/transactions" element={customerRoute(<Transactions />)} />
           <Route path="/statement" element={customerRoute(<Statement />)} />

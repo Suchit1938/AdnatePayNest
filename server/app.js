@@ -15,6 +15,7 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const businessRuleRoutes = require('./routes/businessRuleRoutes');
 const loanRoutes = require('./routes/loanRoutes');
+const fixedDepositRoutes = require('./routes/fixedDepositRoutes');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
 
 const app = express();
@@ -46,6 +47,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/business-rules', businessRuleRoutes);
 app.use('/api/loans', loanRoutes);
+app.use('/api/fixed-deposits', fixedDepositRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
