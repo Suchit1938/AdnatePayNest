@@ -108,14 +108,7 @@ const AdminNotifications = () => {
           subtitle="Track overdraft escalations, approval requests, and manager decisions."
         />
 
-        <div className="stat-grid-4">
-          <StatsCard
-            title="System Events"
-            value={summary.total}
-            icon={Bell}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-          />
+        <div className="stat-grid">
           <StatsCard
             title="Action Required"
             value={summary.escalations}
@@ -129,13 +122,6 @@ const AdminNotifications = () => {
             icon={Clock3}
             accent="bg-red-500"
             iconTone="bg-red-50 text-red-600"
-          />
-          <StatsCard
-            title="Manager Decisions"
-            value={summary.managerDecisions}
-            icon={ShieldCheck}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
           />
         </div>
 

@@ -131,54 +131,6 @@ const loanDecisionBandsSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const classificationLoanBenefitSchema = new mongoose.Schema(
-  {
-    classificationScoreRatio: {
-      type: Number,
-      default: 0.5,
-      min: 0,
-      max: 1,
-    },
-    interestDiscount: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    maxAmountMultiplier: {
-      type: Number,
-      default: 1,
-      min: 0.1,
-    },
-  },
-  { _id: false }
-);
-
-const classificationBenefitsSchema = new mongoose.Schema(
-  {
-    silver: {
-      type: classificationLoanBenefitSchema,
-      default: () => ({}),
-    },
-    gold: {
-      type: classificationLoanBenefitSchema,
-      default: () => ({
-        classificationScoreRatio: 0.75,
-        interestDiscount: 0.5,
-        maxAmountMultiplier: 1.25,
-      }),
-    },
-    platinum: {
-      type: classificationLoanBenefitSchema,
-      default: () => ({
-        classificationScoreRatio: 1,
-        interestDiscount: 1,
-        maxAmountMultiplier: 1.5,
-      }),
-    },
-  },
-  { _id: false }
-);
-
 const partPaymentPolicySchema = new mongoose.Schema(
   {
     enabled: {
@@ -270,10 +222,6 @@ const businessRuleConfigSchema = new mongoose.Schema(
       },
       decisionBands: {
         type: loanDecisionBandsSchema,
-        default: () => ({}),
-      },
-      classificationBenefits: {
-        type: classificationBenefitsSchema,
         default: () => ({}),
       },
       partPaymentPolicy: {

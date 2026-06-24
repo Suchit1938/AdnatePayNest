@@ -453,6 +453,10 @@ const loanSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    applicationAcknowledgements: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     status: {
       type: String,
       enum: ['submitted', 'under_review', 'approved', 'rejected', 'disbursed', 'closed'],

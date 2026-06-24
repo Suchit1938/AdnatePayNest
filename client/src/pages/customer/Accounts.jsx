@@ -172,15 +172,6 @@ const Accounts = () => {
             footer={{ text: account?.typeLabel || "Account" }}
           />
           <StatsCard
-            title="Per Transfer Limit"
-            value={formatCurrency(account?.transferLimit || 0)}
-            icon={Percent}
-            accent="bg-violet-500"
-            iconTone="bg-violet-50 text-violet-600"
-            footer={{ text: "Based on your active account policy" }}
-            badge={{ text: account?.status || "active", tone: "success" }}
-          />
-          <StatsCard
             title="OD Used"
             value={formatCurrency(totalOverdraftUsed)}
             icon={Wallet}

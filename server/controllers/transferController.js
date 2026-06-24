@@ -1,6 +1,4 @@
-const fs = require('fs');
 const mongoose = require('mongoose');
-const path = require('path');
 const PDFDocument = require('pdfkit');
 
 const BankAccount = require('../models/BankAccount');
@@ -11,6 +9,7 @@ const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts } = require('../utils/customerAccounts');
 const { DEFAULT_MONTHLY_OD_USES, getAccountTypeOdRule } = require('../utils/accountTypeOdPolicy');
 const { sendEmail } = require('../utils/email');
+const { drawLogo } = require('../utils/branding');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const serializeTransaction = (transaction, approvalDetail = {}) => ({
@@ -152,7 +151,6 @@ const PDF_MARGIN = 40;
 const PDF_TABLE_TOP_PADDING = 6;
 const PDF_TABLE_BOTTOM_PADDING = 6;
 const PDF_ROW_GAP = 0;
-const statementLogoPath = path.join(__dirname, '..', '..', 'client', 'public', 'logo.png');
 
 const normalizePdfText = (value) =>
   String(value ?? '')
@@ -217,9 +215,7 @@ const buildStatementPdf = ({
       const top = doc.y;
       const logoSize = 42;
 
-      if (fs.existsSync(statementLogoPath)) {
-        doc.image(statementLogoPath, left, top, { width: logoSize, height: logoSize });
-      } else {
+      if (!drawLogo(doc, left, top, { width: logoSize, height: logoSize })) {
         doc.circle(left + logoSize / 2, top + logoSize / 2, logoSize / 2).fill('#0f172a');
       }
 

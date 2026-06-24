@@ -279,17 +279,6 @@ const TransferFunds = () => {
             badge={{ text: `${userAccounts.length} account${userAccounts.length === 1 ? "" : "s"}`, tone: "neutral" }}
           />
           <StatsCard
-            title="Saved Payees"
-            value={beneficiaries.length}
-            icon={Users}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            badge={{
-              text: beneficiaries.length > 0 ? "Ready to transfer" : "Add a beneficiary",
-              tone: beneficiaries.length > 0 ? "success" : "warning",
-            }}
-          />
-          <StatsCard
             title="Per Transfer Limit"
             value={selectedTransferLimit > 0 ? formatCurrency(selectedTransferLimit) : "No limit"}
             icon={ArrowLeftRight}
@@ -375,15 +364,15 @@ const TransferFunds = () => {
           <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 lg:col-span-2">
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
-                <p className="font-semibold">Balance</p>
+                <p className="font-semibold">Balance (₹)</p>
                 <p className="mt-1 text-lg font-bold">{formatCurrency(selectedBalance)}</p>
               </div>
               <div>
-                <p className="font-semibold">OD Available</p>
+                <p className="font-semibold">OD Available (₹)</p>
                 <p className="mt-1 text-lg font-bold">{formatCurrency(selectedOdAvailable)}</p>
               </div>
               <div>
-                <p className="font-semibold">OD Uses</p>
+                <p className="font-semibold">OD Uses (/month)</p>
                 <p className="mt-1 text-lg font-bold">
                   {selectedFromAccount.odCountThisMonth || 0} / {selectedFromAccount.odMonthlyUseLimit ?? 3}
                 </p>

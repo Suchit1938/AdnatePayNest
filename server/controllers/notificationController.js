@@ -1,4 +1,6 @@
 const SystemLog = require('../models/SystemLog');
+const FixedDeposit = require('../models/FixedDeposit');
+const RecurringDeposit = require('../models/RecurringDeposit');
 
 const titlesByAction = {
   'approval.created': 'Approval Escalation',
@@ -20,6 +22,20 @@ const titlesByAction = {
   'loan.part_payment.customer': 'Part-Payment Posted',
   'loan.part_payment.manager': 'Customer Part-Payment',
   'loan.closed.customer': 'Loan Closed',
+  'fd.created.customer': 'FD Created Successfully',
+  'fd.maturity_soon.customer': 'FD Maturity Reminder',
+  'fd.matured.customer': 'FD Matured',
+  'fd.premature_withdrawal.customer': 'FD Premature Withdrawal',
+  'fd.renewed.customer': 'FD Renewed',
+  'fd.maturity_credited.customer': 'Maturity Amount Credited',
+  'rd.created.customer': 'RD Created Successfully',
+  'rd.maturity_soon.customer': 'RD Maturity Reminder',
+  'rd.installment.paid.customer': 'RD Installment Paid',
+  'rd.installment.missed.customer': 'Installment Missed',
+  'rd.matured.customer': 'RD Matured',
+  'rd.premature_withdrawal.customer': 'RD Premature Withdrawal',
+  'rd.renewed.customer': 'RD Renewed',
+  'rd.maturity_credited.customer': 'Maturity Amount Credited',
   'overdraft.payoff.completed': 'Overdraft Paid Off',
   'overdraft.payoff.partial': 'Overdraft Payoff Posted',
   'overdraft.used': 'Overdraft Used',
@@ -66,7 +82,84 @@ const serializeNotification = (log) => ({
   metadata: log.metadata || {},
 });
 
+const formatDate = (value) =>
+  new Date(value).toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+const ensureMaturityReminderLogs = async (user) => {
+  if (user.role !== 'customer') return;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const sevenDaysFromNow = new Date(today);
+  sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+  sevenDaysFromNow.setHours(23, 59, 59, 999);
+
+  const [fds, rds] = await Promise.all([
+    FixedDeposit.find({
+      customer: user._id,
+      status: 'active',
+      maturityDate: { $gte: today, $lte: sevenDaysFromNow },
+    }),
+    RecurringDeposit.find({
+      customer: user._id,
+      status: 'active',
+      maturityDate: { $gte: today, $lte: sevenDaysFromNow },
+    }),
+  ]);
+
+  const rows = [
+    ...fds.map((fd) => ({
+      action: 'fd.maturity_soon.customer',
+      entityType: 'FixedDeposit',
+      entityId: fd.fdNumber,
+      message: `Your FD matures on ${formatDate(fd.maturityDate)}.`,
+      metadata: {
+        fdNumber: fd.fdNumber,
+        maturityDate: fd.maturityDate,
+        maturityAmount: fd.maturityAmount,
+      },
+    })),
+    ...rds.map((rd) => ({
+      action: 'rd.maturity_soon.customer',
+      entityType: 'RecurringDeposit',
+      entityId: rd.rdNumber,
+      message: `Your RD matures on ${formatDate(rd.maturityDate)}.`,
+      metadata: {
+        rdNumber: rd.rdNumber,
+        maturityDate: rd.maturityDate,
+        maturityAmount: rd.maturityAmount,
+      },
+    })),
+  ];
+
+  await Promise.all(
+    rows.map(async (row) => {
+      const existing = await SystemLog.exists({
+        action: row.action,
+        actor: user._id,
+        entityId: row.entityId,
+      });
+
+      if (existing) return null;
+
+      return SystemLog.create({
+        ...row,
+        actor: user._id,
+        actorName: user.name,
+        recipient: user._id,
+        severity: 'warning',
+      });
+    })
+  );
+};
+
 const getNotifications = async (req, res) => {
+  await ensureMaturityReminderLogs(req.user);
+
   const adminActions = [
     'approval.created',
     'approval.approved',

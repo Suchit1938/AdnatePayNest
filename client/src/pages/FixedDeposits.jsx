@@ -1,16 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Banknote,
+  Calculator,
   CalendarClock,
   CheckCircle2,
-  Edit3,
   Landmark,
   Percent,
   PiggyBank,
   Plus,
-  Save,
   Search,
-  Trash2,
 } from "lucide-react";
 
 import api from "../api/axios";
@@ -22,6 +20,7 @@ import SectionCard from "../components/ui/SectionCard";
 import TablePagination from "../components/ui/TablePagination";
 import { useToast } from "../components/ui/useToast";
 import usePaginatedRows from "../components/ui/usePaginatedRows";
+import { useAuth } from "../context/useAuth";
 import DashboardLayout from "../layouts/DashboardLayout";
 import { formatCurrency } from "../utils/format";
 
@@ -32,26 +31,40 @@ const initialForm = {
   interestRate: "",
   tenureMonths: "12",
   startDate: new Date().toISOString().slice(0, 10),
-  payoutType: "on_maturity",
+  linkedAccountNumber: "",
   nomineeName: "",
   notes: "",
 };
 
-const initialRateForm = {
-  productType: "fd",
-  label: "",
-  minTenureMonths: "12",
-  maxTenureMonths: "23",
-  annualInterestRate: "7",
-  minAmount: "1000",
-};
+const fdTenureOptions = [
+  { label: "1 Year", value: "12" },
+  { label: "2 Years", value: "24" },
+  { label: "5 Years", value: "60" },
+];
 
-const payoutLabels = {
-  on_maturity: "On maturity",
-  monthly: "Monthly payout",
-  quarterly: "Quarterly payout",
-  yearly: "Yearly payout",
-};
+const depositRateTemplates = [
+  { productType: "fd", label: "FD 1 Year", minTenureMonths: 12, maxTenureMonths: 12, annualInterestRate: 7, minAmount: 1000 },
+  { productType: "fd", label: "FD 2 Years", minTenureMonths: 24, maxTenureMonths: 24, annualInterestRate: 7.25, minAmount: 1000 },
+  { productType: "fd", label: "FD 5 Years", minTenureMonths: 60, maxTenureMonths: 60, annualInterestRate: 7.75, minAmount: 1000 },
+  { productType: "rd", label: "RD 6 Months", minTenureMonths: 6, maxTenureMonths: 6, annualInterestRate: 6.25, minAmount: 500 },
+  { productType: "rd", label: "RD 1 Year", minTenureMonths: 12, maxTenureMonths: 12, annualInterestRate: 6.75, minAmount: 500 },
+  { productType: "rd", label: "RD 2 Years", minTenureMonths: 24, maxTenureMonths: 24, annualInterestRate: 7.25, minAmount: 500 },
+];
+
+const normalizeAllowedRateCards = (cards = []) =>
+  depositRateTemplates.map((template) => {
+    const existing = cards.find(
+      (card) =>
+        card.productType === template.productType &&
+        Number(card.minTenureMonths) === template.minTenureMonths
+    );
+
+    return {
+      ...template,
+      annualInterestRate: existing?.annualInterestRate ?? template.annualInterestRate,
+      minAmount: existing?.minAmount ?? template.minAmount,
+    };
+  });
 
 const statusStyles = {
   active: "bg-emerald-50 text-emerald-700",
@@ -85,11 +98,10 @@ const calculatePreview = (form) => {
   const annualRate = Number(form.interestRate || 0) / 100;
   const tenureMonths = Math.max(1, Number(form.tenureMonths || 1));
   const years = tenureMonths / 12;
-  const frequency = form.payoutType === "monthly" ? 12 : form.payoutType === "yearly" ? 1 : 4;
-  const maturityAmount =
-    form.payoutType === "on_maturity"
-      ? Math.round(principal * (1 + annualRate / frequency) ** (frequency * years))
-      : Math.round(principal + principal * annualRate * years);
+  const compoundingFrequency = 4;
+  const maturityAmount = Math.round(
+    principal * (1 + annualRate / compoundingFrequency) ** (compoundingFrequency * years)
+  );
 
   return {
     maturityDate: addMonths(form.startDate, tenureMonths),
@@ -106,56 +118,66 @@ const getApplicableRate = (rateCards, productType, tenureMonths) =>
       Number(tenureMonths || 0) <= Number(rule.maxTenureMonths || 0)
   );
 
+const PreviewMetric = ({ label, value, tone = "default" }) => {
+  const toneStyles = {
+    default: "border-slate-200 bg-white text-slate-950",
+    success: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    info: "border-blue-200 bg-blue-50 text-blue-800",
+  };
+
+  return (
+    <div className={`rounded-lg border px-3 py-3 ${toneStyles[tone] || toneStyles.default}`}>
+      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-base font-extrabold leading-snug">{value}</p>
+    </div>
+  );
+};
+
 const FixedDeposits = ({ adminMode = false }) => {
   const toast = useToast();
+  const { user } = useAuth();
   const [fixedDeposits, setFixedDeposits] = useState([]);
-  const [customers, setCustomers] = useState([]);
   const [rateCards, setRateCards] = useState([]);
-  const [rateForm, setRateForm] = useState(initialRateForm);
   const [form, setForm] = useState(initialForm);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSavingRates, setIsSavingRates] = useState(false);
   const [updatingId, setUpdatingId] = useState("");
+  const [calculatedPreview, setCalculatedPreview] = useState(null);
+  const customerAccounts = user?.accounts?.length
+    ? user.accounts
+    : [user?.account].filter(Boolean);
 
-  const loadFixedDeposits = () =>
+  const loadFixedDeposits = useCallback(() =>
     api
       .get("/fixed-deposits")
       .then(({ data }) => setFixedDeposits(data.fixedDeposits || []))
-      .catch(() => toast.error("Unable to load fixed deposits."));
+      .catch(() => toast.error("Unable to load fixed deposits.")), [toast]);
 
   useEffect(() => {
     loadFixedDeposits();
     api
       .get("/fixed-deposits/rates")
-      .then(({ data }) => setRateCards(data.rateCards || []))
+      .then(({ data }) => setRateCards(normalizeAllowedRateCards(data.rateCards || [])))
       .catch(() => toast.error("Unable to load deposit rates."));
 
-    if (adminMode) {
-      api
-        .get("/fixed-deposits/customers")
-        .then(({ data }) => {
-          const customerRows = data.customers || [];
-          setCustomers(customerRows);
-          setForm((current) => ({
-            ...current,
-            customerId: current.customerId || customerRows[0]?.id || "",
-          }));
-        })
-        .catch(() => toast.error("Unable to load customer list."));
-    }
-  }, [adminMode]);
+  }, [loadFixedDeposits, toast]);
 
   const applicableFdRate = useMemo(
     () => getApplicableRate(rateCards, "fd", form.tenureMonths),
     [rateCards, form.tenureMonths]
   );
-  const formWithRate = {
-    ...form,
-    interestRate: applicableFdRate?.annualInterestRate ?? form.interestRate,
-  };
+  const minimumFdAmount = Number(applicableFdRate?.minAmount || 1000);
+  const formWithRate = useMemo(
+    () => ({
+      ...form,
+      interestRate: applicableFdRate?.annualInterestRate ?? form.interestRate,
+    }),
+    [applicableFdRate?.annualInterestRate, form]
+  );
   const preview = useMemo(() => calculatePreview(formWithRate), [formWithRate]);
+  const selectedTenureLabel =
+    fdTenureOptions.find((option) => option.value === form.tenureMonths)?.label || `${form.tenureMonths} months`;
   const activeFds = fixedDeposits.filter((fd) => fd.status === "active");
   const totalDeposit = activeFds.reduce((sum, fd) => sum + Number(fd.depositAmount || 0), 0);
   const totalMaturity = activeFds.reduce((sum, fd) => sum + Number(fd.maturityAmount || 0), 0);
@@ -192,77 +214,29 @@ const FixedDeposits = ({ adminMode = false }) => {
 
   const updateForm = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
+    setCalculatedPreview(null);
   };
 
-  const updateRateForm = (field, value) => {
-    setRateForm((current) => ({ ...current, [field]: value }));
-  };
-
-  const addRateCard = () => {
-    const productLabel = rateForm.productType === "rd" ? "RD" : "FD";
-    const nextRate = {
-      productType: rateForm.productType,
-      label:
-        rateForm.label.trim() ||
-        `${productLabel} ${rateForm.minTenureMonths}-${rateForm.maxTenureMonths} months`,
-      minTenureMonths: Math.max(1, Math.round(Number(rateForm.minTenureMonths || 1))),
-      maxTenureMonths: Math.max(1, Math.round(Number(rateForm.maxTenureMonths || 1))),
-      annualInterestRate: Math.max(0, Number(rateForm.annualInterestRate || 0)),
-      minAmount: Math.max(0, Math.round(Number(rateForm.minAmount || 0))),
-    };
-
-    if (nextRate.maxTenureMonths < nextRate.minTenureMonths) {
-      toast.warning("Maximum tenure must be greater than or equal to minimum tenure.");
+  const calculateFixedDepositPreview = () => {
+    if (Number(form.depositAmount || 0) < minimumFdAmount) {
+      toast.warning(`Minimum FD amount is Rs. ${minimumFdAmount.toLocaleString("en-IN")}.`);
       return;
     }
 
-    if (nextRate.annualInterestRate <= 0) {
-      toast.warning("Interest rate must be greater than zero.");
-      return;
-    }
-
-    setRateCards((current) => [...current, nextRate]);
-    setRateForm((current) => ({
-      ...initialRateForm,
-      productType: current.productType,
-    }));
-  };
-
-  const removeRateCard = (index) => {
-    setRateCards((current) => current.filter((_, currentIndex) => currentIndex !== index));
-  };
-
-  const updateRateCard = (index, field, value) => {
-    setRateCards((current) =>
-      current.map((rule, currentIndex) =>
-        currentIndex === index ? { ...rule, [field]: value } : rule
-      )
-    );
-  };
-
-  const saveRateCards = async () => {
-    setIsSavingRates(true);
-    try {
-      const { data } = await api.patch("/fixed-deposits/rates", { rateCards });
-      setRateCards(data.rateCards || []);
-      toast.success("Deposit rates updated.");
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to update deposit rates.");
-    } finally {
-      setIsSavingRates(false);
-    }
+    setCalculatedPreview(preview);
+    toast.success("FD maturity calculated.");
   };
 
   const createFixedDeposit = async (event) => {
     event.preventDefault();
 
-    if (adminMode && !form.customerId) {
-      toast.warning("Select a customer for this FD.");
+    if (Number(form.depositAmount || 0) < minimumFdAmount) {
+      toast.warning(`Minimum FD amount is Rs. ${minimumFdAmount.toLocaleString("en-IN")}.`);
       return;
     }
 
-    if (Number(form.depositAmount || 0) < 1000) {
-      toast.warning("Minimum FD amount is Rs. 1,000.");
+    if (!calculatedPreview) {
+      toast.warning("Calculate FD maturity before creating the deposit.");
       return;
     }
 
@@ -270,16 +244,30 @@ const FixedDeposits = ({ adminMode = false }) => {
     try {
       await api.post("/fixed-deposits", formWithRate);
       toast.success("Fixed deposit created.");
-      setForm((current) => ({
+      setForm({
         ...initialForm,
         interestRate: "",
-        customerId: adminMode ? current.customerId : "",
-      }));
+        customerId: "",
+      });
+      setCalculatedPreview(null);
       await loadFixedDeposits();
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to create fixed deposit.");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const runFdAction = async (fd, action, successMessage) => {
+    setUpdatingId(`${fd.id}:${action}`);
+    try {
+      await api.post(`/fixed-deposits/${fd.id}/${action}`);
+      toast.success(successMessage);
+      await loadFixedDeposits();
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to update FD.");
+    } finally {
+      setUpdatingId("");
     }
   };
 
@@ -304,12 +292,12 @@ const FixedDeposits = ({ adminMode = false }) => {
           title={adminMode ? "Fixed Deposits" : "My Fixed Deposits"}
           subtitle={
             adminMode
-              ? "Create and monitor customer FDs, maturity values, and closure status."
-              : "Track your active FDs, interest earned, maturity date, and payout mode."
+              ? "Monitor customer FDs, maturity values, and closure status."
+              : "Track your active FDs, interest earned, maturity date, and total maturity amount."
           }
         />
 
-        <div className="stat-grid">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           <StatsCard
             title="Active FD Amount"
             value={formatCurrency(totalDeposit)}
@@ -343,30 +331,14 @@ const FixedDeposits = ({ adminMode = false }) => {
           />
         </div>
 
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <SectionCard
-            title={adminMode ? "Create Customer FD" : "Create Fixed Deposit"}
-            subtitle="Enter deposit terms and review the maturity preview before saving."
-            icon={Plus}
-          >
-            <form onSubmit={createFixedDeposit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {adminMode && (
-                <label className="label-field sm:col-span-2">
-                  <span>Customer</span>
-                  <select
-                    value={form.customerId}
-                    onChange={(event) => updateForm("customerId", event.target.value)}
-                    className="input-field"
-                  >
-                    {customers.map((customer) => (
-                      <option key={customer.id} value={customer.id}>
-                        {customer.name} / {customer.customerId || customer.email}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
+        <section className={adminMode ? "" : "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"}>
+          {!adminMode && (
+            <SectionCard
+              title="Create Fixed Deposit"
+              subtitle="Enter deposit terms and review the cumulative maturity preview before saving."
+              icon={Plus}
+            >
+              <form onSubmit={createFixedDeposit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="label-field">
                 <span>Bank Name</span>
                 <input
@@ -376,17 +348,17 @@ const FixedDeposits = ({ adminMode = false }) => {
                 />
               </label>
               <label className="label-field">
-                <span>Deposit Amount</span>
+                <span>Deposit Amount (₹)</span>
                 <input
                   type="number"
-                  min="1000"
+                  min={minimumFdAmount}
                   value={form.depositAmount}
                   onChange={(event) => updateForm("depositAmount", event.target.value)}
                   className="input-field"
                 />
               </label>
               <label className="label-field">
-                <span>Applicable Interest Rate %</span>
+                <span>Applicable Interest Rate (% p.a.)</span>
                 <input
                   type="number"
                   min="0"
@@ -402,16 +374,29 @@ const FixedDeposits = ({ adminMode = false }) => {
                     : "No configured FD rate matched this tenure."}
                 </p>
               </label>
-              <label className="label-field">
-                <span>Tenure Months</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={form.tenureMonths}
-                  onChange={(event) => updateForm("tenureMonths", event.target.value)}
-                  className="input-field"
-                />
-              </label>
+              <div className="label-field">
+                <span>Tenure</span>
+                <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg border border-bank-card-border bg-bank-surface p-1">
+                  {fdTenureOptions.map((option) => {
+                    const isSelected = option.value === form.tenureMonths;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => updateForm("tenureMonths", option.value)}
+                        className={`min-h-10 rounded-md px-2 text-sm font-bold transition ${
+                          isSelected
+                            ? "bg-white text-bank-eyebrow shadow-sm"
+                            : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <label className="label-field">
                 <span>Start Date</span>
                 <input
@@ -422,15 +407,16 @@ const FixedDeposits = ({ adminMode = false }) => {
                 />
               </label>
               <label className="label-field">
-                <span>Payout Type</span>
+                <span>Linked Account</span>
                 <select
-                  value={form.payoutType}
-                  onChange={(event) => updateForm("payoutType", event.target.value)}
+                  value={form.linkedAccountNumber}
+                  onChange={(event) => updateForm("linkedAccountNumber", event.target.value)}
                   className="input-field"
                 >
-                  {Object.entries(payoutLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
+                  {customerAccounts.length === 0 && <option value="">Default account</option>}
+                  {customerAccounts.map((account) => (
+                    <option key={account.accountNumber} value={account.accountNumber}>
+                      {account.accountType || "Account"} / {account.accountNumber}
                     </option>
                   ))}
                 </select>
@@ -454,26 +440,78 @@ const FixedDeposits = ({ adminMode = false }) => {
                 />
               </label>
 
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-semibold leading-6 text-blue-800 sm:col-span-2">
-                <p>Maturity date: {formatDate(preview.maturityDate)}</p>
-                <p>Maturity amount: {formatCurrency(preview.maturityAmount)}</p>
-                <p>Interest earned: {formatCurrency(preview.interestEarned)}</p>
+              <div className="sm:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Current FD terms</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-700">
+                      {selectedTenureLabel} at {formWithRate.interestRate || "0"}% p.a. | Minimum {formatCurrency(minimumFdAmount)}
+                    </p>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${
+                    calculatedPreview ? "bg-emerald-100 text-emerald-700" : "bg-white text-slate-500"
+                  }`}>
+                    {calculatedPreview ? "Calculated" : "Calculation pending"}
+                  </span>
+                </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="btn-primary justify-center sm:col-span-2"
-              >
-                <CheckCircle2 size={18} />
-                {isSubmitting ? "Creating..." : "Create FD"}
-              </button>
+              <div className={`sm:col-span-2 rounded-lg border p-4 ${
+                calculatedPreview
+                  ? "border-blue-100 bg-blue-50"
+                  : "border-dashed border-slate-300 bg-slate-50"
+              }`}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-extrabold text-slate-950">Maturity Preview</p>
+                    <p className="text-xs font-semibold text-slate-500">Cumulative payout at maturity</p>
+                  </div>
+                  <Calculator size={18} className={calculatedPreview ? "text-bank-eyebrow" : "text-slate-400"} />
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <PreviewMetric
+                    label="Maturity Date"
+                    value={calculatedPreview ? formatDate(calculatedPreview.maturityDate) : "Calculate first"}
+                    tone="info"
+                  />
+                  <PreviewMetric
+                    label="Maturity Amount"
+                    value={calculatedPreview ? formatCurrency(calculatedPreview.maturityAmount) : "Calculate first"}
+                    tone="success"
+                  />
+                  <PreviewMetric
+                    label="Interest Earned"
+                    value={calculatedPreview ? formatCurrency(calculatedPreview.interestEarned) : "Calculate first"}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:col-span-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={calculateFixedDepositPreview}
+                  className="btn-secondary justify-center"
+                >
+                  <Calculator size={18} />
+                  Calculate FD
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !calculatedPreview}
+                  className="btn-primary justify-center"
+                >
+                  <CheckCircle2 size={18} />
+                  {isSubmitting ? "Creating..." : "Create FD"}
+                </button>
+              </div>
             </form>
           </SectionCard>
+          )}
 
           <SectionCard
             title={adminMode ? "FD Register" : "FD Portfolio"}
-            subtitle="Review FD numbers, maturity dates, payout type, and current status."
+            subtitle="Review FD numbers, maturity dates, total maturity value, and current status."
             icon={Landmark}
           >
             <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_180px]">
@@ -505,16 +543,18 @@ const FixedDeposits = ({ adminMode = false }) => {
                   <tr>
                     <th className="px-4 py-3">FD</th>
                     {adminMode && <th className="px-4 py-3">Customer</th>}
-                    <th className="px-4 py-3">Deposit</th>
-                    <th className="px-4 py-3">Rate</th>
+                    <th className="px-4 py-3">Deposit (₹)</th>
+                    <th className="px-4 py-3">Rate (% p.a.)</th>
                     <th className="px-4 py-3">Maturity</th>
-                    <th className="px-4 py-3">Payout</th>
                     <th className="px-4 py-3">Status</th>
-                    {adminMode && <th className="px-4 py-3">Action</th>}
+                    <th className="px-4 py-3">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pagination.pageRows.map((fd) => (
+                  {pagination.pageRows.map((fd) => {
+                    const hasMatured = new Date(fd.maturityDate) <= new Date();
+
+                    return (
                     <tr key={fd.id} className="table-row">
                       <td className="px-4 py-3">
                         <p className="font-bold text-slate-900">{fd.fdNumber}</p>
@@ -538,14 +578,13 @@ const FixedDeposits = ({ adminMode = false }) => {
                           {formatCurrency(fd.maturityAmount)}
                         </p>
                       </td>
-                      <td className="px-4 py-3">{payoutLabels[fd.payoutType] || statusLabel(fd.payoutType)}</td>
                       <td className="px-4 py-3">
                         <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusStyles[fd.status] || statusStyles.active}`}>
                           {statusLabel(fd.status)}
                         </span>
                       </td>
-                      {adminMode && (
-                        <td className="px-4 py-3">
+                      <td className="px-4 py-3">
+                        {adminMode ? (
                           <select
                             value={fd.status}
                             disabled={updatingId === fd.id}
@@ -557,10 +596,47 @@ const FixedDeposits = ({ adminMode = false }) => {
                             <option value="closed">Closed</option>
                             <option value="renewed">Renewed</option>
                           </select>
-                        </td>
-                      )}
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {fd.status === "active" && !hasMatured && (
+                              <button
+                                type="button"
+                                disabled={updatingId === `${fd.id}:premature-withdrawal`}
+                                onClick={() => runFdAction(fd, "premature-withdrawal", "FD withdrawn")}
+                                className="rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                              >
+                                Withdraw
+                              </button>
+                            )}
+                            {["active", "matured"].includes(fd.status) && hasMatured && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={updatingId === `${fd.id}:payout`}
+                                  onClick={() => runFdAction(fd, "payout", "Maturity Amount Credited")}
+                                  className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                                >
+                                  Payout
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={updatingId === `${fd.id}:renew`}
+                                  onClick={() => runFdAction(fd, "renew", "FD Renewed")}
+                                  className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+                                >
+                                  Renew
+                                </button>
+                              </>
+                            )}
+                            {!["active", "matured"].includes(fd.status) && (
+                              <span className="text-xs font-semibold text-slate-400">No action</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -574,182 +650,6 @@ const FixedDeposits = ({ adminMode = false }) => {
           </SectionCard>
         </section>
 
-        {adminMode && (
-          <SectionCard
-            title="FD / RD Rate Configuration"
-            subtitle="Maintain tenure-wise rates used for customer deposit maturity calculations."
-            icon={Edit3}
-          >
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-6">
-              <label className="label-field">
-                <span>Product</span>
-                <select
-                  value={rateForm.productType}
-                  onChange={(event) => updateRateForm("productType", event.target.value)}
-                  className="input-field"
-                >
-                  <option value="fd">FD</option>
-                  <option value="rd">RD</option>
-                </select>
-              </label>
-              <label className="label-field">
-                <span>Min Tenure</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={rateForm.minTenureMonths}
-                  onChange={(event) => updateRateForm("minTenureMonths", event.target.value)}
-                  className="input-field"
-                />
-              </label>
-              <label className="label-field">
-                <span>Max Tenure</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={rateForm.maxTenureMonths}
-                  onChange={(event) => updateRateForm("maxTenureMonths", event.target.value)}
-                  className="input-field"
-                />
-              </label>
-              <label className="label-field">
-                <span>Rate %</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={rateForm.annualInterestRate}
-                  onChange={(event) => updateRateForm("annualInterestRate", event.target.value)}
-                  className="input-field"
-                />
-              </label>
-              <label className="label-field">
-                <span>Min Amount</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={rateForm.minAmount}
-                  onChange={(event) => updateRateForm("minAmount", event.target.value)}
-                  className="input-field"
-                />
-              </label>
-              <div className="flex items-end">
-                <button type="button" onClick={addRateCard} className="btn-primary w-full justify-center">
-                  <Plus size={18} />
-                  Add
-                </button>
-              </div>
-              <label className="label-field lg:col-span-6">
-                <span>Label</span>
-                <input
-                  value={rateForm.label}
-                  onChange={(event) => updateRateForm("label", event.target.value)}
-                  className="input-field"
-                  placeholder="Example: FD 12 to 23 months"
-                />
-              </label>
-            </div>
-
-            <div className="mt-5 overflow-x-auto rounded-xl border border-bank-card-border bg-white">
-              <table className="w-full min-w-[820px] text-left text-sm">
-                <thead className="table-head">
-                  <tr>
-                    <th className="px-4 py-3">Product</th>
-                    <th className="px-4 py-3">Label</th>
-                    <th className="px-4 py-3">Tenure Range</th>
-                    <th className="px-4 py-3">Rate</th>
-                    <th className="px-4 py-3">Min Amount</th>
-                    <th className="px-4 py-3">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rateCards.map((rule, index) => (
-                    <tr key={`${rule.productType}-${rule.minTenureMonths}-${rule.maxTenureMonths}-${index}`} className="table-row">
-                      <td className="px-4 py-3">
-                        <select
-                          value={rule.productType}
-                          onChange={(event) => updateRateCard(index, "productType", event.target.value)}
-                          className="input-field min-w-24 bg-white py-2 text-xs"
-                        >
-                          <option value="fd">FD</option>
-                          <option value="rd">RD</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          value={rule.label}
-                          onChange={(event) => updateRateCard(index, "label", event.target.value)}
-                          className="input-field min-w-52 bg-white py-2 text-xs"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min="1"
-                            value={rule.minTenureMonths}
-                            onChange={(event) => updateRateCard(index, "minTenureMonths", event.target.value)}
-                            className="input-field w-24 bg-white py-2 text-xs"
-                          />
-                          <span className="text-slate-400">to</span>
-                          <input
-                            type="number"
-                            min="1"
-                            value={rule.maxTenureMonths}
-                            onChange={(event) => updateRateCard(index, "maxTenureMonths", event.target.value)}
-                            className="input-field w-24 bg-white py-2 text-xs"
-                          />
-                          <span className="text-xs font-semibold text-slate-500">months</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={rule.annualInterestRate}
-                          onChange={(event) => updateRateCard(index, "annualInterestRate", event.target.value)}
-                          className="input-field w-24 bg-white py-2 text-xs"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="number"
-                          min="0"
-                          value={rule.minAmount}
-                          onChange={(event) => updateRateCard(index, "minAmount", event.target.value)}
-                          className="input-field w-32 bg-white py-2 text-xs"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => removeRateCard(index)}
-                          className="btn-danger-soft px-3 py-2 text-xs"
-                        >
-                          <Trash2 size={14} />
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                onClick={saveRateCards}
-                disabled={isSavingRates}
-                className="btn-primary justify-center px-4 py-2"
-              >
-                <Save size={18} />
-                {isSavingRates ? "Saving..." : "Save Deposit Rates"}
-              </button>
-            </div>
-          </SectionCard>
-        )}
       </PageContent>
     </DashboardLayout>
   );

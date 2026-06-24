@@ -14,7 +14,7 @@ import StatsCard from "../dashboard/StatsCard";
 import EmptyState from "../ui/EmptyState";
 import PageContent from "../ui/PageContent";
 import PageHeader from "../ui/PageHeader";
-import { RechartsColumn, RechartsHorizontalBar } from "../ui/RechartsReports";
+import { RechartsHorizontalBar } from "../ui/RechartsReports";
 import SectionCard from "../ui/SectionCard";
 import TablePagination from "../ui/TablePagination";
 import usePaginatedRows from "../ui/usePaginatedRows";
@@ -83,6 +83,67 @@ const statusClass = (status) => {
   return "bg-slate-100 text-slate-600";
 };
 
+const MonthlyNetSnapshot = ({ rows }) => {
+  const latestRow = rows[0];
+  const recentRows = rows.slice(0, 4);
+  const hasMovement = rows.some((row) => toNumber(row.net) !== 0 || toNumber(row.bankCredit) !== 0 || toNumber(row.bankDebit) !== 0);
+
+  if (!hasMovement) {
+    return <EmptyState message="No settlement movement is available yet." />;
+  }
+
+  const netValue = toNumber(latestRow?.net);
+  const isPositive = netValue >= 0;
+  const netTone = isPositive ? "text-emerald-700" : "text-red-700";
+  const badgeTone = isPositive ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700";
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-bank-card-border bg-white p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+              Latest Month Net Movement
+            </p>
+            <p className={`mt-3 text-3xl font-black ${netTone}`}>{formatCurrency(netValue)}</p>
+            <p className="mt-2 text-sm font-semibold text-slate-500">{latestRow?.label || "Current period"}</p>
+          </div>
+          <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${badgeTone}`}>
+            {isPositive ? "Net inflow" : "Net outflow"}
+          </span>
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="rounded-lg bg-emerald-50 p-3">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">Collections</p>
+            <p className="mt-2 text-lg font-black text-emerald-800">{formatCurrency(latestRow?.bankCredit)}</p>
+          </div>
+          <div className="rounded-lg bg-red-50 p-3">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-700">Disbursals</p>
+            <p className="mt-2 text-lg font-black text-red-800">{formatCurrency(latestRow?.bankDebit)}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {recentRows.map((row) => {
+          const rowNet = toNumber(row.net);
+          const rowTone = rowNet >= 0 ? "text-emerald-700" : "text-red-700";
+
+          return (
+            <div
+              key={row.label}
+              className="flex items-center justify-between rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3"
+            >
+              <span className="text-sm font-bold text-slate-700">{row.label}</span>
+              <span className={`text-sm font-black ${rowTone}`}>{formatCurrency(rowNet)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const SettlementReportView = ({ mode = "admin", embedded = false }) => {
   const [report, setReport] = useState(defaultSettlementReport);
   const [isLoading, setIsLoading] = useState(true);
@@ -110,15 +171,6 @@ const SettlementReportView = ({ mode = "admin", embedded = false }) => {
   const account = report.settlement.account;
   const totals = report.settlement.totals;
   const totalRecovered = toNumber(totals.totalLoanCollected) + toNumber(totals.totalOdRecovered);
-  const monthlyNetRows = useMemo(
-    () =>
-      report.monthlyRows.map((row) => ({
-        label: row.label,
-        value: row.net,
-        color: row.net >= 0 ? "#10b981" : "#ef4444",
-      })),
-    [report.monthlyRows]
-  );
   const typeRows = useMemo(
     () =>
       report.typeRows.map((row, index) => ({
@@ -140,7 +192,7 @@ const SettlementReportView = ({ mode = "admin", embedded = false }) => {
         />
       )}
 
-      <div className="stat-grid">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
         <StatsCard
           title="Settlement Balance"
           value={formatCurrency(account.balance)}
@@ -202,11 +254,7 @@ const SettlementReportView = ({ mode = "admin", embedded = false }) => {
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <SectionCard title="Monthly Net Movement" subtitle="Collections minus disbursals by month." icon={FileBarChart}>
-          <RechartsColumn
-            rows={monthlyNetRows}
-            valueFormatter={formatCompactCurrency}
-            emptyMessage="No settlement movement is available yet."
-          />
+          <MonthlyNetSnapshot rows={report.monthlyRows} />
         </SectionCard>
         <SectionCard title="Movement Breakdown" subtitle="Settlement ledger amount grouped by business movement." icon={BadgeIndianRupee}>
           <RechartsHorizontalBar

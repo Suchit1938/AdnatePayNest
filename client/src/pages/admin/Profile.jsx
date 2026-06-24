@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { BadgeCheck, IdCard, Mail, Pencil, Phone, Save, ShieldCheck, User, X } from "lucide-react";
 
 import api from "../../api/axios";
-import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import SectionCard from "../../components/ui/SectionCard";
@@ -150,31 +149,33 @@ const AdminProfile = () => {
           </button>
         </PageHeader>
 
-        <div className="stat-grid">
-          <StatsCard
-            title="Administrator"
-            value={profile.name.split(" ")[0] || "Admin"}
-            icon={ShieldCheck}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-            footer={{ text: profile.email }}
-          />
-          <StatsCard
-            title="Role"
-            value="Admin"
-            icon={BadgeCheck}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            badge={{ text: profile.status, tone: profile.status === "active" ? "success" : "warning" }}
-          />
-          <StatsCard
-            title="Contact"
-            value={profile.phone || "Not set"}
-            icon={Phone}
-            accent="bg-amber-500"
-            iconTone="bg-amber-50 text-amber-600"
-            footer={{ text: profile.address || "Address not set" }}
-          />
+        <div className="rounded-2xl border border-bank-card-border bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-6 md:flex-row md:items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-bank-sidebar text-2xl font-bold text-white shadow-md">
+                {profile.name ? profile.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "A"}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-slate-900">{profile.name}</h2>
+                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-100">
+                    {profile.role || "Admin"}
+                  </span>
+                </div>
+                <p className="text-sm font-semibold text-slate-500 mt-1">{profile.email}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 md:flex md:items-center md:gap-8 border-t border-slate-100 pt-4 md:border-t-0 md:pt-0">
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Status</p>
+                <p className="text-sm font-bold text-slate-800 mt-0.5 capitalize">{profile.status || "active"}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Phone</p>
+                <p className="text-sm font-bold text-slate-800 mt-0.5">{profile.phone || "Not set"}</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <SectionCard

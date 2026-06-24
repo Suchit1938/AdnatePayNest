@@ -14,7 +14,6 @@ import {
   X,
 } from "lucide-react";
 import api from "../../api/axios";
-import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import SectionCard from "../../components/ui/SectionCard";
@@ -246,39 +245,37 @@ const Profile = () => {
           </button>
         </PageHeader>
 
-        <div className="stat-grid">
-          <StatsCard
-            title="Profile ID"
-            value={profile.customerId || "—"}
-            icon={BadgeCheck}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-            badge={{ text: profile.accountType || "Account holder", tone: "neutral" }}
-          />
-          <StatsCard
-            title="Account Holder"
-            value={profile.name.split(" ")[0] || "—"}
-            icon={User}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            footer={{ text: profile.email }}
-          />
-          <StatsCard
-            title="Bank"
-            value={profile.bankName}
-            icon={Building2}
-            accent="bg-violet-500"
-            iconTone="bg-violet-50 text-violet-600"
-            footer={{ text: profile.ifsc ? `IFSC ${profile.ifsc}` : "IFSC not set" }}
-          />
-          <StatsCard
-            title="Phone"
-            value={profile.phone || "—"}
-            icon={Phone}
-            accent="bg-amber-500"
-            iconTone="bg-amber-50 text-amber-600"
-            footer={{ text: profile.panNumber ? `PAN ${profile.panNumber}` : "PAN not set" }}
-          />
+        <div className="rounded-2xl border border-bank-card-border bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-6 md:flex-row md:items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-bank-sidebar text-2xl font-bold text-white shadow-md">
+                {profile.name ? profile.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "U"}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-slate-900">{profile.name}</h2>
+                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-100">
+                    {profile.accountType || "Customer"}
+                  </span>
+                </div>
+                <p className="text-sm font-semibold text-slate-500 mt-1">{profile.email}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 md:flex md:items-center md:gap-8 border-t border-slate-100 pt-4 md:border-t-0 md:pt-0">
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Customer ID</p>
+                <p className="text-sm font-bold text-slate-800 mt-0.5">{profile.customerId || "—"}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Phone</p>
+                <p className="text-sm font-bold text-slate-800 mt-0.5">{profile.phone || "—"}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Bank</p>
+                <p className="text-sm font-bold text-slate-800 mt-0.5">{profile.bankName || BANK_NAME}</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <SectionCard

@@ -52,24 +52,6 @@ const DEFAULT_LOAN_DECISION_BANDS = {
   review: 50,
 };
 
-const DEFAULT_CLASSIFICATION_BENEFITS = {
-  silver: {
-    classificationScoreRatio: 0.5,
-    interestDiscount: 0,
-    maxAmountMultiplier: 1,
-  },
-  gold: {
-    classificationScoreRatio: 0.75,
-    interestDiscount: 0.5,
-    maxAmountMultiplier: 1.25,
-  },
-  platinum: {
-    classificationScoreRatio: 1,
-    interestDiscount: 1,
-    maxAmountMultiplier: 1.5,
-  },
-};
-
 const DEFAULT_PART_PAYMENT_POLICY = {
   enabled: true,
   minimumAmount: 1000,
@@ -91,10 +73,6 @@ const normalizeLoanRules = (loanRules = {}) => ({
     ...DEFAULT_LOAN_DECISION_BANDS,
     ...(loanRules.decisionBands?.toObject?.() || loanRules.decisionBands || {}),
   },
-  classificationBenefits: {
-    ...DEFAULT_CLASSIFICATION_BENEFITS,
-    ...(loanRules.classificationBenefits?.toObject?.() || loanRules.classificationBenefits || {}),
-  },
   partPaymentPolicy: {
     ...DEFAULT_PART_PAYMENT_POLICY,
     ...(loanRules.partPaymentPolicy?.toObject?.() || loanRules.partPaymentPolicy || {}),
@@ -110,7 +88,6 @@ const getLoanTypeRule = (loanRules, loanType) => {
 };
 
 module.exports = {
-  DEFAULT_CLASSIFICATION_BENEFITS,
   DEFAULT_LOAN_DECISION_BANDS,
   DEFAULT_LOAN_SCORE_WEIGHTS,
   DEFAULT_LOAN_TYPE_RULES,

@@ -106,6 +106,15 @@ const loanScoreLabels = {
   overdraftUsage: "Overdraft Usage",
 };
 
+const loanScoreExplanations = {
+  incomeStrength: "Loan amount is compared with declared monthly income.",
+  liabilities: "Existing active loans reduce available repayment capacity.",
+  classification: "Customer tier contributes a policy confidence score.",
+  employmentStability: "Longer employment history improves stability.",
+  accountHistory: "Older banking relationship improves confidence.",
+  overdraftUsage: "Lower OD usage and fewer monthly OD attempts score better.",
+};
+
 const defaultLoanScoreWeights = {
   incomeStrength: 20,
   liabilities: 30,
@@ -1207,7 +1216,7 @@ function ManagerDashboard() {
               <th className="w-[17%] px-6 py-4">Request</th>
               <th className="w-[22%] px-6 py-4">Customer</th>
               <th className="w-[18%] px-6 py-4">Account</th>
-              <th className="w-[15%] px-6 py-4">Amount</th>
+              <th className="w-[15%] px-6 py-4">Amount (₹)</th>
               <th className="w-[12%] px-6 py-4">Status</th>
               <th className="w-[16%] px-6 py-4">Action</th>
             </tr>
@@ -1760,13 +1769,13 @@ function ManagerDashboard() {
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
                     <div>
-                      <p className="font-semibold text-slate-500">OD Limit</p>
+                      <p className="font-semibold text-slate-500">OD Limit (₹)</p>
                       <p className="font-bold text-slate-900">
                         {formatCurrency(rule.odLimit || 0)}
                       </p>
                     </div>
                     <div>
-                      <p className="font-semibold text-slate-500">Minimum Opening Balance</p>
+                      <p className="font-semibold text-slate-500">Minimum Opening Balance (₹)</p>
                       <p className="font-bold text-slate-900">
                         {formatCurrency(rule.minOpeningBalance || 0)}
                       </p>
@@ -1777,7 +1786,7 @@ function ManagerDashboard() {
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-blue-800">
-                <p className="font-semibold">Penalty</p>
+                <p className="font-semibold">Penalty (₹)</p>
                 <p className="font-bold">{formatCurrency(tier.penaltyAmount)}</p>
               </div>
               <div className="rounded-lg border border-slate-100 bg-white/80 p-3 text-slate-700">
@@ -2356,7 +2365,7 @@ function ManagerDashboard() {
               <tr>
                 <th className="w-[26%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Transfer</th>
                 <th className="w-[31%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Route</th>
-                <th className="w-[16%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Amount</th>
+                <th className="w-[16%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Amount (₹)</th>
                 <th className="w-[14%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Status</th>
                 <th className="w-[13%] px-3 py-4 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:px-5 lg:px-8">Date</th>
               </tr>
@@ -2745,12 +2754,6 @@ function ManagerDashboard() {
                           </div>
                         </div>
 
-                        {loan.eligibilityDetails?.classificationBenefit && (
-                          <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-semibold leading-6 text-emerald-800">
-                            {loan.customerClassification || "Classification"} benefit: {loan.eligibilityDetails.classificationBenefit.interestDiscount}% rate discount, max amount {formatCurrency(loan.eligibilityDetails.classificationBenefit.maxAmount)}.
-                          </div>
-                        )}
-
                         {loan.purpose && (
                           <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-semibold leading-6 text-blue-800">
                             {loan.purpose}
@@ -2926,7 +2929,7 @@ function ManagerDashboard() {
                       <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-bold text-slate-950">Score Breakdown</p>
+                          <p className="text-sm font-bold text-slate-950">Eligibility Breakdown</p>
                           <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
                             {getScoreReason(loan)}
                           </p>
@@ -2940,6 +2943,21 @@ function ManagerDashboard() {
                           className={`h-full rounded-full ${scoreTone.bar}`}
                           style={{ width: `${Math.max(4, Math.min(100, Number(loan.eligibilityScore || 0)))}%` }}
                         />
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-2">
+                        <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                          <p className="font-bold uppercase text-slate-500">Recommendation</p>
+                          <p className="mt-1 text-sm font-bold text-slate-950">
+                            {loan.eligibilityRecommendation || "Not recorded"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                          <p className="font-bold uppercase text-slate-500">Policy Snapshot</p>
+                          <p className="mt-1">
+                            FOIR {loan.eligibilityDetails?.foir ?? "N/A"}% / OD uses {loan.eligibilityDetails?.highestOdUsesThisMonth ?? 0}
+                            /{loan.eligibilityDetails?.monthlyOdUseLimit ?? 3}
+                          </p>
+                        </div>
                       </div>
                       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                         {Object.entries(loan.eligibilityDetails?.componentScores || {}).map(([key, value]) => {
@@ -2971,10 +2989,16 @@ function ManagerDashboard() {
                                   style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
                                 />
                               </div>
+                              <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+                                {loanScoreExplanations[key] || "Policy factor used by the scoring model."}
+                              </p>
                             </div>
                           );
                         })}
                       </div>
+                      <p className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold leading-5 text-blue-800">
+                        This explains the system recommendation only. Final approval still depends on document verification and manager judgement.
+                      </p>
                       </div>
                     </div>
 
@@ -3069,9 +3093,9 @@ function ManagerDashboard() {
         ) : (
           <div className="space-y-3">
             {approvedLoanPagination.pageRows.map((loan) => {
-              const hasAcceptedDocuments =
-                loan.sanctionLetter?.status === "accepted" &&
-                loan.loanAgreement?.status === "accepted";
+              const hasGeneratedDocuments =
+                Boolean(loan.sanctionLetter?.fileUrl) &&
+                Boolean(loan.loanAgreement?.fileUrl);
               const hasSettlementFunds =
                 Number(settlementAccount.availableForDisbursement || 0) >= Number(loan.amount || 0);
 
@@ -3088,13 +3112,12 @@ function ManagerDashboard() {
                   <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
                     Agreement: {formatStatusLabel(loan.loanAgreement?.status || "pending")}
                   </p>
-                  {(loan.sanctionLetter?.status !== "accepted" ||
-                    loan.loanAgreement?.status !== "accepted") && (
+                  {!hasGeneratedDocuments && (
                     <p className="mt-1 text-xs font-semibold text-amber-700">
-                      Waiting for customer sanction and agreement acceptance before disbursal.
+                      Waiting for sanction and agreement documents to be generated before disbursal.
                     </p>
                   )}
-                  {hasAcceptedDocuments && !hasSettlementFunds && (
+                  {hasGeneratedDocuments && !hasSettlementFunds && (
                     <p className="mt-1 text-xs font-semibold text-red-700">
                       Insufficient bank settlement funds for this disbursal.
                     </p>
@@ -3126,7 +3149,7 @@ function ManagerDashboard() {
                   <button
                     type="button"
                     onClick={() => disburseLoan(loan.id)}
-                    disabled={!hasAcceptedDocuments || !hasSettlementFunds}
+                    disabled={!hasGeneratedDocuments || !hasSettlementFunds}
                     className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     Disburse
@@ -3395,7 +3418,7 @@ function ManagerDashboard() {
                           <div className="mt-3 space-y-2 text-sm">
                             <p><span className="font-bold text-slate-500">Status:</span> {formatStatusLabel(sanction.status || "pending")}</p>
                             <p><span className="font-bold text-slate-500">Generated:</span> {sanction.generatedAt ? formatDateTime(sanction.generatedAt) : "Not generated"}</p>
-                            <p><span className="font-bold text-slate-500">Accepted:</span> {sanction.acceptedAt ? formatDateTime(sanction.acceptedAt) : "Not accepted"}</p>
+                            <p><span className="font-bold text-slate-500">Available:</span> {sanction.fileUrl ? "Yes" : "No"}</p>
                           </div>
                           {sanction.fileUrl && (
                             <a
@@ -3415,7 +3438,7 @@ function ManagerDashboard() {
                           <div className="mt-3 space-y-2 text-sm">
                             <p><span className="font-bold text-slate-500">Status:</span> {formatStatusLabel(agreement.status || "pending")}</p>
                             <p><span className="font-bold text-slate-500">Generated:</span> {agreement.generatedAt ? formatDateTime(agreement.generatedAt) : "Not generated"}</p>
-                            <p><span className="font-bold text-slate-500">Accepted:</span> {agreement.acceptedAt ? formatDateTime(agreement.acceptedAt) : "Not accepted"}</p>
+                            <p><span className="font-bold text-slate-500">Available:</span> {agreement.fileUrl ? "Yes" : "No"}</p>
                           </div>
                           {agreement.fileUrl && (
                             <a
@@ -3518,8 +3541,8 @@ function ManagerDashboard() {
                                 <tr>
                                   <th className="px-3 py-2">Date</th>
                                   <th className="px-3 py-2">Type</th>
-                                  <th className="px-3 py-2">Principal</th>
-                                  <th className="px-3 py-2">Charge</th>
+                                  <th className="px-3 py-2">Principal (₹)</th>
+                                  <th className="px-3 py-2">Charge (₹)</th>
                                   <th className="px-3 py-2">Impact</th>
                                   <th className="px-3 py-2">Status</th>
                                   <th className="px-3 py-2">Receipt</th>
@@ -3577,12 +3600,12 @@ function ManagerDashboard() {
                           <table className="w-full min-w-[760px] text-left text-sm">
                             <thead className="table-head">
                               <tr>
-                                <th className="px-3 py-2">EMI</th>
+                                <th className="px-3 py-2">EMI No.</th>
                                 <th className="px-3 py-2">Due Date</th>
-                                <th className="px-3 py-2">Amount</th>
-                                <th className="px-3 py-2">Principal</th>
-                                <th className="px-3 py-2">Interest</th>
-                                <th className="px-3 py-2">Penalty</th>
+                                <th className="px-3 py-2">Amount (₹)</th>
+                                <th className="px-3 py-2">Principal (₹)</th>
+                                <th className="px-3 py-2">Interest (₹)</th>
+                                <th className="px-3 py-2">Penalty (₹)</th>
                                 <th className="px-3 py-2">Status</th>
                               </tr>
                             </thead>

@@ -213,15 +213,7 @@ const Notifications = () => {
           subtitle="Review transfer decisions, overdraft notices, and account messages from the bank."
         />
 
-        <div className="stat-grid-4">
-          <StatsCard
-            title="Total Alerts"
-            value={summary.total}
-            icon={Bell}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-            badge={{ text: "Latest 50 updates", tone: "neutral" }}
-          />
+        <div className="stat-grid">
           <StatsCard
             title="Needs Review"
             value={summary.needsReview}
@@ -240,14 +232,6 @@ const Notifications = () => {
             accent="bg-sky-500"
             iconTone="bg-sky-50 text-sky-600"
             badge={{ text: "Manager decisions", tone: "neutral" }}
-          />
-          <StatsCard
-            title="Completed"
-            value={summary.completed}
-            icon={CheckCircle2}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            badge={{ text: "Posted updates", tone: "success" }}
           />
         </div>
 

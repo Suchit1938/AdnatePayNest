@@ -289,7 +289,7 @@ const Overdraft = () => {
         {message && <div className="alert-success">{message}</div>}
         {error && <div className="alert-error">{error}</div>}
 
-        <div className="stat-grid-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           <StatsCard
             title="Total OD Limit"
             value={formatCurrency(summary.overdraftLimit)}
@@ -390,19 +390,19 @@ const Overdraft = () => {
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <p className="font-semibold text-slate-500">Limit</p>
+                    <p className="font-semibold text-slate-500">Limit (₹)</p>
                     <p className="mt-1 font-bold">{formatCurrency(account.limit)}</p>
                   </div>
                   <div>
-                    <p className="font-semibold text-slate-500">Used</p>
+                    <p className="font-semibold text-slate-500">Used (₹)</p>
                     <p className="mt-1 font-bold">{formatCurrency(account.used)}</p>
                   </div>
                   <div>
-                    <p className="font-semibold text-slate-500">Available</p>
+                    <p className="font-semibold text-slate-500">Available (₹)</p>
                     <p className="mt-1 font-bold">{formatCurrency(account.available)}</p>
                   </div>
                   <div>
-                    <p className="font-semibold text-slate-500">Uses</p>
+                    <p className="font-semibold text-slate-500">Uses (/month)</p>
                     <p className="mt-1 font-bold">
                       {account.odCountThisMonth || 0} / {account.monthlyOdUses}
                     </p>

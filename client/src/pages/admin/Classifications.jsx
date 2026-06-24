@@ -216,7 +216,7 @@ const AccountTypeRulesEditor = ({ form, errors, onChange }) => {
             </div>
             <label className="mt-4 block">
               <span className="text-xs font-bold uppercase text-slate-500">
-                OD Limit
+                OD Limit (₹)
               </span>
               <input
                 type="number"
@@ -233,7 +233,7 @@ const AccountTypeRulesEditor = ({ form, errors, onChange }) => {
             </label>
             <label className="mt-4 block">
               <span className="text-xs font-bold uppercase text-slate-500">
-                Minimum Opening Balance
+                Minimum Opening Balance (₹)
               </span>
               <input
                 type="number"
@@ -523,19 +523,19 @@ function Classifications() {
 
               <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Per Transfer Limit</p>
+                  <p className="font-semibold">Per Transfer Limit (₹)</p>
                   <p className="mt-1">{formatCurrency(tier.perTxnLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Penalty</p>
+                  <p className="font-semibold">Penalty (₹)</p>
                   <p className="mt-1">{formatCurrency(tier.penaltyAmount)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Daily Limit</p>
+                  <p className="font-semibold">Daily Limit (₹)</p>
                   <p className="mt-1">{formatCurrency(tier.dailyLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
-                  <p className="font-semibold">Monthly Limit</p>
+                  <p className="font-semibold">Monthly Limit (₹)</p>
                   <p className="mt-1">{formatCurrency(tier.monthlyLimit)}</p>
                 </div>
                 <div className="rounded-lg bg-white/70 p-3">
@@ -624,11 +624,11 @@ function Classifications() {
                     <p className="mt-1 font-bold">{formatCurrency(tier.dailyLimit)}</p>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-xs font-bold uppercase text-slate-500">Penalty</p>
+                    <p className="text-xs font-bold uppercase text-slate-500">Penalty (₹)</p>
                     <p className="mt-1 font-bold">{formatCurrency(tier.penaltyAmount)}</p>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-xs font-bold uppercase text-slate-500">Interest</p>
+                    <p className="text-xs font-bold uppercase text-slate-500">Interest (% monthly)</p>
                     <p className="mt-1 font-bold">
                       {formatMonthlyInterestRate(tier.interestRate || tier.lateFeeRate)}
                     </p>
@@ -683,7 +683,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Per Transfer Limit
+                  Per Transfer Limit (₹)
                 </span>
                 <input
                   required
@@ -700,7 +700,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Daily Limit
+                  Daily Limit (₹)
                 </span>
                 <input
                   required
@@ -717,7 +717,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Monthly Limit
+                  Monthly Limit (₹)
                 </span>
                 <input
                   required
@@ -734,7 +734,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Penalty Amount
+                  Penalty Amount (₹)
                 </span>
                 <input
                   required
@@ -872,7 +872,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Per Transfer Limit
+                  Per Transfer Limit (₹)
                 </span>
                 <input
                   required
@@ -889,7 +889,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Daily Limit
+                  Daily Limit (₹)
                 </span>
                 <input
                   required
@@ -906,7 +906,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Monthly Limit
+                  Monthly Limit (₹)
                 </span>
                 <input
                   required
@@ -923,7 +923,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Penalty Amount
+                  Penalty Amount (₹)
                 </span>
                 <input
                   required

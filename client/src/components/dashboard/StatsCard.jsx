@@ -21,17 +21,17 @@ const StatsCard = ({
     return (
       <div
         onClick={onClick}
-        className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:scale-105 sm:p-6 ${
-          onClick ? "cursor-pointer hover:border-bank-accent/40 active:scale-[0.99]" : ""
+        className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md sm:p-6 ${
+          onClick ? "cursor-pointer hover:border-bank-accent/40 hover:shadow-lg hover:shadow-slate-100 active:scale-[0.98]" : ""
         }`}
       >
-        <div className={`absolute inset-x-0 top-0 h-1 ${accent}`} />
+        <div className={`absolute inset-x-0 top-0 h-1 transition-all duration-300 ${accent} ${onClick ? "group-hover:h-1.5" : ""}`} />
 
-        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 transition-colors duration-300 group-hover:text-slate-700">
           {title}
         </h3>
 
-        <p className="mt-3 break-words text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{value}</p>
+        <p className="mt-3 break-words text-2xl font-bold tracking-tight text-slate-900 transition-colors duration-300 group-hover:text-slate-950 sm:text-3xl">{value}</p>
       </div>
     );
   }
@@ -41,22 +41,22 @@ const StatsCard = ({
   return (
     <div
       onClick={onClick}
-      className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-6 ${
-        onClick ? "cursor-pointer hover:border-bank-accent/40 active:scale-[0.99]" : ""
+      className={`group relative overflow-hidden rounded-xl border border-bank-card-border bg-white p-4 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md sm:p-6 ${
+        onClick ? "cursor-pointer hover:border-bank-accent/40 hover:shadow-lg hover:shadow-slate-100 active:scale-[0.98]" : ""
       }`}
     >
-      <div className={`absolute inset-x-0 top-0 h-1 ${accent}`} />
+      <div className={`absolute inset-x-0 top-0 h-1 transition-all duration-300 ${accent} ${onClick ? "group-hover:h-1.5" : ""}`} />
 
       <div className="flex items-center gap-3 sm:gap-4">
-        <div className={`shrink-0 rounded-lg p-2.5 shadow-sm sm:p-3 ${iconTone}`}>
-          <Icon size={22} strokeWidth={2} />
+        <div className={`shrink-0 rounded-lg p-2.5 shadow-sm sm:p-3 transition-all duration-300 group-hover:shadow-md ${iconTone}`}>
+          <Icon size={22} strokeWidth={2} className="transition-transform duration-300 group-hover:scale-110" />
         </div>
 
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 transition-colors duration-300 group-hover:text-slate-700">
             {title}
           </p>
-          <p className="mt-1 break-words text-xl font-bold tracking-tight text-slate-950 sm:text-2xl">{value}</p>
+          <p className="mt-1 break-words text-xl font-bold tracking-tight text-slate-950 transition-colors duration-300 group-hover:text-black sm:text-2xl">{value}</p>
         </div>
       </div>
 
@@ -64,18 +64,18 @@ const StatsCard = ({
         <div className="mt-4 min-h-[28px]">
           {badge && (
             <span
-              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${badgeStyles[badge.tone] || badgeStyles.neutral}`}
+              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold transition-all duration-300 ${badgeStyles[badge.tone] || badgeStyles.neutral}`}
             >
               {badge.text}
             </span>
           )}
 
           {footer && (
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors duration-300 group-hover:text-slate-600">
               {FooterIcon && (
                 <FooterIcon
                   size={14}
-                  className={footer.iconClassName || "text-slate-400"}
+                  className={`transition-transform duration-300 group-hover:translate-x-0.5 ${footer.iconClassName || "text-slate-400"}`}
                   strokeWidth={2}
                 />
               )}

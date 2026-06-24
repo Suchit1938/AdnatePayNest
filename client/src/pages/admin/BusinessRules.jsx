@@ -3,6 +3,7 @@ import {
   Bell,
   Mail,
   MessageSquareText,
+  PiggyBank,
   Save,
   Send,
   ShieldCheck,
@@ -13,6 +14,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import api from "../../api/axios";
+import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import { useToast } from "../../components/ui/useToast";
@@ -21,17 +23,17 @@ import DashboardLayout from "../../layouts/DashboardLayout";
 const permissionFields = [
   {
     key: "perTxnLimit",
-    label: "Per Transfer Limit",
+    label: "Per Transfer Limit (₹)",
     description: "Allow manager to change the per-transfer cap.",
   },
   {
     key: "dailyLimit",
-    label: "Daily Limit",
+    label: "Daily Limit (₹)",
     description: "Allow manager to change the daily transfer cap.",
   },
   {
     key: "monthlyLimit",
-    label: "Monthly Limit",
+    label: "Monthly Limit (₹)",
     description: "Allow manager to change the monthly transfer cap.",
   },
   {
@@ -41,12 +43,12 @@ const permissionFields = [
   },
   {
     key: "penaltyAmount",
-    label: "Penalty Amount",
+    label: "Penalty Amount (₹)",
     description: "Allow manager to change the penalty charged after grace.",
   },
   {
     key: "interestRate",
-    label: "Monthly OD Interest",
+    label: "Monthly OD Interest (%)",
     description: "Allow manager to change the monthly overdraft interest.",
   },
 ];
@@ -80,23 +82,6 @@ const defaultLoanRules = {
     eligible: 65,
     review: 50,
   },
-  classificationBenefits: {
-    silver: {
-      classificationScoreRatio: 0.5,
-      interestDiscount: 0,
-      maxAmountMultiplier: 1,
-    },
-    gold: {
-      classificationScoreRatio: 0.75,
-      interestDiscount: 0.5,
-      maxAmountMultiplier: 1.25,
-    },
-    platinum: {
-      classificationScoreRatio: 1,
-      interestDiscount: 1,
-      maxAmountMultiplier: 1.5,
-    },
-  },
   partPaymentPolicy: {
     enabled: true,
     minimumAmount: 1000,
@@ -106,16 +91,117 @@ const defaultLoanRules = {
   },
 };
 
+const scoreModelFactors = [
+  ["incomeStrength", "Income Strength", "Compares requested amount with declared monthly income."],
+  ["liabilities", "Active Loans", "Reduces score as active loan obligations increase."],
+  ["classification", "Classification", "Uses customer tier as a policy confidence signal."],
+  ["employmentStability", "Employment Stability", "Rewards longer declared employment history."],
+  ["accountHistory", "Account History", "Rewards longer banking relationship with the bank."],
+  ["overdraftUsage", "Overdraft Usage", "Penalizes high OD usage, blocked OD, or repeated monthly OD attempts."],
+];
+
+const ruleTabs = [
+  { key: "permissions", label: "Permissions" },
+  { key: "loans", label: "Loans" },
+  { key: "deposits", label: "Deposits" },
+  { key: "messaging", label: "Messaging" },
+  { key: "audit", label: "Audit" },
+];
+
+const defaultDepositRules = {
+  rateCards: [
+    {
+      productType: "fd",
+      label: "FD 1 year",
+      minTenureMonths: 12,
+      maxTenureMonths: 12,
+      annualInterestRate: 7,
+      minAmount: 1000,
+    },
+    {
+      productType: "fd",
+      label: "FD 2 years",
+      minTenureMonths: 24,
+      maxTenureMonths: 24,
+      annualInterestRate: 7.25,
+      minAmount: 1000,
+    },
+    {
+      productType: "fd",
+      label: "FD 5 years",
+      minTenureMonths: 60,
+      maxTenureMonths: 60,
+      annualInterestRate: 7.75,
+      minAmount: 1000,
+    },
+    {
+      productType: "rd",
+      label: "RD 6 months",
+      minTenureMonths: 6,
+      maxTenureMonths: 6,
+      annualInterestRate: 6.25,
+      minAmount: 500,
+    },
+    {
+      productType: "rd",
+      label: "RD 1 year",
+      minTenureMonths: 12,
+      maxTenureMonths: 12,
+      annualInterestRate: 6.75,
+      minAmount: 500,
+    },
+    {
+      productType: "rd",
+      label: "RD 2 years",
+      minTenureMonths: 24,
+      maxTenureMonths: 24,
+      annualInterestRate: 7.25,
+      minAmount: 500,
+    },
+  ],
+};
+
+const normalizeDepositRules = (rules = {}) => ({
+  rateCards: (rules.rateCards?.length ? rules.rateCards : defaultDepositRules.rateCards).map((rule) => ({
+    ...rule,
+    productType: rule.productType === "rd" ? "rd" : "fd",
+    annualInterestRate: rule.annualInterestRate ?? 0,
+    minAmount: rule.minAmount ?? 0,
+  })),
+});
+
+const tenureLabel = (minTenureMonths, maxTenureMonths) => {
+  const minMonths = Number(minTenureMonths || 0);
+  const maxMonths = Number(maxTenureMonths || minTenureMonths || 0);
+  const format = (months) => (months % 12 === 0 ? `${months / 12} year${months === 12 ? "" : "s"}` : `${months} months`);
+
+  return minMonths === maxMonths ? format(minMonths) : `${format(minMonths)} to ${format(maxMonths)}`;
+};
+
+const summarizeDepositCards = (cards) => {
+  if (!cards.length) return "No products configured";
+
+  const rates = cards.map((card) => Number(card.annualInterestRate || 0));
+  const minimums = cards.map((card) => Number(card.minAmount || 0));
+  const averageRate = rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
+  const lowestMinimum = Math.min(...minimums);
+
+  return `${cards.length} tenures / avg ${averageRate.toFixed(2)}% / min Rs. ${lowestMinimum.toLocaleString("en-IN")}`;
+};
+
 const BusinessRules = () => {
   const toast = useToast();
   const [permissions, setPermissions] = useState(defaultPermissions);
   const [loanRules, setLoanRules] = useState(defaultLoanRules);
+  const [depositRules, setDepositRules] = useState(defaultDepositRules);
+  const [activeRuleTab, setActiveRuleTab] = useState("permissions");
   const [updatedAt, setUpdatedAt] = useState("");
   const [customers, setCustomers] = useState([]);
   const [managers, setManagers] = useState([]);
   const [tiers, setTiers] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [messageForm, setMessageForm] = useState(initialMessageForm);
+  const [selectedLoanTypeKey, setSelectedLoanTypeKey] = useState("");
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
 
@@ -140,11 +226,8 @@ const BusinessRules = () => {
               ...defaultLoanRules.decisionBands,
               ...(config.loanRules?.decisionBands || {}),
             },
-            classificationBenefits: {
-              ...defaultLoanRules.classificationBenefits,
-              ...(config.loanRules?.classificationBenefits || {}),
-            },
           });
+          setDepositRules(normalizeDepositRules(config.depositRules));
           setAuditLogs(rulesResult.value.data.auditLogs || []);
         }
 
@@ -169,6 +252,17 @@ const BusinessRules = () => {
   );
   const selectedTier = tiers.find((tier) => tier.key === messageForm.targetTier);
   const permissionCount = Object.values(permissions).filter(Boolean).length;
+  const selectedLoanTypeRule =
+    (loanRules.loanTypes || []).find((rule) => rule.key === selectedLoanTypeKey) ||
+    (loanRules.loanTypes || [])[0];
+  const scoreWeightTotal = Object.values(loanRules.scoreWeights || {}).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
+  const formattedScoreWeightTotal = Number.isInteger(scoreWeightTotal)
+    ? scoreWeightTotal
+    : scoreWeightTotal.toFixed(2);
+  const scoreWeightsAreValid = Math.abs(scoreWeightTotal - 100) < 0.001;
 
   const updatePermission = (key, value) => {
     setPermissions((current) => ({
@@ -178,12 +272,18 @@ const BusinessRules = () => {
   };
 
   const savePermissions = async () => {
+    if (!scoreWeightsAreValid) {
+      toast.warning("Eligibility score weights must total 100% before saving.");
+      return;
+    }
+
     setIsSavingPermissions(true);
 
     try {
       const { data } = await api.patch("/business-rules", {
         managerTierPermissions: permissions,
         loanRules,
+        depositRules,
       });
 
       setPermissions({
@@ -201,11 +301,8 @@ const BusinessRules = () => {
           ...defaultLoanRules.decisionBands,
           ...(data.config.loanRules?.decisionBands || {}),
         },
-        classificationBenefits: {
-          ...defaultLoanRules.classificationBenefits,
-          ...(data.config.loanRules?.classificationBenefits || {}),
-        },
       });
+      setDepositRules(normalizeDepositRules(data.config.depositRules));
       setUpdatedAt(data.config.updatedAt || "");
       toast.success("Business rules updated.");
     } catch (error) {
@@ -262,18 +359,23 @@ const BusinessRules = () => {
     }));
   };
 
-  const updateClassificationBenefit = (classification, field, value) => {
-    setLoanRules((current) => ({
+  const updateDepositRateCard = (index, field, value) => {
+    setDepositRules((current) => ({
       ...current,
-      classificationBenefits: {
-        ...current.classificationBenefits,
-        [classification]: {
-          ...(current.classificationBenefits?.[classification] || {}),
-          [field]: value,
-        },
-      },
+      rateCards: (current.rateCards || []).map((rule, currentIndex) =>
+        currentIndex === index ? { ...rule, [field]: value } : rule
+      ),
     }));
   };
+
+  const fdRateCards = (depositRules.rateCards || []).filter((rule) => rule.productType === "fd");
+  const rdRateCards = (depositRules.rateCards || []).filter((rule) => rule.productType === "rd");
+  const findDepositRuleIndex = (targetRule) =>
+    (depositRules.rateCards || []).findIndex(
+      (rule) =>
+        rule.productType === targetRule.productType &&
+        rule.minTenureMonths === targetRule.minTenureMonths
+    );
 
   const sendMessage = async (event) => {
     event.preventDefault();
@@ -319,45 +421,51 @@ const BusinessRules = () => {
           subtitle="Control manager tier-edit permissions and send operational messages from one place."
         />
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="card-padded">
-            <ShieldCheck className="text-blue-600" size={24} />
-            <p className="mt-3 text-sm font-bold uppercase text-slate-500">
-              Manager Permissions
-            </p>
-            <p className="mt-1 text-3xl font-bold text-slate-950">
-              {permissionCount}/{permissionFields.length}
-            </p>
-            <p className="mt-2 text-sm text-slate-500">
-              Tier fields currently open for manager edits.
-            </p>
-          </div>
-          <div className="card-padded">
-            <UserRound className="text-emerald-600" size={24} />
-            <p className="mt-3 text-sm font-bold uppercase text-slate-500">
-              Active Manager
-            </p>
-            <p className="mt-1 truncate text-2xl font-bold text-slate-950">
-              {activeManager?.name || "Not assigned"}
-            </p>
-            <p className="mt-2 text-sm text-slate-500">
-              {activeManager?.email || "No manager account found"}
-            </p>
-          </div>
-          <div className="card-padded">
-            <Bell className="text-amber-600" size={24} />
-            <p className="mt-3 text-sm font-bold uppercase text-slate-500">
-              Last Updated
-            </p>
-            <p className="mt-1 text-2xl font-bold text-slate-950">
-              {updatedAt ? new Date(updatedAt).toLocaleDateString() : "Not updated"}
-            </p>
-            <p className="mt-2 text-sm text-slate-500">
-              Saved permissions apply to manager tier policy edits.
-            </p>
-          </div>
-        </section>
+        <div className="stat-grid">
+          <StatsCard
+            title="Manager Permissions"
+            value={`${permissionCount}/${permissionFields.length}`}
+            icon={ShieldCheck}
+            accent="bg-blue-500"
+            iconTone="bg-blue-50 text-blue-600"
+            footer={{ text: "Tier fields open for manager edits" }}
+          />
+          <StatsCard
+            title="Active Manager"
+            value={activeManager?.name ? activeManager.name.split(" ")[0] : "None"}
+            icon={UserRound}
+            accent="bg-emerald-500"
+            iconTone="bg-emerald-50 text-emerald-600"
+            footer={{ text: activeManager?.email || "No manager assigned" }}
+          />
+          <StatsCard
+            title="Last Updated"
+            value={updatedAt ? new Date(updatedAt).toLocaleDateString() : "Not updated"}
+            icon={Bell}
+            accent="bg-amber-500"
+            iconTone="bg-amber-50 text-amber-600"
+            footer={{ text: "Applies to manager policy edits" }}
+          />
+        </div>
 
+        <div className="app-scrollbar flex gap-2 overflow-x-auto rounded-xl border border-bank-card-border bg-white p-2">
+          {ruleTabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveRuleTab(tab.key)}
+              className={`shrink-0 rounded-lg px-4 py-2 text-sm font-bold transition ${
+                activeRuleTab === tab.key
+                  ? "bg-bank-accent text-white shadow-sm"
+                  : "text-slate-600 hover:bg-bank-surface hover:text-bank-eyebrow"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeRuleTab === "permissions" && (
         <section className="card-padded">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
@@ -377,7 +485,7 @@ const BusinessRules = () => {
             <button
               type="button"
               onClick={savePermissions}
-              disabled={isSavingPermissions}
+              disabled={isSavingPermissions || !scoreWeightsAreValid}
               className="btn-primary"
             >
               <Save size={17} />
@@ -407,7 +515,9 @@ const BusinessRules = () => {
             ))}
           </div>
         </section>
+        )}
 
+        {activeRuleTab === "loans" && (
         <section className="card-padded">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
@@ -424,7 +534,7 @@ const BusinessRules = () => {
             <button
               type="button"
               onClick={savePermissions}
-              disabled={isSavingPermissions}
+              disabled={isSavingPermissions || !scoreWeightsAreValid}
               className="btn-primary"
             >
               <Save size={17} />
@@ -432,84 +542,128 @@ const BusinessRules = () => {
             </button>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {(loanRules.loanTypes || []).map((rule) => (
-              <article key={rule.key} className="rounded-xl border border-bank-card-border bg-white p-4">
+          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+            <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+              <label className="label-field">
+                <span>Loan Type</span>
+                <select
+                  value={selectedLoanTypeRule?.key || ""}
+                  onChange={(event) => setSelectedLoanTypeKey(event.target.value)}
+                  className="input-field bg-white"
+                >
+                  {(loanRules.loanTypes || []).map((rule) => (
+                    <option key={rule.key} value={rule.key}>
+                      {rule.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedLoanTypeRule && (
+                <div className="mt-4 rounded-lg bg-white p-3 text-sm font-semibold leading-6 text-slate-600">
+                  <p className="font-bold text-slate-950">{selectedLoanTypeRule.label}</p>
+                  <p>Rate: {selectedLoanTypeRule.annualInterestRate}% p.a.</p>
+                  <p>
+                    Amount: ₹{Number(selectedLoanTypeRule.minAmount || 0).toLocaleString("en-IN")} to ₹
+                    {Number(selectedLoanTypeRule.maxAmount || 0).toLocaleString("en-IN")}
+                  </p>
+                  <p>
+                    Tenure: {selectedLoanTypeRule.minTenureMonths} to {selectedLoanTypeRule.maxTenureMonths} months
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {selectedLoanTypeRule ? (
+              <article className="rounded-xl border border-bank-card-border bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="font-bold text-slate-950">{rule.label}</h3>
+                  <h3 className="font-bold text-slate-950">{selectedLoanTypeRule.label} Details</h3>
                   <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                    {rule.key}
+                    {selectedLoanTypeRule.key}
                   </span>
                 </div>
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <label className="label-field">
                     Annual Interest (%)
                     <input
                       type="number"
                       min="0"
                       step="0.01"
-                      value={rule.annualInterestRate}
-                      onChange={(event) => updateLoanTypeRule(rule.key, "annualInterestRate", event.target.value)}
+                      value={selectedLoanTypeRule.annualInterestRate}
+                      onChange={(event) =>
+                        updateLoanTypeRule(selectedLoanTypeRule.key, "annualInterestRate", event.target.value)
+                      }
                       className="input-field"
                     />
                   </label>
                   <label className="label-field">
-                    Minimum Amount
+                    Minimum Amount (₹)
                     <input
                       type="number"
                       min="0"
-                      value={rule.minAmount}
-                      onChange={(event) => updateLoanTypeRule(rule.key, "minAmount", event.target.value)}
+                      value={selectedLoanTypeRule.minAmount}
+                      onChange={(event) =>
+                        updateLoanTypeRule(selectedLoanTypeRule.key, "minAmount", event.target.value)
+                      }
                       className="input-field"
                     />
                   </label>
                   <label className="label-field">
-                    Maximum Amount
+                    Maximum Amount (₹)
                     <input
                       type="number"
                       min="0"
-                      value={rule.maxAmount}
-                      onChange={(event) => updateLoanTypeRule(rule.key, "maxAmount", event.target.value)}
+                      value={selectedLoanTypeRule.maxAmount}
+                      onChange={(event) =>
+                        updateLoanTypeRule(selectedLoanTypeRule.key, "maxAmount", event.target.value)
+                      }
                       className="input-field"
                     />
                   </label>
                   <label className="label-field">
-                    Tenure Range
+                    Tenure Range (Months)
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         type="number"
                         min="1"
-                        value={rule.minTenureMonths}
-                        onChange={(event) => updateLoanTypeRule(rule.key, "minTenureMonths", event.target.value)}
+                        value={selectedLoanTypeRule.minTenureMonths}
+                        onChange={(event) =>
+                          updateLoanTypeRule(selectedLoanTypeRule.key, "minTenureMonths", event.target.value)
+                        }
                         className="input-field"
-                        aria-label={`${rule.label} minimum tenure`}
+                        aria-label={`${selectedLoanTypeRule.label} minimum tenure`}
                       />
                       <input
                         type="number"
                         min="1"
-                        value={rule.maxTenureMonths}
-                        onChange={(event) => updateLoanTypeRule(rule.key, "maxTenureMonths", event.target.value)}
+                        value={selectedLoanTypeRule.maxTenureMonths}
+                        onChange={(event) =>
+                          updateLoanTypeRule(selectedLoanTypeRule.key, "maxTenureMonths", event.target.value)
+                        }
                         className="input-field"
-                        aria-label={`${rule.label} maximum tenure`}
+                        aria-label={`${selectedLoanTypeRule.label} maximum tenure`}
                       />
                     </div>
                   </label>
                 </div>
               </article>
-            ))}
+            ) : (
+              <div className="rounded-xl border border-bank-card-border bg-white p-4 text-sm font-semibold text-slate-500">
+                No loan type rules are configured.
+              </div>
+            )}
           </div>
 
           <div className="mt-5 grid grid-cols-1 gap-4">
             <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-bold text-slate-950">Part-Payment Policy</h3>
+                  <h3 className="font-bold text-slate-950">Customer Part-Payment Rules</h3>
                   <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Applied automatically before a customer can reduce loan principal.
+                    Bank-level limits shown to customers before they reduce loan principal.
                   </p>
                 </div>
                 <label className="inline-flex items-center gap-3 text-sm font-semibold text-slate-700">
-                  Enabled
+                  Allow Part-Payment
                   <input
                     type="checkbox"
                     checked={loanRules.partPaymentPolicy?.enabled !== false}
@@ -520,7 +674,7 @@ const BusinessRules = () => {
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <label className="label-field">
-                  Minimum Amount
+                  Minimum Payment Amount (₹)
                   <input
                     type="number"
                     min="0"
@@ -530,7 +684,7 @@ const BusinessRules = () => {
                   />
                 </label>
                 <label className="label-field">
-                  Minimum Principal (%)
+                  Minimum Principal Share (%)
                   <input
                     type="number"
                     min="0"
@@ -542,7 +696,7 @@ const BusinessRules = () => {
                   />
                 </label>
                 <label className="label-field">
-                  Lock-In (Months)
+                  Part-Payment Allowed After (Months)
                   <input
                     type="number"
                     min="0"
@@ -552,7 +706,7 @@ const BusinessRules = () => {
                   />
                 </label>
                 <label className="label-field">
-                  Charge (%)
+                  Processing Charge (%)
                   <input
                     type="number"
                     min="0"
@@ -566,11 +720,32 @@ const BusinessRules = () => {
               </div>
             </div>
             <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
-              <h3 className="font-bold text-slate-950">Eligibility Score Weights</h3>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-950">Eligibility Score Weights</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    All weights together must equal 100%.
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-bold ${
+                    scoreWeightsAreValid
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-red-50 text-red-700"
+                  }`}
+                >
+                  Total: {formattedScoreWeightTotal}%
+                </span>
+              </div>
+              {!scoreWeightsAreValid && (
+                <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  Score weights must total 100%. Adjust the percentages before saving.
+                </div>
+              )}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {Object.entries(loanRules.scoreWeights || {}).map(([field, value]) => (
                   <label key={field} className="label-field">
-                    {field.replace(/([A-Z])/g, " $1")}
+                    {field.replace(/([A-Z])/g, " $1")} (%)
                     <input
                       type="number"
                       min="0"
@@ -592,7 +767,7 @@ const BusinessRules = () => {
                   ["review", "Manager Review"],
                 ].map(([field, label]) => (
                   <label key={field} className="label-field">
-                    {label}
+                    {label} (%)
                     <input
                       type="number"
                       min="0"
@@ -605,85 +780,146 @@ const BusinessRules = () => {
                 ))}
               </div>
             </div>
-          </div>
+            <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-950">How Eligibility Score Runs</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Managers see this as an explainable recommendation during loan review.
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600 ring-1 ring-bank-card-border">
+                  Total model: {formattedScoreWeightTotal}%
+                </span>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {scoreModelFactors.map(([key, label, description]) => {
+                  const weight = Number(loanRules.scoreWeights?.[key] || 0);
 
-          <div className="mt-5 rounded-xl border border-bank-card-border bg-white p-4">
-            <h3 className="font-bold text-slate-950">Classification Loan Benefits</h3>
-            <p className="mt-1 text-sm leading-6 text-slate-500">
-              These values are applied automatically from the customer classification assigned during customer creation.
-            </p>
-            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-              {[
-                ["silver", "Silver"],
-                ["gold", "Gold"],
-                ["platinum", "Platinum"],
-              ].map(([classification, label]) => {
-                const benefit = loanRules.classificationBenefits?.[classification] || {};
-
-                return (
-                  <article key={classification} className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
-                    <h4 className="font-bold text-slate-950">{label}</h4>
-                    <div className="mt-4 grid grid-cols-1 gap-3">
-                      <label className="label-field">
-                        Score Ratio
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.05"
-                          value={benefit.classificationScoreRatio ?? ""}
-                          onChange={(event) =>
-                            updateClassificationBenefit(
-                              classification,
-                              "classificationScoreRatio",
-                              event.target.value
-                            )
-                          }
-                          className="input-field bg-white"
-                        />
-                      </label>
-                      <label className="label-field">
-                        Interest Discount (%)
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={benefit.interestDiscount ?? ""}
-                          onChange={(event) =>
-                            updateClassificationBenefit(
-                              classification,
-                              "interestDiscount",
-                              event.target.value
-                            )
-                          }
-                          className="input-field bg-white"
-                        />
-                      </label>
-                      <label className="label-field">
-                        Max Amount Multiplier
-                        <input
-                          type="number"
-                          min="0.1"
-                          step="0.05"
-                          value={benefit.maxAmountMultiplier ?? ""}
-                          onChange={(event) =>
-                            updateClassificationBenefit(
-                              classification,
-                              "maxAmountMultiplier",
-                              event.target.value
-                            )
-                          }
-                          className="input-field bg-white"
-                        />
-                      </label>
+                  return (
+                    <div key={key} className="rounded-lg border border-bank-card-border bg-white p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="font-bold text-slate-950">{label}</p>
+                        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
+                          {weight} pts
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">{description}</p>
                     </div>
-                  </article>
-                );
-              })}
+                  );
+                })}
+              </div>
+              <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm font-semibold leading-6 text-amber-800">
+                Decision bands classify the final score: highly eligible at {loanRules.decisionBands?.highlyEligible ?? 80}%, eligible at {loanRules.decisionBands?.eligible ?? 65}%, and manager review at {loanRules.decisionBands?.review ?? 50}%.
+              </div>
             </div>
           </div>
-        </section>
 
+        </section>
+        )}
+
+        {activeRuleTab === "deposits" && (
+        <section className="card-padded">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="rounded-lg bg-cyan-50 p-2.5 text-cyan-700">
+                <PiggyBank size={20} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-xl font-bold text-slate-950">FD / RD Product Rules</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  Configure customer-facing deposit rates and minimum opening amounts from Business Rules.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={savePermissions}
+              disabled={isSavingPermissions || !scoreWeightsAreValid}
+              className="btn-primary"
+            >
+              <Save size={17} />
+              {isSavingPermissions ? "Saving..." : "Save Deposit Rules"}
+            </button>
+          </div>
+
+          <div className="mt-5 space-y-3">
+            {[
+              ["Fixed Deposits", "fd", fdRateCards],
+              ["Recurring Deposits", "rd", rdRateCards],
+            ].map(([title, productType, cards]) => (
+              <details
+                key={productType}
+                className="group rounded-xl border border-bank-card-border bg-bank-surface p-4"
+                open={productType === "fd"}
+              >
+                <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-bold text-slate-950">{title}</h3>
+                    <p className="mt-1 text-sm font-semibold text-slate-500">
+                      {summarizeDepositCards(cards)}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600 ring-1 ring-bank-card-border">
+                    <span className="group-open:hidden">Open</span>
+                    <span className="hidden group-open:inline">Close</span>
+                  </span>
+                </summary>
+                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                  {cards.map((rule) => {
+                    const ruleIndex = findDepositRuleIndex(rule);
+
+                    return (
+                      <article key={`${rule.productType}-${rule.minTenureMonths}`} className="rounded-xl border border-bank-card-border bg-white p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="font-bold text-slate-950">{rule.label}</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-500">
+                              {tenureLabel(rule.minTenureMonths, rule.maxTenureMonths)}
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-bold uppercase text-cyan-700">
+                            {rule.productType}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3">
+                          <label className="label-field">
+                            Annual Interest (%)
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={rule.annualInterestRate}
+                              onChange={(event) =>
+                                updateDepositRateCard(ruleIndex, "annualInterestRate", event.target.value)
+                              }
+                              className="input-field"
+                            />
+                          </label>
+                          <label className="label-field">
+                            Minimum Amount (₹)
+                            <input
+                              type="number"
+                              min="0"
+                              value={rule.minAmount}
+                              onChange={(event) =>
+                                updateDepositRateCard(ruleIndex, "minAmount", event.target.value)
+                              }
+                              className="input-field"
+                            />
+                          </label>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+        )}
+
+        {activeRuleTab === "messaging" && (
         <section className="card-padded">
           <div className="flex min-w-0 items-start gap-3">
             <div className="rounded-lg bg-emerald-50 p-2.5 text-emerald-700">
@@ -822,7 +1058,9 @@ const BusinessRules = () => {
             </div>
           </form>
         </section>
+        )}
 
+        {activeRuleTab === "audit" && (
         <section className="card-padded">
           <div className="flex min-w-0 items-start gap-3">
             <div className="rounded-lg bg-amber-50 p-2.5 text-amber-700">
@@ -860,6 +1098,7 @@ const BusinessRules = () => {
             ))}
           </div>
         </section>
+        )}
       </PageContent>
     </DashboardLayout>
   );

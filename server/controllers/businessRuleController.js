@@ -4,7 +4,6 @@ const Tier = require('../models/Tier');
 const User = require('../models/User');
 const { sendEmail } = require('../utils/email');
 const {
-  DEFAULT_CLASSIFICATION_BENEFITS,
   DEFAULT_LOAN_DECISION_BANDS,
   DEFAULT_LOAN_SCORE_WEIGHTS,
   DEFAULT_LOAN_TYPE_RULES,
@@ -30,6 +29,85 @@ const DEFAULT_MANAGER_TIER_PERMISSIONS = MANAGER_TIER_PERMISSION_FIELDS.reduce(
   {}
 );
 
+const DEFAULT_DEPOSIT_RATE_CARDS = [
+  {
+    productType: 'fd',
+    label: 'FD 1 year',
+    minTenureMonths: 12,
+    maxTenureMonths: 12,
+    annualInterestRate: 7,
+    minAmount: 1000,
+  },
+  {
+    productType: 'fd',
+    label: 'FD 2 years',
+    minTenureMonths: 24,
+    maxTenureMonths: 24,
+    annualInterestRate: 7.25,
+    minAmount: 1000,
+  },
+  {
+    productType: 'fd',
+    label: 'FD 5 years',
+    minTenureMonths: 60,
+    maxTenureMonths: 60,
+    annualInterestRate: 7.75,
+    minAmount: 1000,
+  },
+  {
+    productType: 'rd',
+    label: 'RD 6 months',
+    minTenureMonths: 6,
+    maxTenureMonths: 6,
+    annualInterestRate: 6.25,
+    minAmount: 500,
+  },
+  {
+    productType: 'rd',
+    label: 'RD 1 year',
+    minTenureMonths: 12,
+    maxTenureMonths: 12,
+    annualInterestRate: 6.75,
+    minAmount: 500,
+  },
+  {
+    productType: 'rd',
+    label: 'RD 2 years',
+    minTenureMonths: 24,
+    maxTenureMonths: 24,
+    annualInterestRate: 7.25,
+    minAmount: 500,
+  },
+];
+
+const toNumber = (value) => Number(value || 0);
+
+const normalizeDepositRateCards = (rateCards = []) => {
+  const sourceCards = Array.isArray(rateCards) && rateCards.length
+    ? rateCards
+    : DEFAULT_DEPOSIT_RATE_CARDS;
+
+  return DEFAULT_DEPOSIT_RATE_CARDS.map((template) => {
+    const matchingRule = sourceCards.find(
+      (rule) =>
+        (rule.productType === 'rd' ? 'rd' : 'fd') === template.productType &&
+        Math.round(toNumber(rule.minTenureMonths)) === template.minTenureMonths
+    );
+
+    return {
+      ...template,
+      annualInterestRate: Math.max(
+        0,
+        toNumber(matchingRule?.annualInterestRate ?? template.annualInterestRate)
+      ),
+      minAmount: Math.max(
+        0,
+        Math.round(toNumber(matchingRule?.minAmount ?? template.minAmount))
+      ),
+    };
+  });
+};
+
 const getBusinessRuleConfig = async () => {
   const config = await BusinessRuleConfig.findOneAndUpdate(
     { key: 'global' },
@@ -41,13 +119,23 @@ const getBusinessRuleConfig = async () => {
           loanTypes: DEFAULT_LOAN_TYPE_RULES,
           scoreWeights: DEFAULT_LOAN_SCORE_WEIGHTS,
           decisionBands: DEFAULT_LOAN_DECISION_BANDS,
-          classificationBenefits: DEFAULT_CLASSIFICATION_BENEFITS,
           partPaymentPolicy: DEFAULT_PART_PAYMENT_POLICY,
+        },
+        depositRules: {
+          rateCards: DEFAULT_DEPOSIT_RATE_CARDS,
         },
       },
     },
     { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
   );
+
+  if (!config.depositRules?.rateCards?.length) {
+    config.depositRules = {
+      ...(config.depositRules || {}),
+      rateCards: DEFAULT_DEPOSIT_RATE_CARDS,
+    };
+    await config.save();
+  }
 
   return config;
 };
@@ -59,6 +147,9 @@ const serializeBusinessRuleConfig = (config) => ({
     ...(config.managerTierPermissions?.toObject?.() || config.managerTierPermissions || {}),
   },
   loanRules: normalizeLoanRules(config.loanRules),
+  depositRules: {
+    rateCards: normalizeDepositRateCards(config.depositRules?.rateCards),
+  },
   updatedByName: config.updatedByName,
   updatedAt: config.updatedAt,
 });
@@ -117,24 +208,31 @@ const updateBusinessRules = async (req, res) => {
       };
     })
     : currentLoanRules.loanTypes;
-  const nextScoreWeights = {
+  const incomingScoreWeights = {
     ...currentLoanRules.scoreWeights,
     ...(incomingLoanRules.scoreWeights || {}),
   };
+  const nextScoreWeights = Object.keys(DEFAULT_LOAN_SCORE_WEIGHTS).reduce(
+    (weights, field) => ({
+      ...weights,
+      [field]: Math.min(100, Math.max(0, Number(incomingScoreWeights[field] || 0))),
+    }),
+    {}
+  );
+  const scoreWeightTotal = Object.values(nextScoreWeights).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
+
+  if (Math.abs(scoreWeightTotal - 100) >= 0.001) {
+    return res.status(400).json({
+      message: 'Eligibility score weights must total 100%.',
+    });
+  }
   const nextDecisionBands = {
     ...currentLoanRules.decisionBands,
     ...(incomingLoanRules.decisionBands || {}),
   };
-  const nextClassificationBenefits = ['silver', 'gold', 'platinum'].reduce(
-    (benefits, classification) => ({
-      ...benefits,
-      [classification]: {
-        ...currentLoanRules.classificationBenefits[classification],
-        ...(incomingLoanRules.classificationBenefits?.[classification] || {}),
-      },
-    }),
-    {}
-  );
   const incomingPartPaymentPolicy = incomingLoanRules.partPaymentPolicy || {};
   const nextPartPaymentPolicy = {
     enabled: incomingPartPaymentPolicy.enabled !== false,
@@ -152,6 +250,7 @@ const updateBusinessRules = async (req, res) => {
       incomingPartPaymentPolicy.chargePercentage ?? currentLoanRules.partPaymentPolicy.chargePercentage
     ))),
   };
+  const nextDepositRateCards = normalizeDepositRateCards(req.body.depositRules?.rateCards);
 
   const config = await BusinessRuleConfig.findOneAndUpdate(
     { key: 'global' },
@@ -162,8 +261,10 @@ const updateBusinessRules = async (req, res) => {
           loanTypes: nextLoanTypes,
           scoreWeights: nextScoreWeights,
           decisionBands: nextDecisionBands,
-          classificationBenefits: nextClassificationBenefits,
           partPaymentPolicy: nextPartPaymentPolicy,
+        },
+        depositRules: {
+          rateCards: nextDepositRateCards,
         },
         updatedBy: req.user._id,
         updatedByName: req.user.name,
@@ -174,7 +275,7 @@ const updateBusinessRules = async (req, res) => {
 
   await writeSystemLog({
     action: 'business.rules.updated',
-    message: `${req.user.name} updated business permissions and loan policy rules.`,
+    message: `${req.user.name} updated business permissions, loan policy rules, and deposit product rules.`,
     actor: req.user._id,
     actorName: req.user.name,
     entityType: 'BusinessRuleConfig',
@@ -186,8 +287,10 @@ const updateBusinessRules = async (req, res) => {
         loanTypes: nextLoanTypes,
         scoreWeights: nextScoreWeights,
         decisionBands: nextDecisionBands,
-        classificationBenefits: nextClassificationBenefits,
         partPaymentPolicy: nextPartPaymentPolicy,
+      },
+      depositRules: {
+        rateCards: nextDepositRateCards,
       },
     },
   });

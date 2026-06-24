@@ -5,6 +5,9 @@ const {
   getDepositRates,
   getFixedDepositCustomers,
   getFixedDeposits,
+  renewFixedDeposit,
+  requestMaturityPayout,
+  requestPrematureWithdrawal,
   updateDepositRates,
   updateFixedDepositStatus,
 } = require('../controllers/fixedDepositController');
@@ -14,10 +17,13 @@ const { authorize } = require('../middleware/roleMiddleware');
 const router = express.Router();
 
 router.get('/', protect, authorize('customer', 'admin'), getFixedDeposits);
-router.post('/', protect, authorize('customer', 'admin'), createFixedDeposit);
+router.post('/', protect, authorize('customer'), createFixedDeposit);
 router.get('/rates', protect, authorize('customer', 'admin'), getDepositRates);
 router.patch('/rates', protect, authorize('admin'), updateDepositRates);
 router.get('/customers', protect, authorize('admin'), getFixedDepositCustomers);
+router.post('/:id/premature-withdrawal', protect, authorize('customer'), requestPrematureWithdrawal);
+router.post('/:id/payout', protect, authorize('customer'), requestMaturityPayout);
+router.post('/:id/renew', protect, authorize('customer'), renewFixedDeposit);
 router.patch('/:id/status', protect, authorize('admin'), updateFixedDepositStatus);
 
 module.exports = router;

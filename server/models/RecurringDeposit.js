@@ -1,8 +1,47 @@
 const mongoose = require('mongoose');
 
-const fixedDepositSchema = new mongoose.Schema(
+const rdInstallmentSchema = new mongoose.Schema(
   {
-    fdNumber: {
+    installmentNumber: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+    amount: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    status: {
+      type: String,
+      enum: ['paid', 'missed'],
+      required: true,
+    },
+    dueDate: {
+      type: Date,
+      required: true,
+    },
+    paidAt: Date,
+    penaltyAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    transactionId: {
+      type: String,
+      trim: true,
+    },
+    remarks: {
+      type: String,
+      trim: true,
+    },
+  },
+  { _id: false }
+);
+
+const recurringDepositSchema = new mongoose.Schema(
+  {
+    rdNumber: {
       type: String,
       required: true,
       unique: true,
@@ -31,10 +70,10 @@ const fixedDepositSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-    depositAmount: {
+    monthlyInstallmentAmount: {
       type: Number,
       required: true,
-      min: 1000,
+      min: 500,
     },
     interestRate: {
       type: Number,
@@ -55,10 +94,10 @@ const fixedDepositSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
-    payoutType: {
-      type: String,
-      enum: ['cumulative', 'on_maturity', 'monthly', 'quarterly', 'yearly'],
-      default: 'cumulative',
+    totalInvestment: {
+      type: Number,
+      required: true,
+      min: 0,
     },
     maturityAmount: {
       type: Number,
@@ -70,13 +109,29 @@ const fixedDepositSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
-    nomineeName: {
-      type: String,
-      trim: true,
+    accumulatedValue: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
-    notes: {
-      type: String,
-      trim: true,
+    installmentsPaid: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    missedInstallments: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    penaltyAccrued: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    installments: {
+      type: [rdInstallmentSchema],
+      default: [],
     },
     status: {
       type: String,
@@ -89,7 +144,7 @@ const fixedDepositSchema = new mongoose.Schema(
     },
     renewedFrom: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'FixedDeposit',
+      ref: 'RecurringDeposit',
       default: null,
     },
     createdBy: {
@@ -100,4 +155,4 @@ const fixedDepositSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('FixedDeposit', fixedDepositSchema);
+module.exports = mongoose.model('RecurringDeposit', recurringDepositSchema);

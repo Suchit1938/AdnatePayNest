@@ -1,6 +1,7 @@
 import {
   ArrowLeftRight,
   BadgeIndianRupee,
+  Bell,
   Clock,
   CreditCard,
   ChevronRight,
@@ -11,6 +12,7 @@ import {
   History,
   FileText,
   UserCheck,
+  PiggyBank,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -33,6 +35,8 @@ const Dashboard = () => {
   const toast = useToast();
   const { user } = useAuth();
   const [loans, setLoans] = useState([]);
+  const [fixedDeposits, setFixedDeposits] = useState([]);
+  const [recurringDeposits, setRecurringDeposits] = useState([]);
   const [recentTxns, setRecentTxns] = useState([]);
   const [copied, setCopied] = useState(false);
 
@@ -47,12 +51,60 @@ const Dashboard = () => {
   
   const activeLoans = loans.filter((loan) => ["approved", "disbursed"].includes(loan.status));
   const pendingLoans = loans.filter((loan) => ["submitted", "under_review"].includes(loan.status));
+  const investmentRows = [
+    ...fixedDeposits.map((fd) => ({
+      id: fd.id,
+      product: "FD",
+      number: fd.fdNumber,
+      status: fd.status,
+      amount: Number(fd.depositAmount || 0),
+      currentValue: Number(fd.maturityAmount || fd.depositAmount || 0),
+      maturityDate: fd.maturityDate,
+    })),
+    ...recurringDeposits.map((rd) => ({
+      id: rd.id,
+      product: "RD",
+      number: rd.rdNumber,
+      status: rd.status,
+      amount: Number(rd.monthlyInstallmentAmount || 0) * Number(rd.installmentsPaid || 0),
+      currentValue: Number(rd.accumulatedValue || 0),
+      maturityDate: rd.maturityDate,
+    })),
+  ];
+  const activeInvestments = investmentRows.filter((row) => row.status === "active");
+  const completedInvestments = investmentRows.filter((row) =>
+    ["matured", "closed", "renewed"].includes(row.status)
+  );
+  const investmentAmount = activeInvestments.reduce(
+    (sum, row) => sum + Number(row.currentValue || row.amount || 0),
+    0
+  );
+  const today = new Date();
+  const sevenDaysFromNow = new Date();
+  sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+  const nearMaturityInvestments = activeInvestments
+    .filter((row) => {
+      const maturityDate = new Date(row.maturityDate || 0);
+      return maturityDate >= today && maturityDate <= sevenDaysFromNow;
+    })
+    .sort((left, right) => new Date(left.maturityDate) - new Date(right.maturityDate))
+    .slice(0, 3);
 
   useEffect(() => {
     api
       .get("/loans")
       .then(({ data }) => setLoans(data.loans || []))
       .catch(() => setLoans([]));
+
+    api
+      .get("/fixed-deposits")
+      .then(({ data }) => setFixedDeposits(data.fixedDeposits || []))
+      .catch(() => setFixedDeposits([]));
+
+    api
+      .get("/recurring-deposits")
+      .then(({ data }) => setRecurringDeposits(data.recurringDeposits || []))
+      .catch(() => setRecurringDeposits([]));
 
     api
       .get("/transfers/transactions")
@@ -210,25 +262,28 @@ const Dashboard = () => {
             />
 
             <StatsCard
-              title="Total Transfers"
-              value={user?.totalTransfers || 0}
-              icon={ArrowLeftRight}
-              accent="bg-blue-500"
-              iconTone="bg-blue-50 text-blue-600"
-              onClick={() => navigate("/transactions")}
-              badge={{ text: "All transactions", tone: "neutral" }}
+              title="Active Investments"
+              value={`${activeInvestments.length} | ${formatCurrency(investmentAmount)}`}
+              icon={PiggyBank}
+              accent="bg-cyan-500"
+              iconTone="bg-cyan-50 text-cyan-600"
+              onClick={() => navigate("/fixed-deposits")}
+              badge={{
+                text: `${completedInvestments.length} completed`,
+                tone: completedInvestments.length > 0 ? "success" : "neutral",
+              }}
             />
 
             <StatsCard
-              title="Loan Applications"
-              value={`Pending: ${pendingLoans.length} | Active: ${activeLoans.length}`}
-              icon={BadgeIndianRupee}
-              accent="bg-emerald-500"
-              iconTone="bg-emerald-50 text-emerald-600"
-              onClick={() => navigate("/loans")}
+              title="Maturity Alerts"
+              value={String(nearMaturityInvestments.length)}
+              icon={Bell}
+              accent="bg-rose-500"
+              iconTone="bg-rose-50 text-rose-600"
+              onClick={() => navigate("/notifications")}
               badge={{
-                text: `${pendingLoans.length} pending, ${activeLoans.length} active`,
-                tone: pendingLoans.length > 0 ? "warning" : "neutral",
+                text: nearMaturityInvestments.length ? "Due within 7 days" : "No upcoming maturity",
+                tone: nearMaturityInvestments.length ? "warning" : "success",
               }}
             />
           </div>
@@ -284,6 +339,36 @@ const Dashboard = () => {
             </button>
           </div>
         </SectionCard>
+
+        {nearMaturityInvestments.length > 0 && (
+          <SectionCard
+            title="Investments Near Maturity"
+            subtitle="FD/RD maturity dates due within the next 7 days"
+            icon={CalendarClock}
+          >
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              {nearMaturityInvestments.map((row) => (
+                <button
+                  key={`${row.product}-${row.id}`}
+                  type="button"
+                  onClick={() => navigate(row.product === "FD" ? "/fixed-deposits" : "/recurring-deposits")}
+                  className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-left transition hover:border-amber-300 hover:bg-amber-100"
+                >
+                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-amber-700">
+                    {row.product} Nearing Maturity
+                  </p>
+                  <p className="mt-1 font-black text-slate-950">{row.number}</p>
+                  <p className="mt-2 text-sm font-semibold text-amber-800">
+                    Matures on {new Date(row.maturityDate).toLocaleDateString("en-IN")}
+                  </p>
+                  <p className="mt-1 text-sm font-bold text-slate-700">
+                    Value {formatCurrency(row.currentValue || row.amount)}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </SectionCard>
+        )}
 
         {/* Balance Overview & Overdraft Health Split */}
         <section className="section-split">

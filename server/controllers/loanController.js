@@ -16,6 +16,7 @@ const {
 const { getLoanTypeRule, normalizeLoanRules } = require('../utils/loanRules');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
 const { sendEmail } = require('../utils/email');
+const { drawLogo } = require('../utils/branding');
 const { writeSystemLog } = require('../utils/systemLog');
 const {
   SETTLEMENT_ACCOUNT_NAME,
@@ -226,11 +227,13 @@ const addPdfFooter = (doc, loan, documentTitle = 'Loan Sanction Letter') => {
 const drawSanctionHeader = (doc, loan, documentTitle = 'LOAN SANCTION LETTER') => {
   doc.rect(0, 0, doc.page.width, 112).fill('#0f3a5f');
   doc.circle(64, 52, 24).fill('#ffffff');
-  doc
-    .fillColor('#0f3a5f')
-    .font('Helvetica-Bold')
-    .fontSize(18)
-    .text('APN', 48, 43, { width: 32, align: 'center' });
+  if (!drawLogo(doc, 44, 32, { width: 40, height: 40 })) {
+    doc
+      .fillColor('#0f3a5f')
+      .font('Helvetica-Bold')
+      .fontSize(18)
+      .text('APN', 48, 43, { width: 32, align: 'center' });
+  }
   doc
     .fillColor('#ffffff')
     .font('Helvetica-Bold')
@@ -352,7 +355,7 @@ const generateSanctionLetterPdf = (loan, manager) =>
       .fontSize(10)
       .fillColor('#475569')
       .text(
-        'We are pleased to inform you that your loan application has been approved subject to acceptance of the terms below, completion of applicable documentation, and final disbursement checks.',
+        'We are pleased to inform you that your loan application has been approved subject to the terms below, completion of applicable documentation, and final disbursement checks.',
         42,
         164,
         { width: 510, lineGap: 4 }
@@ -392,7 +395,7 @@ const generateSanctionLetterPdf = (loan, manager) =>
       .text('Key Conditions', 42, tableBottom + 26);
 
     const conditions = [
-      `The sanctioned amount will be disbursed only after the borrower accepts this sanction letter in the application.`,
+      `The sanctioned amount will be disbursed after manager approval, document generation, and successful operational checks.`,
       `The first EMI will follow the repayment schedule generated at disbursement. EMI auto-pay will attempt debit from the selected repayment account.`,
       `A grace period of ${EMI_GRACE_PERIOD_DAYS} days is available after each EMI due date. No late penalty is applied within this period.`,
       `If an EMI remains unpaid after the grace period, the account may be marked missed and a penalty of the higher of ${money(MISSED_EMI_FIXED_PENALTY)} or ${MISSED_EMI_PENALTY_RATE * 100}% of EMI may apply.`,
@@ -426,7 +429,7 @@ const generateSanctionLetterPdf = (loan, manager) =>
       .fontSize(10)
       .fillColor('#334155')
       .text(
-        'This sanction letter is not a disbursement confirmation. Disbursement will be completed only after borrower acceptance and successful completion of operational checks. By accepting this letter, the borrower confirms that the loan terms, repayment obligations, charges, and penalties have been reviewed and understood.',
+        'This sanction letter is not a disbursement confirmation. Disbursement will be completed only after manager approval, document generation, and successful completion of operational checks. The borrower acknowledged application rules at submission and should report any mismatch before disbursement.',
         42,
         166,
         { width: 510, lineGap: 5 }
@@ -437,12 +440,12 @@ const generateSanctionLetterPdf = (loan, manager) =>
       .font('Helvetica-Bold')
       .fontSize(11)
       .fillColor('#0f172a')
-      .text('Borrower Acceptance', 60, 270);
+      .text('Borrower Acknowledgement', 60, 270);
     doc
       .font('Helvetica')
       .fontSize(9.5)
       .fillColor('#475569')
-      .text('Accepted digitally in AdnatePayNest by the customer before disbursement.', 60, 294, {
+      .text('Application rules acknowledged digitally in AdnatePayNest at loan submission.', 60, 294, {
         width: 460,
       });
     doc
@@ -459,7 +462,7 @@ const generateSanctionLetterPdf = (loan, manager) =>
       .font('Helvetica')
       .fontSize(8)
       .fillColor('#64748b')
-      .text('Borrower Signature / Digital Acceptance', 60, 354)
+      .text('Borrower Acknowledgement / Digital Record', 60, 354)
       .text('Date', 316, 354);
 
     doc.roundedRect(42, 410, 510, 116, 8).fillAndStroke('#eff6ff', '#bfdbfe');
@@ -486,7 +489,7 @@ const generateSanctionLetterPdf = (loan, manager) =>
       .fontSize(8.5)
       .fillColor('#64748b')
       .text(
-        'Please preserve this letter for your records. Any mismatch in borrower details, loan details, repayment account, or sanctioned amount should be reported before accepting the sanction terms.',
+        'Please preserve this letter for your records. Any mismatch in borrower details, loan details, repayment account, or sanctioned amount should be reported before disbursement.',
         42,
         578,
         { width: 510, lineGap: 3 }
@@ -515,8 +518,8 @@ const generateAndSendSanctionLetter = async (loan, manager) => {
     ? await sendEmail({
       to: loan.customer.email,
       subject: `Loan sanction letter for ${loan.loanId}`,
-      text: `Your ${loan.loanTypeLabel} loan has been approved. Please review and accept the attached sanction letter before disbursement.`,
-      html: `<p>Your <strong>${loan.loanTypeLabel}</strong> loan application <strong>${loan.loanId}</strong> has been approved.</p><p>Please review and accept the sanction letter before disbursement.</p>`,
+      text: `Your ${loan.loanTypeLabel} loan has been approved. Please review the attached sanction letter for your records.`,
+      html: `<p>Your <strong>${loan.loanTypeLabel}</strong> loan application <strong>${loan.loanId}</strong> has been approved.</p><p>Please review the sanction letter for your records.</p>`,
       attachments: [
         {
           filename: pdf.fileName,
@@ -590,7 +593,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
       .fontSize(10)
       .fillColor('#475569')
       .text(
-        'This agreement records the binding terms between AdnatePayNest Bank and the borrower for the sanctioned loan. The borrower must accept this agreement before disbursement.',
+        'This agreement records the binding terms between AdnatePayNest Bank and the borrower for the sanctioned loan. The borrower acknowledged the core application rules before submission.',
         42,
         166,
         { width: clauseWidth, lineGap: 4 }
@@ -668,7 +671,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
       ],
       [
         'Electronic Records',
-        'The borrower agrees that digital acceptance in AdnatePayNest is valid evidence of consent and will be retained with the loan record for audit and servicing.',
+        'The borrower agrees that digital acknowledgement in AdnatePayNest is valid evidence of consent and will be retained with the loan record for audit and servicing.',
       ],
       [
         'Governing Terms',
@@ -696,13 +699,13 @@ const generateLoanAgreementPdf = (loan, manager) =>
       .font('Helvetica-Bold')
       .fontSize(12)
       .fillColor('#0f172a')
-      .text('Digital Acceptance and Execution', 60, y + 28);
+      .text('Digital Acknowledgement and Execution', 60, y + 28);
     doc
       .font('Helvetica')
       .fontSize(9.5)
       .fillColor('#475569')
       .text(
-        'By accepting this agreement in the application, the borrower confirms consent to the loan contract, repayment authorization, EMI schedule, penalty terms, and lender rights stated above.',
+        'By submitting the application with rule acknowledgement, the borrower confirms consent to document verification, repayment authorization, EMI schedule, penalty terms, and lender rights stated above.',
         60,
         y + 52,
         { width: 460, lineGap: 4 }
@@ -721,8 +724,8 @@ const generateLoanAgreementPdf = (loan, manager) =>
       .font('Helvetica')
       .fontSize(8)
       .fillColor('#64748b')
-      .text('Borrower Digital Acceptance', 60, y + 132)
-      .text('Agreement Acceptance Date', 316, y + 132);
+      .text('Borrower Digital Acknowledgement', 60, y + 132)
+      .text('Application Submission Date', 316, y + 132);
 
     doc.roundedRect(42, y + 188, 510, 86, 8).fillAndStroke('#eff6ff', '#bfdbfe');
     doc
@@ -760,8 +763,8 @@ const generateAndSendLoanAgreement = async (loan, manager) => {
     ? await sendEmail({
       to: loan.customer.email,
       subject: `Loan agreement for ${loan.loanId}`,
-      text: `Your loan agreement is ready. Please review and accept it before disbursement.`,
-      html: `<p>Your loan agreement for <strong>${loan.loanId}</strong> is ready.</p><p>Please review and accept it before disbursement.</p>`,
+      text: `Your loan agreement is ready. Please review it for your records.`,
+      html: `<p>Your loan agreement for <strong>${loan.loanId}</strong> is ready.</p><p>Please review it for your records.</p>`,
       attachments: [
         {
           filename: pdf.fileName,
@@ -1188,19 +1191,7 @@ const getActiveLoanCountsByCustomer = async (customerIds) => {
 };
 
 const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = [], activeLoanCount = 0) => {
-  const classification = String(
-    loan.customerClassification || loan.customer?.classification || ''
-  ).toLowerCase();
   const typeRule = getLoanTypeRule(loanRules, loan.loanType);
-  const classificationBenefit = loanRules.classificationBenefits[classification] || {
-    classificationScoreRatio: 0.4,
-    interestDiscount: 0,
-    maxAmountMultiplier: 1,
-  };
-  const effectiveMaxAmount = Math.round(
-    Number(typeRule?.maxAmount || loan.amount || 0) *
-      Number(classificationBenefit.maxAmountMultiplier || 1)
-  );
   const eligibility = calculateEligibility({
     customer: loan.customer,
     bankAccounts,
@@ -1211,7 +1202,6 @@ const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = [], activeLoan
     loanAmount: loan.amount,
     emi: loan.emiAmount,
     weights: loanRules.scoreWeights,
-    classificationBenefits: loanRules.classificationBenefits,
   });
 
   return {
@@ -1220,14 +1210,8 @@ const buildEligibilitySnapshot = (loan, loanRules, bankAccounts = [], activeLoan
     details: {
       ...eligibility,
       scoreWeights: loanRules.scoreWeights,
-      classificationBenefit: {
-        classification,
-        baseInterestRate: typeRule?.annualInterestRate ?? loan.annualInterestRate,
-        effectiveInterestRate: loan.annualInterestRate,
-        interestDiscount: Number(classificationBenefit.interestDiscount || 0),
-        maxAmount: effectiveMaxAmount,
-        maxAmountMultiplier: Number(classificationBenefit.maxAmountMultiplier || 1),
-      },
+      baseInterestRate: typeRule?.annualInterestRate ?? loan.annualInterestRate,
+      maxAmount: Number(typeRule?.maxAmount || loan.amount || 0),
     },
   };
 };
@@ -1305,6 +1289,7 @@ const serializeLoan = (loan, activeLoanCount = loan.eligibilityDetails?.activeLo
   eligibilityScore: loan.eligibilityScore,
   eligibilityRecommendation: loan.eligibilityRecommendation,
   eligibilityDetails: loan.eligibilityDetails || {},
+  applicationAcknowledgements: loan.applicationAcknowledgements || {},
   sanctionLetter: {
     status: loan.sanctionLetter?.status || 'pending',
     fileName: loan.sanctionLetter?.fileName || '',
@@ -1418,6 +1403,14 @@ const createLoan = async (req, res) => {
     return res.status(403).json({ message: 'Only customers can submit loan applications' });
   }
 
+  const applicationRulesAccepted =
+    req.body.applicationRulesAccepted === true ||
+    String(req.body.applicationRulesAccepted || '').toLowerCase() === 'true';
+
+  if (!applicationRulesAccepted) {
+    return res.status(400).json({ message: 'Please accept the loan application rules before submitting' });
+  }
+
   const config = await getBusinessRuleConfig();
   const loanRules = normalizeLoanRules(config.loanRules);
   const loanType = String(req.body.loanType || '').trim();
@@ -1427,19 +1420,8 @@ const createLoan = async (req, res) => {
     return res.status(400).json({ message: 'Select a valid loan type' });
   }
 
-  const classification = String(customer.classification || '').toLowerCase();
-  const classificationBenefit = loanRules.classificationBenefits[classification] || {
-    classificationScoreRatio: 0.4,
-    interestDiscount: 0,
-    maxAmountMultiplier: 1,
-  };
-  const effectiveInterestRate = Math.max(
-    0,
-    Number(typeRule.annualInterestRate || 0) - Number(classificationBenefit.interestDiscount || 0)
-  );
-  const effectiveMaxAmount = Math.round(
-    Number(typeRule.maxAmount || 0) * Number(classificationBenefit.maxAmountMultiplier || 1)
-  );
+  const effectiveInterestRate = Number(typeRule.annualInterestRate || 0);
+  const effectiveMaxAmount = Number(typeRule.maxAmount || 0);
   const amount = toNumber(req.body.amount);
   const tenureMonths = Math.round(toNumber(req.body.tenureMonths));
   const monthlyIncome = toNumber(req.body.monthlyIncome);
@@ -1458,7 +1440,7 @@ const createLoan = async (req, res) => {
 
   if (amount < typeRule.minAmount || amount > effectiveMaxAmount) {
     return res.status(400).json({
-      message: `${typeRule.label} amount must be between ${money(typeRule.minAmount)} and ${money(effectiveMaxAmount)} for ${customer.classification || 'customer'} classification`,
+      message: `${typeRule.label} amount must be between ${money(typeRule.minAmount)} and ${money(effectiveMaxAmount)}`,
     });
   }
 
@@ -1590,7 +1572,6 @@ const createLoan = async (req, res) => {
     loanAmount: amount,
     emi: emiAmount,
     weights: loanRules.scoreWeights,
-    classificationBenefits: loanRules.classificationBenefits,
   });
 
   const loan = await Loan.create({
@@ -1622,14 +1603,19 @@ const createLoan = async (req, res) => {
     eligibilityDetails: {
       ...eligibility,
       scoreWeights: loanRules.scoreWeights,
-      classificationBenefit: {
-        classification,
-        baseInterestRate: typeRule.annualInterestRate,
-        effectiveInterestRate,
-        interestDiscount: Number(classificationBenefit.interestDiscount || 0),
-        maxAmount: effectiveMaxAmount,
-        maxAmountMultiplier: Number(classificationBenefit.maxAmountMultiplier || 1),
-      },
+      baseInterestRate: typeRule.annualInterestRate,
+      maxAmount: effectiveMaxAmount,
+    },
+    applicationAcknowledgements: {
+      applicationRulesAccepted: true,
+      acceptedAt: new Date(),
+      acceptedRules: [
+        'My application details and uploaded documents are correct to the best of my knowledge.',
+        'The bank may verify my documents and contact me if more information is required.',
+        'If approved and disbursed, EMIs will be debited from my selected account on schedule.',
+        'Late or missed EMI payments may lead to penalties and may affect future loan eligibility.',
+        'Final approval, sanction documents, agreement, and disbursement are subject to bank review.',
+      ],
     },
     amortizationSchedule: buildAmortizationSchedule({
       principal: amount,
@@ -1706,6 +1692,7 @@ const reviewLoan = async (req, res) => {
   loan.rejectionReason = action === 'reject' ? note : '';
   if (action === 'approve') {
     await generateAndSendSanctionLetter(loan, req.user);
+    await generateAndSendLoanAgreement(loan, req.user);
   }
   await loan.save();
 
@@ -1825,106 +1812,6 @@ const reviewLoanDocument = async (req, res) => {
   res.json({
     message: 'Document review updated.',
     loan: await serializeLoanWithActiveLoanCount(responseLoan),
-  });
-};
-
-const acceptSanctionLetter = async (req, res) => {
-  const loan = await Loan.findOne({
-    loanId: req.params.id,
-    customer: req.user._id,
-  }).populate('customer', 'name email customerId classification accounts account');
-
-  if (!loan) return res.status(404).json({ message: 'Loan application not found' });
-  if (loan.status !== 'approved') {
-    return res.status(400).json({ message: 'Only approved loans can be accepted for disbursal' });
-  }
-  if (!loan.sanctionLetter?.fileUrl) {
-    return res.status(400).json({ message: 'Sanction letter is not available yet' });
-  }
-  if (loan.sanctionLetter.status === 'accepted') {
-    return res.json({
-      message: 'Sanction letter already accepted.',
-      loan: await serializeLoanWithActiveLoanCount(loan),
-    });
-  }
-
-  loan.sanctionLetter = {
-    ...(loan.sanctionLetter || {}),
-    status: 'accepted',
-    acceptedAt: new Date(),
-    acceptedBy: req.user._id,
-  };
-  await generateAndSendLoanAgreement(loan, req.user);
-  await loan.save();
-
-  await writeSystemLog({
-    action: 'loan.sanction.accepted.customer',
-    message: `${loan.customer?.name || 'Customer'} accepted sanction letter for loan ${loan.loanId}.`,
-    actor: req.user._id,
-    actorName: loan.customer?.name || req.user.name,
-    entityType: 'Loan',
-    entityId: loan.loanId,
-    severity: 'success',
-    metadata: {
-      loanId: loan.loanId,
-      acceptedAt: loan.sanctionLetter.acceptedAt,
-    },
-  });
-
-  res.json({
-    message: 'Sanction letter accepted. Loan agreement is ready for review.',
-    loan: await serializeLoanWithActiveLoanCount(loan),
-  });
-};
-
-const acceptLoanAgreement = async (req, res) => {
-  const loan = await Loan.findOne({
-    loanId: req.params.id,
-    customer: req.user._id,
-  }).populate('customer', 'name email customerId classification accounts account');
-
-  if (!loan) return res.status(404).json({ message: 'Loan application not found' });
-  if (loan.status !== 'approved') {
-    return res.status(400).json({ message: 'Only approved loans can be accepted for disbursal' });
-  }
-  if (loan.sanctionLetter?.status !== 'accepted') {
-    return res.status(400).json({ message: 'Accept the sanction letter before accepting the loan agreement' });
-  }
-  if (!loan.loanAgreement?.fileUrl) {
-    await generateAndSendLoanAgreement(loan, req.user);
-  }
-  if (loan.loanAgreement.status === 'accepted') {
-    return res.json({
-      message: 'Loan agreement already accepted.',
-      loan: await serializeLoanWithActiveLoanCount(loan),
-    });
-  }
-
-  loan.loanAgreement = {
-    ...(loan.loanAgreement || {}),
-    status: 'accepted',
-    acceptedAt: new Date(),
-    acceptedBy: req.user._id,
-  };
-  await loan.save();
-
-  await writeSystemLog({
-    action: 'loan.agreement.accepted.customer',
-    message: `${loan.customer?.name || 'Customer'} accepted loan agreement for loan ${loan.loanId}.`,
-    actor: req.user._id,
-    actorName: loan.customer?.name || req.user.name,
-    entityType: 'Loan',
-    entityId: loan.loanId,
-    severity: 'success',
-    metadata: {
-      loanId: loan.loanId,
-      acceptedAt: loan.loanAgreement.acceptedAt,
-    },
-  });
-
-  res.json({
-    message: 'Loan agreement accepted. Loan is ready for disbursal.',
-    loan: await serializeLoanWithActiveLoanCount(loan),
   });
 };
 
@@ -2228,11 +2115,11 @@ const disburseLoan = async (req, res) => {
 
     if (!loan) throw new Error('Loan application not found');
     if (loan.status !== 'approved') throw new Error('Only approved loans can be disbursed');
-    if (loan.sanctionLetter?.status !== 'accepted') {
-      throw new Error('Customer must accept the loan sanction letter before disbursal');
+    if (!loan.sanctionLetter?.fileUrl) {
+      throw new Error('Sanction letter must be generated before disbursal');
     }
-    if (loan.loanAgreement?.status !== 'accepted') {
-      throw new Error('Customer must accept the loan agreement before disbursal');
+    if (!loan.loanAgreement?.fileUrl) {
+      throw new Error('Loan agreement must be generated before disbursal');
     }
 
     const customer = await User.findById(loan.customer).session(session);
@@ -3094,8 +2981,6 @@ const makePartPayment = async (req, res) => {
 };
 
 module.exports = {
-  acceptLoanAgreement,
-  acceptSanctionLetter,
   createLoan,
   disburseLoan,
   forecloseLoan,

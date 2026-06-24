@@ -331,7 +331,7 @@ function AdminDashboard() {
           </button>
         </PageHeader>
 
-        {/* Settlement & Liquidity Section (Consolidated Hero Layout) */}
+        {/* Settlement & Liquidity Section (Split Layout) */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           {/* Settlement Balance Hero Card (1 Column) */}
           <div
@@ -374,100 +374,100 @@ function AdminDashboard() {
             </div>
           </div>
 
-          {/* Settlement Metrics (2 Columns) */}
-          <div className="lg:col-span-2 rounded-2xl border border-bank-card-border bg-white p-6 shadow-sm flex flex-col justify-between">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">Bank Settlement Ledger</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Internal tracking of loan payouts, principal collections, penalty/overdraft recoveries, and reserves.
-              </p>
-            </div>
-
-            <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Opening Bal</p>
-                <p className="mt-2 text-lg font-extrabold text-slate-800">
-                  {formatCurrency(settlement.account.openingBalance)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Min Reserve</p>
-                <p className="mt-2 text-lg font-extrabold text-slate-800">
-                  {formatCurrency(settlement.account.minimumReserve)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-red-50 bg-red-50/20 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-red-500/70">Loan Disbursed</p>
-                <p className="mt-2 text-lg font-extrabold text-red-600">
-                  {formatCurrency(settlement.totals.totalLoanDisbursed)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-emerald-50 bg-emerald-50/20 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500/70">Recovered</p>
-                <p className="mt-2 text-lg font-extrabold text-emerald-600">
-                  {formatCurrency(settlement.totals.totalLoanCollected + settlement.totals.totalOdRecovered)}
-                </p>
-              </div>
-            </div>
+          {/* 2x2 Stats Cards (Right - 2 Columns) */}
+          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <StatsCard
+              title="Total Customers"
+              value={totalCustomers}
+              icon={BadgeCheck}
+              accent="bg-emerald-500"
+              iconTone="bg-emerald-50 text-emerald-600"
+              footer={{ text: "Manage customers", icon: ChevronRight, iconClassName: "text-emerald-500" }}
+              onClick={() => navigate("/admin/customers")}
+            />
+            <StatsCard
+              title="Total System Balance"
+              value={formatCurrency(totalSystemBalance)}
+              icon={CreditCard}
+              accent="bg-violet-500"
+              iconTone="bg-violet-50 text-violet-600"
+              footer={{ text: "View customer reports", icon: ChevronRight, iconClassName: "text-violet-500" }}
+              onClick={() => navigate("/admin/reports#customers")}
+            />
+            <StatsCard
+              title="Today's Transactions"
+              value={transactionsToday.length}
+              icon={CreditCard}
+              accent="bg-amber-500"
+              iconTone="bg-amber-50 text-amber-600"
+              badge={
+                failedTransactionsToday > 0
+                  ? {
+                      text: `${failedTransactionsToday} rejected`,
+                      tone: "danger",
+                    }
+                  : {
+                      text: "All successful",
+                      tone: "success",
+                    }
+              }
+              footer={{ text: "Audit transactions", icon: ChevronRight, iconClassName: "text-amber-500" }}
+              onClick={() => navigate("/admin/reports#transactions")}
+            />
+            <StatsCard
+              title="Pending Approvals"
+              value={pendingApprovals.length}
+              icon={AlertTriangle}
+              accent="bg-red-500"
+              iconTone="bg-red-50 text-red-600"
+              footer={{
+                icon: ChevronRight,
+                iconClassName: "text-red-500",
+                text:
+                  pendingApprovals.length > 0
+                    ? "Needs review"
+                    : "Queue clear · View history",
+              }}
+              onClick={() => navigate("/admin/reports#approvals")}
+            />
           </div>
         </div>
 
-        {/* Operational Dashboard Stats Grid */}
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <StatsCard
-            title="Total Customers"
-            value={totalCustomers}
-            icon={BadgeCheck}
-            accent="bg-emerald-500"
-            iconTone="bg-emerald-50 text-emerald-600"
-            footer={{ text: "Manage customers", icon: ChevronRight, iconClassName: "text-emerald-500" }}
-            onClick={() => navigate("/admin/customers")}
-          />
-          <StatsCard
-            title="Total System Balance"
-            value={formatCurrency(totalSystemBalance)}
-            icon={CreditCard}
-            accent="bg-violet-500"
-            iconTone="bg-violet-50 text-violet-600"
-            footer={{ text: "View customer reports", icon: ChevronRight, iconClassName: "text-violet-500" }}
-            onClick={() => navigate("/admin/reports#customers")}
-          />
-          <StatsCard
-            title="Today's Transactions"
-            value={transactionsToday.length}
-            icon={CreditCard}
-            accent="bg-amber-500"
-            iconTone="bg-amber-50 text-amber-600"
-            badge={
-              failedTransactionsToday > 0
-                ? {
-                    text: `${failedTransactionsToday} rejected`,
-                    tone: "danger",
-                  }
-                : {
-                    text: "All successful",
-                    tone: "success",
-                  }
-            }
-            footer={{ text: "Audit transactions", icon: ChevronRight, iconClassName: "text-amber-500" }}
-            onClick={() => navigate("/admin/reports#transactions")}
-          />
-          <StatsCard
-            title="Pending Approvals"
-            value={pendingApprovals.length}
-            icon={AlertTriangle}
-            accent="bg-red-500"
-            iconTone="bg-red-50 text-red-600"
-            footer={{
-              icon: ChevronRight,
-              iconClassName: "text-red-500",
-              text:
-                pendingApprovals.length > 0
-                  ? "Needs review"
-                  : "Queue clear · View history",
-            }}
-            onClick={() => navigate("/admin/reports#approvals")}
-          />
+        {/* Bank Settlement Ledger Card */}
+        <div className="rounded-2xl border border-bank-card-border bg-white p-6 shadow-sm">
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">Bank Settlement Ledger</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Internal tracking of loan payouts, principal collections, penalty/overdraft recoveries, and reserves.
+            </p>
+          </div>
+
+          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Opening Bal</p>
+              <p className="mt-2 text-lg font-extrabold text-slate-800">
+                {formatCurrency(settlement.account.openingBalance)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Min Reserve</p>
+              <p className="mt-2 text-lg font-extrabold text-slate-800">
+                {formatCurrency(settlement.account.minimumReserve)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-red-50 bg-red-50/20 p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-red-500/70">Loan Disbursed</p>
+              <p className="mt-2 text-lg font-extrabold text-red-600">
+                {formatCurrency(settlement.totals.totalLoanDisbursed)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-emerald-50 bg-emerald-50/20 p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500/70">Recovered</p>
+              <p className="mt-2 text-lg font-extrabold text-emerald-600">
+                {formatCurrency(settlement.totals.totalLoanCollected + settlement.totals.totalOdRecovered)}
+              </p>
+            </div>
+          </div>
         </div>
 
         <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">

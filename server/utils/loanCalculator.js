@@ -98,6 +98,15 @@ const getOdFrequencyRatio = (accounts) => {
   return 1;
 };
 
+const getClassificationScoreRatio = (classification) => {
+  const normalized = String(classification || '').toLowerCase();
+
+  if (normalized === 'platinum') return 1;
+  if (normalized === 'gold') return 0.8;
+  if (normalized === 'silver') return 0.6;
+  return 0.4;
+};
+
 const calculateEligibility = ({
   customer,
   bankAccounts,
@@ -108,7 +117,6 @@ const calculateEligibility = ({
   loanAmount,
   emi,
   weights,
-  classificationBenefits,
 }) => {
   const income = toNumber(monthlyIncome);
   const liabilities = toNumber(existingMonthlyLiabilities);
@@ -149,10 +157,7 @@ const calculateEligibility = ({
   const accountAgeMonths = customer?.createdAt
     ? Math.max(0, Math.floor((Date.now() - new Date(customer.createdAt).getTime()) / (30 * 24 * 60 * 60 * 1000)))
     : 0;
-  const classification = String(customer?.classification || '').toLowerCase();
-  const classificationBenefit = classificationBenefits?.[classification] || {
-    classificationScoreRatio: 0.4,
-  };
+  const classificationScoreRatio = getClassificationScoreRatio(customer?.classification);
 
   const componentScores = {
     incomeStrength: Math.round(
@@ -174,7 +179,7 @@ const calculateEligibility = ({
         ])
     ),
     classification: Math.round(
-      weights.classification * toNumber(classificationBenefit.classificationScoreRatio || 0.4)
+      weights.classification * classificationScoreRatio
     ),
     employmentStability: Math.round(
       weights.employmentStability *
@@ -212,6 +217,7 @@ const calculateEligibility = ({
     monthlyOdUseLimit: MONTHLY_OD_USE_LIMIT,
     odBlockedAccounts,
     accountAgeMonths,
+    classificationScoreRatio,
   };
 };
 

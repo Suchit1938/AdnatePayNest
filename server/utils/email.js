@@ -1,6 +1,6 @@
 const fs = require('fs');
-const path = require('path');
 const nodemailer = require('nodemailer');
+const { logoCid, logoPath } = require('./branding');
 
 const placeholderValues = new Set([
   'your_email@gmail.com',
@@ -29,9 +29,6 @@ const createTransporter = () =>
     },
   });
 
-const logoPath = path.join(__dirname, '..', '..', 'client', 'public', 'logo.png');
-const logoCid = 'adnatepaynest-logo';
-
 const getLogoAttachment = () =>
   fs.existsSync(logoPath)
     ? {
@@ -41,15 +38,35 @@ const getLogoAttachment = () =>
     }
     : null;
 
-const addLogoToHtml = (html) => {
-  if (!html || html.includes(`cid:${logoCid}`)) {
-    return html;
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const buildHtmlFromText = (text) => {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+
+  return lines
+    .map((line) => (line ? `<p style="margin:0 0 10px;">${escapeHtml(line)}</p>` : '<br />'))
+    .join('');
+};
+
+const addLogoToHtml = (html, text) => {
+  const bodyHtml = html || buildHtmlFromText(text);
+
+  if (!bodyHtml || bodyHtml.includes(`cid:${logoCid}`)) {
+    return bodyHtml;
   }
 
   const logoAttachment = getLogoAttachment();
 
   if (!logoAttachment) {
-    return html;
+    return bodyHtml;
   }
 
   return `
@@ -57,7 +74,7 @@ const addLogoToHtml = (html) => {
       <div style="text-align:center;margin:0 0 16px;">
         <img src="cid:${logoCid}" alt="AdnatePayNest" style="width:76px;height:76px;border-radius:999px;display:inline-block;" />
       </div>
-      ${html}
+      ${bodyHtml}
     </div>
   `;
 };
@@ -91,7 +108,7 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
       to,
       subject,
       text,
-      html: addLogoToHtml(html),
+      html: addLogoToHtml(html, text),
       attachments: addLogoAttachment(attachments),
     });
 

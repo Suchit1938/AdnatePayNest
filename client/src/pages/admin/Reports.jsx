@@ -3,9 +3,9 @@ import {
   ArrowLeftRight,
   BadgeIndianRupee,
   Clock3,
-  CreditCard,
   Download,
   FileBarChart,
+  PiggyBank,
   ShieldCheck,
   Wallet,
 } from "lucide-react";
@@ -193,11 +193,11 @@ const SectionHeader = ({
     }
   };
 
-  const handlePdfDownload = () => {
+  const handlePdfDownload = async () => {
     try {
       const sequence = getNextExportSequence(exportName, "pdf");
 
-      downloadPdf(
+      await downloadPdf(
         `${exportName}-${sequence}.pdf`,
         exportLabel || title,
         exportPdfRows || exportRows,
@@ -326,17 +326,6 @@ const getTierAccountTypeRules = (tier) =>
     };
   });
 
-const formatTierAccountTypeRules = (tier) =>
-  getTierAccountTypeRules(tier)
-    .map((rule) =>
-      [
-        `${rule.accountType}: limit ${formatCurrency(rule.odLimit)}`,
-        `minimum opening ${formatCurrency(rule.minOpeningBalance)}`,
-        `${rule.monthlyOdUses}/month`,
-      ].join(", ")
-    )
-    .join(" | ");
-
 const formatAccountTypeRule = (rule) =>
   [
     `${rule.accountType}: OD ${formatCurrency(rule.odLimit)}`,
@@ -348,9 +337,9 @@ const AccountTypeOdRulesTable = ({ tier }) => (
   <div className="overflow-hidden rounded-lg border border-slate-100">
     <div className="hidden grid-cols-[1fr_1.15fr_1.15fr_0.8fr] gap-0 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-[0.08em] text-slate-500 sm:grid">
       <span>Account</span>
-      <span>OD Limit</span>
-      <span>Opening Balance</span>
-      <span>Uses</span>
+      <span>OD Limit (₹)</span>
+      <span>Opening Balance (₹)</span>
+      <span>Uses (/month)</span>
     </div>
     <div className="divide-y divide-slate-100">
       {getTierAccountTypeRules(tier).map((rule) => (
@@ -459,6 +448,8 @@ const AdminReports = () => {
   const [approvals, setApprovals] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loanAnalytics, setLoanAnalytics] = useState(defaultLoanAnalytics);
+  const [fixedDeposits, setFixedDeposits] = useState([]);
+  const [recurringDeposits, setRecurringDeposits] = useState([]);
   const [dateFilter, setDateFilter] = useState({
     preset: "30d",
     startDate: "",
@@ -480,7 +471,9 @@ const AdminReports = () => {
       api.get("/approvals"),
       api.get("/transfers/transactions"),
       api.get("/dashboard/admin/loan-analytics"),
-    ]).then(([usersResult, tiersResult, approvalsResult, transactionsResult, loansResult]) => {
+      api.get("/fixed-deposits"),
+      api.get("/recurring-deposits"),
+    ]).then(([usersResult, tiersResult, approvalsResult, transactionsResult, loansResult, fdResult, rdResult]) => {
       const usersData = usersResult.status === "fulfilled" ? usersResult.value.data : {};
 
       setUsers({
@@ -498,6 +491,8 @@ const AdminReports = () => {
           ? { ...defaultLoanAnalytics, ...loansResult.value.data }
           : defaultLoanAnalytics
       );
+      setFixedDeposits(fdResult.status === "fulfilled" ? fdResult.value.data.fixedDeposits || [] : []);
+      setRecurringDeposits(rdResult.status === "fulfilled" ? rdResult.value.data.recurringDeposits || [] : []);
     });
   }, []);
 
@@ -735,44 +730,16 @@ const AdminReports = () => {
     "Status": formatStatus(transaction.status),
     "Transfer Date": formatReportDate(transaction.date || transaction.createdAt),
   }));
-  const transferStatusSummary = reportData.highValueTransfers.reduce((summary, transaction) => {
-    const status = formatStatus(transaction.status);
-    summary[status] = (summary[status] || 0) + 1;
-    return summary;
-  }, {});
   const transferPdfRows = [
-    {
-      Date: "",
-      Details: "Report scope",
-      "From Account": "All recorded transfers",
-      "To Account": "",
-      Amount: "",
-    },
-    {
-      Date: "",
-      Details: "Total transfer value",
-      "From Account": `${reportData.highValueTransfers.length} transfers`,
-      "To Account": "",
-      Amount: formatCurrency(reportData.totalTransferValue),
-    },
-    {
-      Date: "",
-      Details: "Status summary",
-      "From Account": Object.entries(transferStatusSummary)
-        .map(([status, count]) => `${status}: ${count}`)
-        .join(" | ") || "No transfers",
-      "To Account": "",
-      Amount: "",
-    },
     ...reportData.highValueTransfers.map((transaction) => ({
       Date: formatReportDate(transaction.date || transaction.createdAt),
-      Details: [
-        `Transfer ${transaction.id || "Not available"}`,
-        `${transaction.sender || "Not available"} to ${transaction.receiver || "Not available"}`,
-        `Status: ${formatStatus(transaction.status)}`,
-      ].join(" | "),
+      From: transaction.sender || "Not available",
+      To: transaction.receiver || "Not available",
       "From Account": transaction.fromAccountDisplay || transaction.fromAccountNumber || "Not available",
       "To Account": transaction.toAccountDisplay || transaction.toAccountNumber || "Not available",
+      "Transfer ID": transaction.id || "Not available",
+      Type: transaction.type || "transfer",
+      Status: formatStatus(transaction.status),
       Amount: formatCurrency(transaction.amount || 0),
     })),
   ];
@@ -930,30 +897,29 @@ const AdminReports = () => {
     "Monthly Overdraft Attempt Limit": 3,
     "Settlement Rule": "Clear before month-end",
   }));
-  const classificationPdfRows = [
-    {
-      Classification: "Report scope",
-      Customers: `${reportData.customerRows.length} customers`,
-      "Transfer Limits": "Per transfer, daily, and monthly policy limits",
-      "Account-wise OD": "OD limit, opening balance, and monthly usage by account type",
-      Charges: "Interest and penalty",
-    },
-    ...tiers.map((tier) => ({
-      Classification: tier.label,
-      Customers: `${tier.customerCount} assigned`,
-      "Transfer Limits": [
-        `Per transfer ${formatCurrency(tier.perTxnLimit)}`,
-        `Daily ${formatCurrency(tier.dailyLimit)}`,
-        `Monthly ${formatCurrency(tier.monthlyLimit)}`,
-      ].join(" | "),
-      "Account-wise OD": formatTierAccountTypeRules(tier),
-      Charges: [
-        `Penalty ${formatCurrency(tier.penaltyAmount)}`,
-        `Interest ${tier.interestRate || tier.lateFeeRate || "Not set"}`,
-        "Settle before month-end",
-      ].join(" | "),
-    })),
-  ];
+  const classificationPdfRows = tiers.map((tier) => ({
+    Classification: tier.label,
+    Key: tier.key,
+    Customers: tier.customerCount,
+    "Per Transfer Limit": formatCurrency(tier.perTxnLimit),
+    "Daily Limit": formatCurrency(tier.dailyLimit),
+    "Monthly Limit": formatCurrency(tier.monthlyLimit),
+    "Maximum OD Limit": formatCurrency(tier.maxODLimit),
+    "Savings OD Rule": formatAccountTypeRule(
+      getTierAccountTypeRules(tier).find((rule) => rule.accountType === "Savings")
+    ),
+    "Current OD Rule": formatAccountTypeRule(
+      getTierAccountTypeRules(tier).find((rule) => rule.accountType === "Current")
+    ),
+    "Salary OD Rule": formatAccountTypeRule(
+      getTierAccountTypeRules(tier).find((rule) => rule.accountType === "Salary")
+    ),
+    "Penalty Amount": formatCurrency(tier.penaltyAmount),
+    "Interest Rate": tier.interestRate || tier.lateFeeRate || "Not set",
+    "Blocked OD Accounts": tier.odBlockedAccounts,
+    "Monthly OD Uses": "3 uses per month",
+    "Settlement Rule": "Clear before month-end",
+  }));
   const filteredRepaymentRows = loanAnalytics.repaymentRows.filter((entry) =>
     isWithinDateRange(entry.paidAt, reportData.dateRange)
   );
@@ -1049,12 +1015,101 @@ const AdminReports = () => {
       Details: `${formatCurrency(loanAnalytics.summary.collectedAmount)} collected of ${formatCurrency(loanAnalytics.summary.expectedEmiAmount)} scheduled`,
     },
   ];
+  const investmentRows = useMemo(() => {
+    const dateRange = getDateRangeBounds(dateFilter);
+    const rows = [
+      ...fixedDeposits.map((fd) => ({
+        id: fd.id,
+        product: "FD",
+        number: fd.fdNumber,
+        customer: fd.customerName || "Customer",
+        customerId: fd.customerId || "",
+        amount: toNumber(fd.depositAmount),
+        currentValue: toNumber(fd.maturityAmount),
+        expectedReturn: toNumber(fd.interestEarned),
+        interestRate: toNumber(fd.interestRate),
+        maturityDate: fd.maturityDate,
+        status: fd.status,
+        createdAt: fd.createdAt,
+      })),
+      ...recurringDeposits.map((rd) => ({
+        id: rd.id,
+        product: "RD",
+        number: rd.rdNumber,
+        customer: rd.customerName || "Customer",
+        customerId: rd.customerId || "",
+        amount: toNumber(rd.totalInvestment),
+        currentValue: toNumber(rd.accumulatedValue || rd.maturityAmount),
+        expectedReturn: toNumber(rd.interestEarned),
+        interestRate: toNumber(rd.interestRate),
+        maturityDate: rd.maturityDate,
+        status: rd.status,
+        createdAt: rd.createdAt,
+      })),
+    ];
+
+    return rows
+      .filter((row) => isWithinDateRange(row.createdAt || row.maturityDate, dateRange))
+      .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+  }, [dateFilter, fixedDeposits, recurringDeposits]);
+  const investmentSummary = investmentRows.reduce(
+    (summary, row) => ({
+      total: summary.total + 1,
+      active: summary.active + (row.status === "active" ? 1 : 0),
+      amount: summary.amount + row.amount,
+      currentValue: summary.currentValue + row.currentValue,
+      expectedReturn: summary.expectedReturn + row.expectedReturn,
+    }),
+    { total: 0, active: 0, amount: 0, currentValue: 0, expectedReturn: 0 }
+  );
+  const investmentDistributionRows = ["FD", "RD"].map((product, index) => ({
+    label: product,
+    value: investmentRows.filter((row) => row.product === product).length,
+    color: ["#0891b2", "#10b981"][index],
+  }));
+  const maturityForecastRows = investmentRows
+    .filter((row) => ["active", "matured"].includes(row.status))
+    .sort((left, right) => new Date(left.maturityDate || 0) - new Date(right.maturityDate || 0))
+    .slice(0, 8)
+    .map((row, index) => ({
+      label: `${row.product} ${formatReportDate(row.maturityDate)}`,
+      value: row.currentValue,
+      color: loanChartColors[index % loanChartColors.length],
+    }));
+  const investmentGrowthRows = investmentRows
+    .reduce((map, row) => {
+      const label = String(row.createdAt || "").slice(0, 10) || "Unknown";
+      map.set(label, (map.get(label) || 0) + row.amount);
+      return map;
+    }, new Map());
+  const investmentGrowthChartRows = [...investmentGrowthRows.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(-7)
+    .map(([label, value], index) => ({
+      label,
+      value,
+      color: loanChartColors[index % loanChartColors.length],
+    }));
+  const investmentCsvRows = investmentRows.map((row) => ({
+    Product: row.product,
+    Number: row.number,
+    Customer: row.customer,
+    "Customer ID": row.customerId,
+    "Investment Amount": formatCurrency(row.amount),
+    "Current / Maturity Value": formatCurrency(row.currentValue),
+    "Expected Interest": formatCurrency(row.expectedReturn),
+    "Rate": `${row.interestRate}% p.a.`,
+    "Maturity Date": formatReportDate(row.maturityDate),
+    Status: formatReportLabel(row.status),
+  }));
   const highValuePagination = usePaginatedRows(reportData.highValueTransfers);
   const loanPortfolioPagination = usePaginatedRows(loanAnalytics.loanRows);
+  const investmentPagination = usePaginatedRows(investmentRows);
   const repaymentPagination = usePaginatedRows(filteredRepaymentRows);
   const delinquentLoanPagination = usePaginatedRows(loanAnalytics.delinquentRows);
   const nearOdPagination = usePaginatedRows(reportData.nearOdLimitRows);
   const approvalPagination = usePaginatedRows(reportData.approvalDetailRows);
+  const sectionVisibility = (hash) => (activeHash === hash ? "" : "hidden");
 
   return (
     <DashboardLayout>
@@ -1068,6 +1123,7 @@ const AdminReports = () => {
           {[
             ["Transactions", "#transactions"],
             ["Loans", "#loans"],
+            ["Investments", "#investments"],
             ["Overdraft", "#overdraft"],
             ["Approvals", "#approvals"],
             ["Customers", "#customers"],
@@ -1155,25 +1211,7 @@ const AdminReports = () => {
           </p>
         </section>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <StatsCard
-            title="Transfer Value"
-            value={formatCompactCurrency(reportData.totalTransferValue)}
-            icon={CreditCard}
-            accent="bg-blue-500"
-            iconTone="bg-blue-50 text-blue-600"
-          />
-          <StatsCard
-            title="Overdraft Watchlist"
-            value={reportData.nearOdLimitRows.length}
-            icon={Wallet}
-            accent="bg-amber-500"
-            iconTone="bg-amber-50 text-amber-600"
-            footer={{ text: `${reportData.odBlocked} blocked accounts` }}
-          />
-        </div>
-
-        <section id="loans" className="scroll-mt-8 space-y-6">
+        <section id="loans" className={`${sectionVisibility("#loans")} scroll-mt-8 space-y-6`}>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <StatsCard
               title="Active Loans"
@@ -1284,7 +1322,7 @@ const AdminReports = () => {
                   <tr>
                     <th className="px-6 py-4">Loan</th>
                     <th className="px-6 py-4">Customer</th>
-                    <th className="px-6 py-4">Outstanding</th>
+                    <th className="px-6 py-4">Outstanding (₹)</th>
                     <th className="px-6 py-4">Delinquency</th>
                     <th className="px-6 py-4">Next Due</th>
                     <th className="px-6 py-4">Status</th>
@@ -1339,10 +1377,10 @@ const AdminReports = () => {
                   <tr>
                     <th className="px-6 py-4">Loan</th>
                     <th className="px-6 py-4">Customer</th>
-                    <th className="px-6 py-4">Amount</th>
-                    <th className="px-6 py-4">Outstanding</th>
-                    <th className="px-6 py-4">Paid</th>
-                    <th className="px-6 py-4">EMI</th>
+                    <th className="px-6 py-4">Amount (₹)</th>
+                    <th className="px-6 py-4">Outstanding (₹)</th>
+                    <th className="px-6 py-4">Paid (₹)</th>
+                    <th className="px-6 py-4">EMI (₹)</th>
                     <th className="px-6 py-4">Status</th>
                   </tr>
                 </thead>
@@ -1396,11 +1434,11 @@ const AdminReports = () => {
                   <tr>
                     <th className="px-6 py-4">Loan</th>
                     <th className="px-6 py-4">Customer</th>
-                    <th className="px-6 py-4">Payment</th>
-                    <th className="px-6 py-4">Principal</th>
-                    <th className="px-6 py-4">Interest</th>
-                    <th className="px-6 py-4">Penalty</th>
-                    <th className="px-6 py-4">Charge</th>
+                    <th className="px-6 py-4">Payment (₹)</th>
+                    <th className="px-6 py-4">Principal (₹)</th>
+                    <th className="px-6 py-4">Interest (₹)</th>
+                    <th className="px-6 py-4">Penalty (₹)</th>
+                    <th className="px-6 py-4">Charge (₹)</th>
                     <th className="px-6 py-4">Impact</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Date</th>
@@ -1444,7 +1482,137 @@ const AdminReports = () => {
           </div>
         </section>
 
-        <section id="transactions" className="grid scroll-mt-8 grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <section id="investments" className={`${sectionVisibility("#investments")} scroll-mt-8 space-y-6`}>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+            <StatsCard
+              title="Total Investments"
+              value={String(investmentSummary.total)}
+              icon={PiggyBank}
+              accent="bg-cyan-500"
+              iconTone="bg-cyan-50 text-cyan-600"
+              badge={{ text: `${investmentSummary.active} active`, tone: "neutral" }}
+            />
+            <StatsCard
+              title="Investment Amount"
+              value={formatCurrency(investmentSummary.amount)}
+              icon={Wallet}
+              accent="bg-emerald-500"
+              iconTone="bg-emerald-50 text-emerald-600"
+              badge={{ text: "FD + RD principal", tone: "success" }}
+            />
+            <StatsCard
+              title="Projected Value"
+              value={formatCurrency(investmentSummary.currentValue)}
+              icon={BadgeIndianRupee}
+              accent="bg-blue-500"
+              iconTone="bg-blue-50 text-blue-600"
+              badge={{ text: "Maturity / current value", tone: "neutral" }}
+            />
+            <StatsCard
+              title="Expected Interest"
+              value={formatCurrency(investmentSummary.expectedReturn)}
+              icon={FileBarChart}
+              accent="bg-amber-500"
+              iconTone="bg-amber-50 text-amber-600"
+              badge={{ text: "Projected returns", tone: "warning" }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <div className="card-padded min-h-[340px]">
+              <SectionHeader
+                icon={PiggyBank}
+                title="Portfolio Distribution"
+                subtitle="FD and RD split across the selected report period."
+                className="mb-4"
+              />
+              <DonutChart rows={investmentDistributionRows} />
+            </div>
+            <div className="card-padded min-h-[340px]">
+              <SectionHeader
+                icon={FileBarChart}
+                title="Investment Growth"
+                subtitle="Investment amount booked by date."
+                className="mb-4"
+              />
+              <ColumnChart rows={investmentGrowthChartRows} valueFormatter={formatCompactCurrency} />
+            </div>
+            <div className="card-padded min-h-[340px]">
+              <SectionHeader
+                icon={Clock3}
+                title="Maturity Forecast"
+                subtitle="Upcoming FD/RD maturity values."
+                className="mb-4"
+              />
+              <HorizontalBarChart rows={maturityForecastRows} valueFormatter={formatCompactCurrency} />
+            </div>
+          </div>
+
+          <div className="table-shell">
+            <div className="border-b border-bank-card-border p-5 sm:p-6">
+              <SectionHeader
+                icon={PiggyBank}
+                title="FD / RD Portfolio Report"
+                subtitle="Investment summary, maturity forecast, and interest earnings by deposit."
+                exportLabel="Export Investments"
+                exportName="investment-portfolio-report"
+                exportRows={investmentCsvRows}
+                exportPdfRows={investmentCsvRows}
+                exportPdfOptions={{
+                  headers: ["Product", "Number", "Customer", "Investment Amount", "Current / Maturity Value", "Expected Interest", "Rate", "Maturity Date", "Status"],
+                  subtitle: `Investment Portfolio Report | Generated on ${formatReportDate(new Date())}`,
+                }}
+                className="mb-0"
+              />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1100px] text-left">
+                <thead className="table-head">
+                  <tr>
+                    <th className="px-6 py-4">Product</th>
+                    <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Investment (₹)</th>
+                    <th className="px-6 py-4">Expected Return (₹)</th>
+                    <th className="px-6 py-4">Maturity</th>
+                    <th className="px-6 py-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {investmentPagination.pageRows.map((row) => (
+                    <tr key={`${row.product}-${row.id}`} className="table-row">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-950">{row.product}</p>
+                        <p className="text-sm font-semibold text-slate-500">{row.number}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-semibold text-slate-900">{row.customer}</p>
+                        <p className="text-sm text-slate-500">{row.customerId || "Customer"}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-slate-950">{formatCurrency(row.amount)}</p>
+                        <p className="text-xs font-semibold text-slate-500">
+                          Value {formatCurrency(row.currentValue)}
+                        </p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-emerald-700">{formatCurrency(row.expectedReturn)}</p>
+                        <p className="text-xs font-semibold text-slate-500">{row.interestRate}% p.a.</p>
+                      </td>
+                      <td className="px-6 py-4">{formatReportDate(row.maturityDate)}</td>
+                      <td className="px-6 py-4"><StatusBadge status={row.status} /></td>
+                    </tr>
+                  ))}
+                  {investmentRows.length === 0 && (
+                    <EmptyTableRow colSpan={6} message="No FD/RD records match the selected period." />
+                  )}
+                </tbody>
+              </table>
+              <TablePagination {...investmentPagination} />
+            </div>
+          </div>
+        </section>
+
+        <section id="transactions" className={`${sectionVisibility("#transactions")} grid scroll-mt-8 grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]`}>
           <div className="card-padded min-h-[360px]">
             <SectionHeader
               icon={ArrowLeftRight}
@@ -1464,7 +1632,7 @@ const AdminReports = () => {
           </div>
         </section>
 
-        <section className="table-shell">
+        <section className={`${sectionVisibility("#transactions")} table-shell`}>
           <div className="border-b border-bank-card-border p-5 sm:p-6">
             <SectionHeader
               icon={AlertTriangle}
@@ -1475,7 +1643,8 @@ const AdminReports = () => {
               exportRows={transferRegisterRows}
               exportPdfRows={transferPdfRows}
               exportPdfOptions={{
-                headers: ["Date", "Details", "From Account", "To Account", "Amount"],
+                headers: ["Date", "From", "To", "Amount"],
+                layout: "transfer-register",
                 subtitle: `Transfer Review Register | Generated on ${formatReportDate(new Date())}`,
               }}
               className="mb-0"
@@ -1487,7 +1656,7 @@ const AdminReports = () => {
                   <tr>
                     <th className="px-6 py-4">Transfer</th>
                     <th className="px-6 py-4">Route</th>
-                    <th className="px-6 py-4">Amount</th>
+                    <th className="px-6 py-4">Amount (₹)</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Date</th>
                   </tr>
@@ -1535,7 +1704,7 @@ const AdminReports = () => {
             </div>
           </section>
 
-        <section id="overdraft" className="scroll-mt-8 space-y-6">
+        <section id="overdraft" className={`${sectionVisibility("#overdraft")} scroll-mt-8 space-y-6`}>
           <div className="card-padded min-h-[370px]">
             <SectionHeader
               icon={Wallet}
@@ -1660,7 +1829,7 @@ const AdminReports = () => {
           </div>
         </section>
 
-        <section id="approvals" className="scroll-mt-8">
+        <section id="approvals" className={`${sectionVisibility("#approvals")} scroll-mt-8`}>
           <div className="space-y-6">
             <div className="card-padded min-h-[360px]">
               <SectionHeader
@@ -1695,7 +1864,7 @@ const AdminReports = () => {
                       <th className="w-[14%] px-5 py-4">Request</th>
                       <th className="w-[20%] px-5 py-4">Customer & Manager</th>
                       <th className="w-[25%] px-5 py-4">Account Route</th>
-                      <th className="w-[13%] px-5 py-4">Amount</th>
+                      <th className="w-[13%] px-5 py-4">Amount (₹)</th>
                       <th className="w-[14%] px-5 py-4">Decision</th>
                       <th className="w-[14%] px-5 py-4">Reason</th>
                     </tr>
@@ -1778,7 +1947,7 @@ const AdminReports = () => {
           </div>
         </section>
 
-        <section id="customers" className="scroll-mt-8">
+        <section id="customers" className={`${sectionVisibility("#customers")} scroll-mt-8`}>
           <div className="card-padded min-h-[390px]">
             <SectionHeader
               icon={FileBarChart}
@@ -1792,7 +1961,7 @@ const AdminReports = () => {
           </div>
         </section>
 
-        <section id="classifications" className="scroll-mt-8">
+        <section id="classifications" className={`${sectionVisibility("#classifications")} scroll-mt-8`}>
           <div className="table-shell">
             <div className="border-b border-bank-card-border p-5 sm:p-6">
               <SectionHeader
@@ -1804,7 +1973,23 @@ const AdminReports = () => {
                 exportRows={classificationCsvRows}
                 exportPdfRows={classificationPdfRows}
                 exportPdfOptions={{
-                  headers: ["Classification", "Customers", "Transfer Limits", "Account-wise OD", "Charges"],
+                  layout: "classification-policy",
+                  headers: [
+                    "Classification",
+                    "Customers",
+                    "Per Transfer Limit",
+                    "Daily Limit",
+                    "Monthly Limit",
+                    "Maximum OD Limit",
+                    "Savings OD Rule",
+                    "Current OD Rule",
+                    "Salary OD Rule",
+                    "Penalty Amount",
+                    "Interest Rate",
+                    "Blocked OD Accounts",
+                    "Monthly OD Uses",
+                    "Settlement Rule",
+                  ],
                   subtitle: `Classification Policy Report | Generated on ${formatReportDate(new Date())}`,
                 }}
                 className="mb-0"
