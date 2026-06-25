@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../../api/axios";
 import EmptyState from "../../components/ui/EmptyState";
 import {
@@ -59,6 +59,14 @@ const statusStyles = {
   updated: "bg-blue-50 text-blue-700",
   under_review: "bg-blue-50 text-blue-700",
   disbursed: "bg-violet-50 text-violet-700",
+};
+
+const createLoanIdempotencyKey = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `loan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
 const decisionCategoryStyles = {
@@ -312,6 +320,8 @@ function ManagerDashboard() {
   const [expandedLoanId, setExpandedLoanId] = useState("");
   const [loanMessage, setLoanMessage] = useState("");
   const [loanError, setLoanError] = useState("");
+  const [disbursingLoanId, setDisbursingLoanId] = useState("");
+  const disbursingLoanRef = useRef(false);
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [profilePhone, setProfilePhone] = useState(user?.phone || "");
   const [profileMessage, setProfileMessage] = useState("");
@@ -1050,11 +1060,17 @@ function ManagerDashboard() {
   };
 
   const disburseLoan = async (loanId) => {
+    if (disbursingLoanRef.current) return;
+
     setLoanMessage("");
     setLoanError("");
+    disbursingLoanRef.current = true;
+    setDisbursingLoanId(loanId);
 
     try {
-      const { data } = await api.patch(`/loans/${loanId}/disburse`);
+      const { data } = await api.patch(`/loans/${loanId}/disburse`, {
+        idempotencyKey: createLoanIdempotencyKey(),
+      });
       setLoans((current) =>
         current.map((loan) => (loan.id === loanId ? { ...loan, ...data.loan } : loan))
       );
@@ -1065,6 +1081,9 @@ function ManagerDashboard() {
       const errorMessage = error.response?.data?.message || "Unable to disburse loan.";
       setLoanError(errorMessage);
       toast.error(errorMessage);
+    } finally {
+      disbursingLoanRef.current = false;
+      setDisbursingLoanId("");
     }
   };
 
@@ -3149,10 +3168,14 @@ function ManagerDashboard() {
                   <button
                     type="button"
                     onClick={() => disburseLoan(loan.id)}
-                    disabled={!hasGeneratedDocuments || !hasSettlementFunds}
+                    disabled={
+                      !hasGeneratedDocuments ||
+                      !hasSettlementFunds ||
+                      Boolean(disbursingLoanId)
+                    }
                     className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
                   >
-                    Disburse
+                    {disbursingLoanId === loan.id ? "Disbursing..." : "Disburse"}
                   </button>
                 </div>
               </div>

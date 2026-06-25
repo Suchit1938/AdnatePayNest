@@ -105,8 +105,21 @@ const transactionSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      default: '',
+    },
   },
   { timestamps: true }
+);
+
+transactionSchema.index(
+  { sender: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $type: 'string', $gt: '' } },
+  }
 );
 
 module.exports = mongoose.model('Transaction', transactionSchema);

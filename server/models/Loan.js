@@ -77,6 +77,11 @@ const repaymentHistorySchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     accountNumber: {
       type: String,
       trim: true,

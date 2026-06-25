@@ -624,6 +624,7 @@ const emailStatement = async (req, res) => {
 
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 const normalizeAccountNumber = (value) => String(value || '').trim();
+const normalizeIdempotencyKey = (value) => String(value || '').trim().slice(0, 128);
 const makeId = (prefix) => `${prefix}${Date.now()}${Math.floor(Math.random() * 1000)}`;
 const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
 const firstDefined = (...values) =>
@@ -692,6 +693,33 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
 
 };
 
+const sendDuplicateTransferResponse = async (res, user, transaction) => {
+  const approval = await Approval.findOne({ transaction: transaction._id })
+    .populate('reviewedBy', 'name')
+    .select('requestId status risk amount reviewedBy reviewedAt rejectionReason');
+  const isPendingApproval = transaction.status === 'pending' || Boolean(approval);
+
+  return res.status(isPendingApproval ? 202 : 200).json({
+    message: isPendingApproval
+      ? 'Transfer is pending manager approval'
+      : 'Transfer already processed',
+    duplicate: true,
+    approval: approval
+      ? {
+          id: approval.requestId,
+          status: approval.status,
+          risk: approval.risk,
+          amount: approval.amount,
+          reviewedBy: approval.reviewedBy?.name || '',
+          reviewedAt: approval.reviewedAt || null,
+        }
+      : null,
+    transaction: serializeTransaction(transaction, approval),
+    account: user.account,
+    accounts: user.accounts,
+  });
+};
+
 const getTransactions = async (req, res) => {
   const filter =
     req.user.role === 'customer'
@@ -720,8 +748,16 @@ const getTransactions = async (req, res) => {
 };
 
 const createTransfer = async (req, res) => {
-  const { beneficiaryId, amount, remarks = '', fromAccountNumber, toAccountNumber } = req.body;
+  const {
+    beneficiaryId,
+    amount,
+    remarks = '',
+    fromAccountNumber,
+    toAccountNumber,
+    idempotencyKey: rawIdempotencyKey,
+  } = req.body;
   const transferAmount = toWholeRupees(amount);
+  const idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
 
   if (!beneficiaryId || !transferAmount || transferAmount < 1) {
     return res.status(400).json({ message: 'Beneficiary and amount are required' });
@@ -735,6 +771,18 @@ const createTransfer = async (req, res) => {
 
     if (!sender) {
       throw new Error('Sender not found');
+    }
+
+    if (idempotencyKey) {
+      const existingTransaction = await Transaction.findOne({
+        sender: sender._id,
+        idempotencyKey,
+      }).session(session);
+
+      if (existingTransaction) {
+        await session.commitTransaction();
+        return sendDuplicateTransferResponse(res, sender, existingTransaction);
+      }
     }
 
     const savedBeneficiary = sender.savedBeneficiaries.id(beneficiaryId);
@@ -859,6 +907,7 @@ const createTransfer = async (req, res) => {
               remarks ||
               `${senderBankAccount.accountNumber} to ${receiverBankAccount.accountNumber}`,
             status: 'pending',
+            idempotencyKey,
           },
         ],
         { session }
@@ -1022,6 +1071,7 @@ const createTransfer = async (req, res) => {
             remarks ||
             `${senderBankAccount.accountNumber} to ${receiverBankAccount.accountNumber}`,
           status: 'success',
+          idempotencyKey,
         },
       ],
       { session }
@@ -1166,6 +1216,17 @@ const createTransfer = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+    if (error.code === 11000 && idempotencyKey) {
+      const [sender, existingTransaction] = await Promise.all([
+        User.findById(req.user._id),
+        Transaction.findOne({ sender: req.user._id, idempotencyKey }),
+      ]);
+
+      if (sender && existingTransaction) {
+        return sendDuplicateTransferResponse(res, sender, existingTransaction);
+      }
+    }
+
     res.status(400).json({ message: error.message });
   } finally {
     session.endSession();
@@ -1173,10 +1234,17 @@ const createTransfer = async (req, res) => {
 };
 
 const createOwnAccountTransfer = async (req, res) => {
-  const { amount, remarks = '', fromAccountNumber, toAccountNumber } = req.body;
+  const {
+    amount,
+    remarks = '',
+    fromAccountNumber,
+    toAccountNumber,
+    idempotencyKey: rawIdempotencyKey,
+  } = req.body;
   const transferAmount = toWholeRupees(amount);
   const senderAccountNumber = normalizeAccountNumber(fromAccountNumber);
   const receiverAccountNumber = normalizeAccountNumber(toAccountNumber);
+  const idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
 
   if (!senderAccountNumber || !receiverAccountNumber || !transferAmount || transferAmount < 1) {
     return res.status(400).json({ message: 'From account, to account, and amount are required' });
@@ -1194,6 +1262,18 @@ const createOwnAccountTransfer = async (req, res) => {
 
     if (!customer || customer.role !== 'customer') {
       throw new Error('Customer not found');
+    }
+
+    if (idempotencyKey) {
+      const existingTransaction = await Transaction.findOne({
+        sender: customer._id,
+        idempotencyKey,
+      }).session(session);
+
+      if (existingTransaction) {
+        await session.commitTransaction();
+        return sendDuplicateTransferResponse(res, customer, existingTransaction);
+      }
     }
 
     await ensureBankAccountsForUser(customer, { session });
@@ -1255,6 +1335,7 @@ const createOwnAccountTransfer = async (req, res) => {
             `Own account transfer from ${senderBankAccount.accountType} to ${receiverBankAccount.accountType}`,
           status: 'success',
           type: 'own-account',
+          idempotencyKey,
         },
       ],
       { session }
@@ -1304,6 +1385,17 @@ const createOwnAccountTransfer = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+    if (error.code === 11000 && idempotencyKey) {
+      const [customer, existingTransaction] = await Promise.all([
+        User.findById(req.user._id),
+        Transaction.findOne({ sender: req.user._id, idempotencyKey }),
+      ]);
+
+      if (customer && existingTransaction) {
+        return sendDuplicateTransferResponse(res, customer, existingTransaction);
+      }
+    }
+
     res.status(400).json({ message: error.message });
   } finally {
     session.endSession();

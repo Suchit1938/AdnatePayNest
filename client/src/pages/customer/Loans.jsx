@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeIndianRupee,
   Calculator,
@@ -20,6 +20,8 @@ import MetricTile from "../../components/ui/MetricTile";
 import PageContent from "../../components/ui/PageContent";
 import PageHeader from "../../components/ui/PageHeader";
 import SectionCard from "../../components/ui/SectionCard";
+import TablePagination from "../../components/ui/TablePagination";
+import usePaginatedRows from "../../components/ui/usePaginatedRows";
 import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { useAuth } from "../../context/useAuth";
@@ -53,6 +55,14 @@ const customerFactorLabels = {
   accountHistory: "Account History",
   overdraftUsage: "Overdraft Usage",
 };
+
+const loanStageSteps = [
+  { key: "submitted", label: "Submitted" },
+  { key: "under_review", label: "Review" },
+  { key: "approved", label: "Approved" },
+  { key: "disbursed", label: "Disbursed" },
+  { key: "closed", label: "Closed" },
+];
 
 const getCustomerFactorStatus = (score, maxScore = 0) => {
   const numericScore = Number(score || 0);
@@ -205,8 +215,17 @@ const documentOptionsByLoanType = {
 const admissionStatusOptions = ["Confirmed", "Provisional", "Awaiting Result"];
 const allowedDocumentExtensions = [".pdf", ".png", ".jpg", ".jpeg"];
 const allowedDocumentMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
+const emptyRows = [];
+const educationRequiredDetailFields = ["instituteName", "courseName", "admissionStatus", "academicYear"];
 const getUploadUrl = (fileUrl = "") =>
   fileUrl ? `${api.defaults.baseURL.replace(/\/api$/, "")}${fileUrl}` : "";
+const createLoanIdempotencyKey = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `loan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
 const supportingDetailFieldsByLoanType = {
   personal: [
@@ -238,6 +257,7 @@ const Loans = () => {
   const [loanRules, setLoanRules] = useState({ loanTypes: [] });
   const [form, setForm] = useState(initialForm);
   const [calculator, setCalculator] = useState(initialCalculator);
+  const [isCalculatorAppliedToForm, setIsCalculatorAppliedToForm] = useState(false);
   const [supportingDetails, setSupportingDetails] = useState(initialSupportingDetails);
   const [selectedLoanId, setSelectedLoanId] = useState("");
   const [documents, setDocuments] = useState([]);
@@ -249,8 +269,12 @@ const Loans = () => {
   const [partPaymentImpact, setPartPaymentImpact] = useState("reduce_emi");
   const [isPostingPartPayment, setIsPostingPartPayment] = useState(false);
   const [isForeclosing, setIsForeclosing] = useState(false);
-  const [acceptingSanctionId, setAcceptingSanctionId] = useState("");
-  const [acceptingAgreementId, setAcceptingAgreementId] = useState("");
+  const [selectedLoanTab, setSelectedLoanTab] = useState("overview");
+  const loanActionLocks = useRef({
+    emi: false,
+    partPayment: false,
+    foreclosure: false,
+  });
 
   const customerAccounts = useMemo(
     () => (user?.accounts?.length ? user.accounts : [user?.account].filter(Boolean)),
@@ -283,44 +307,31 @@ const Loans = () => {
   const selectedRule =
     loanRules.loanTypes?.find((rule) => rule.key === form.loanType) ||
     loanRules.loanTypes?.[0];
-  const classificationKey = String(user?.classification || "").toLowerCase();
-  const classificationBenefit = loanRules.classificationBenefits?.[classificationKey] || {
-    interestDiscount: 0,
-    maxAmountMultiplier: 1,
-  };
   const calculatorRule =
     loanRules.loanTypes?.find((rule) => rule.key === calculator.loanType) ||
     loanRules.loanTypes?.[0];
-  const calculatorInterestRate = Math.max(
-    0,
-    Number(calculatorRule?.annualInterestRate || 0) -
-      Number(classificationBenefit.interestDiscount || 0)
-  );
-  const calculatorMaxAmount = Math.round(
-    Number(calculatorRule?.maxAmount || 0) *
-      Number(classificationBenefit.maxAmountMultiplier || 1)
-  );
+  const calculatorInterestRate = Math.max(0, Number(calculatorRule?.annualInterestRate || 0));
+  const calculatorMaxAmount = Math.round(Number(calculatorRule?.maxAmount || 0));
   const calculatorAmount = Number(calculator.amount || 0);
-  const calculatorTenureMonths = Math.max(1, Number(calculator.tenureMonths || 1));
+  const calculatorTenureMonths = Number(calculator.tenureMonths || 0);
+  const normalizedCalculatorTenureMonths = Math.max(1, calculatorTenureMonths || 1);
   const calculatorMonthlyRate = calculatorInterestRate / 12 / 100;
   const calculatorEmi = useMemo(() => {
     if (calculatorAmount <= 0) return 0;
     if (calculatorMonthlyRate <= 0) {
-      return Math.round(calculatorAmount / calculatorTenureMonths);
+      return Math.round(calculatorAmount / normalizedCalculatorTenureMonths);
     }
 
-    const factor = (1 + calculatorMonthlyRate) ** calculatorTenureMonths;
+    const factor = (1 + calculatorMonthlyRate) ** normalizedCalculatorTenureMonths;
     return Math.round((calculatorAmount * calculatorMonthlyRate * factor) / (factor - 1));
-  }, [calculatorAmount, calculatorMonthlyRate, calculatorTenureMonths]);
-  const calculatorTotalRepayment = calculatorEmi * calculatorTenureMonths;
+  }, [calculatorAmount, calculatorMonthlyRate, normalizedCalculatorTenureMonths]);
+  const calculatorTotalRepayment = calculatorEmi * normalizedCalculatorTenureMonths;
   const calculatorTotalInterest = Math.max(0, calculatorTotalRepayment - calculatorAmount);
   const effectiveInterestRate = Math.max(
     0,
-    Number(selectedRule?.annualInterestRate || 0) - Number(classificationBenefit.interestDiscount || 0)
+    Number(selectedRule?.annualInterestRate || 0)
   );
-  const effectiveMaxAmount = Math.round(
-    Number(selectedRule?.maxAmount || 0) * Number(classificationBenefit.maxAmountMultiplier || 1)
-  );
+  const effectiveMaxAmount = Math.round(Number(selectedRule?.maxAmount || 0));
   const amount = Number(form.amount || 0);
   const tenureMonths = Math.max(1, Number(form.tenureMonths || 1));
   const monthlyRate = effectiveInterestRate / 12 / 100;
@@ -334,19 +345,98 @@ const Loans = () => {
   const totalInterest = Math.max(0, totalRepayment - amount);
   const activeLoans = loans.filter((loan) => ["approved", "disbursed"].includes(loan.status));
   const pendingLoans = loans.filter((loan) => ["submitted", "under_review"].includes(loan.status));
-  const selectedLoan = loans.find((loan) => loan.id === selectedLoanId) || activeLoans[0] || loans[0];
+  const selectedLoan = loans.find((loan) => loan.id === selectedLoanId);
+  const summaryLoan = selectedLoan || activeLoans[0] || loans[0];
   const selectedSupportingFields = supportingDetailFieldsByLoanType[form.loanType] || [];
+  const isEducationLoan = form.loanType === "education";
+  const isStudentEducationLoan = isEducationLoan && form.employmentType === "student";
+  const incomeFieldLabel = isStudentEducationLoan ? "Co-applicant Monthly Income" : "Monthly Income";
+  const liabilitiesFieldLabel = isStudentEducationLoan
+    ? "Co-applicant Monthly Liabilities"
+    : "Existing Monthly Liabilities";
   const nextEmi =
-    selectedLoan?.amortizationSchedule?.find((row) =>
+    summaryLoan?.amortizationSchedule?.find((row) =>
       ["pending", "missed", "overdue"].includes(row.status)
     ) ||
-    selectedLoan?.amortizationSchedule?.[0];
+    summaryLoan?.amortizationSchedule?.[0];
   const selectedLoanNextPendingEmi = selectedLoan?.amortizationSchedule?.find(
     (row) => !["paid", "foreclosed"].includes(row.status)
   );
   const selectedLoanForeclosureQuote = selectedLoan?.foreclosureQuote || {};
+  const selectedLoanDocuments = selectedLoan
+    ? [
+        {
+          key: "sanction",
+          title: "Sanction Letter",
+          fileName: selectedLoan.sanctionLetter?.fileName || "Loan sanction letter",
+          fileUrl: selectedLoan.sanctionLetter?.fileUrl,
+          status: selectedLoan.sanctionLetter?.status || "generated",
+          generatedAt: selectedLoan.sanctionLetter?.generatedAt,
+          fallbackDate: "approval",
+        },
+        {
+          key: "agreement",
+          title: "Loan Agreement",
+          fileName: selectedLoan.loanAgreement?.fileName || "Loan agreement",
+          fileUrl: selectedLoan.loanAgreement?.fileUrl,
+          status: selectedLoan.loanAgreement?.status || "generated",
+          generatedAt: selectedLoan.loanAgreement?.generatedAt,
+          fallbackDate: "sanction",
+        },
+        {
+          key: "repayment",
+          title: "Repayment Schedule",
+          fileName: selectedLoan.repaymentScheduleDocument?.fileName || "Repayment schedule",
+          fileUrl: selectedLoan.repaymentScheduleDocument?.fileUrl,
+          status: selectedLoan.repaymentScheduleDocument?.status || "generated",
+          generatedAt: selectedLoan.repaymentScheduleDocument?.generatedAt,
+          fallbackDate: "disbursal",
+        },
+      ].filter((document) => document.fileUrl)
+    : [];
+  const selectedLoanAmortizationRows = selectedLoan?.amortizationSchedule || emptyRows;
+  const amortizationPagination = usePaginatedRows(selectedLoanAmortizationRows);
   const canManageRepayment = selectedLoan?.status === "disbursed";
   const isApprovedAwaitingDisbursal = selectedLoan?.status === "approved";
+  const selectedLoanStageIndex =
+    selectedLoan?.status === "rejected"
+      ? -1
+      : Math.max(
+          0,
+          loanStageSteps.findIndex((step) => step.key === selectedLoan?.status)
+        );
+  const selectedLoanNextStep = selectedLoan
+    ? selectedLoan.additionalInfoRequested
+      ? selectedLoan.managerNote || "Manager requested more information."
+      : selectedLoan.status === "rejected"
+        ? selectedLoan.rejectionReason || "Application was rejected after review."
+        : selectedLoan.status === "submitted"
+          ? "Next step: manager review will begin."
+          : selectedLoan.status === "under_review"
+            ? "Next step: manager decision is pending."
+            : selectedLoan.status === "approved"
+              ? "Next step: manager disbursal is pending."
+              : selectedLoan.status === "disbursed" && selectedLoanNextPendingEmi
+                ? `Next step: EMI ${selectedLoanNextPendingEmi.emiNumber} for ${formatCurrency(selectedLoanNextPendingEmi.emiAmount)}.`
+                : selectedLoan.status === "closed"
+                  ? "Loan is closed. No further customer action is required."
+                  : "Track the latest status and documents here."
+    : "";
+  const selectedLoanTabs = selectedLoan
+    ? [
+        { key: "overview", label: "Overview" },
+        ...(selectedLoanDocuments.length > 0
+          ? [{ key: "documents", label: `Documents (${selectedLoanDocuments.length})` }]
+          : []),
+        ...(["approved", "disbursed", "closed"].includes(selectedLoan.status)
+          ? [{ key: "repayment", label: "Repayment" }]
+          : []),
+        ...(["approved", "disbursed", "closed"].includes(selectedLoan.status) &&
+        selectedLoanAmortizationRows.length > 0
+          ? [{ key: "schedule", label: "Schedule" }]
+          : []),
+      ]
+    : [];
   const partPaymentPolicy = loanRules.partPaymentPolicy || {
     enabled: true,
     minimumAmount: 1000,
@@ -379,6 +469,36 @@ const Loans = () => {
     partPaymentLockEndsAt && partPaymentLockEndsAt > new Date()
   );
 
+  const validateLoanCalculator = () => {
+    const errors = {};
+    const numericAmount = Number(calculator.amount || 0);
+    const numericTenure = Number(calculator.tenureMonths || 0);
+    const minimumAmount = Number(calculatorRule?.minAmount || 1);
+    const minimumTenure = Number(calculatorRule?.minTenureMonths || 1);
+    const maximumTenure = Number(calculatorRule?.maxTenureMonths || 0);
+
+    if (!calculatorRule) {
+      errors.loanType = "Select a valid loan type.";
+    }
+
+    if (!Number.isFinite(numericAmount) || numericAmount < minimumAmount) {
+      errors.amount = `Minimum amount is ${formatCurrency(minimumAmount)}.`;
+    } else if (calculatorMaxAmount && numericAmount > calculatorMaxAmount) {
+      errors.amount = `Maximum amount is ${formatCurrency(calculatorMaxAmount)} for your classification.`;
+    }
+
+    if (!Number.isFinite(numericTenure) || numericTenure < minimumTenure) {
+      errors.tenureMonths = `Minimum tenure is ${minimumTenure} months.`;
+    } else if (maximumTenure && numericTenure > maximumTenure) {
+      errors.tenureMonths = `Maximum tenure is ${calculatorRule?.maxTenureMonths} months.`;
+    }
+
+    return errors;
+  };
+
+  const calculatorValidationErrors = validateLoanCalculator();
+  const hasCalculatorValidationErrors = Object.keys(calculatorValidationErrors).length > 0;
+
   const validateLoanForm = () => {
     const errors = {};
     const numericAmount = Number(form.amount || 0);
@@ -401,6 +521,10 @@ const Loans = () => {
       errors.loanType = "Select a valid loan type.";
     }
 
+    if (form.loanType === "education" && form.employmentType !== "student") {
+      errors.employmentType = "Education loans are available only under the Student category.";
+    }
+
     if (numericAmount < Number(selectedRule?.minAmount || 1)) {
       errors.amount = `Minimum amount is ${formatCurrency(selectedRule?.minAmount || 1)}.`;
     } else if (effectiveMaxAmount && numericAmount > effectiveMaxAmount) {
@@ -414,7 +538,7 @@ const Loans = () => {
     }
 
     if (numericMonthlyIncome <= 0) {
-      errors.monthlyIncome = "Monthly income must be greater than zero.";
+      errors.monthlyIncome = `${incomeFieldLabel} must be greater than zero.`;
     }
 
     if (numericLiabilities < 0) {
@@ -453,6 +577,12 @@ const Loans = () => {
     if (form.loanType === "education") {
       const admissionStatus = supportingDetails.education?.admissionStatus || "";
 
+      educationRequiredDetailFields.forEach((field) => {
+        if (!String(supportingDetails.education?.[field] || "").trim()) {
+          errors[`supportingDetails.${field}`] = "This education detail is required.";
+        }
+      });
+
       if (admissionStatus && !admissionStatusOptions.includes(admissionStatus)) {
         errors["supportingDetails.admissionStatus"] = "Select a valid admission status.";
       }
@@ -489,7 +619,22 @@ const Loans = () => {
   );
 
   const updateForm = (field, value) => {
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => {
+      if (field === "loanType") {
+        const nextForm = { ...current, loanType: value };
+
+        if (value === "education") {
+          nextForm.employmentType = "student";
+          nextForm.employmentDurationMonths = "";
+        } else if (current.loanType === "education" && current.employmentType === "student") {
+          nextForm.employmentType = "salaried";
+        }
+
+        return nextForm;
+      }
+
+      return { ...current, [field]: value };
+    });
     setTouchedFields((current) => ({
       ...current,
       [field]: true,
@@ -528,6 +673,11 @@ const Loans = () => {
   };
 
   const applyCalculatorToApplication = () => {
+    if (hasCalculatorValidationErrors) {
+      toast.warning(Object.values(calculatorValidationErrors)[0]);
+      return;
+    }
+
     const loanTypeChanged = form.loanType !== calculator.loanType;
 
     setForm((current) => ({
@@ -535,7 +685,13 @@ const Loans = () => {
       loanType: calculator.loanType,
       amount: calculator.amount,
       tenureMonths: calculator.tenureMonths,
+      ...(calculator.loanType === "education"
+        ? { employmentType: "student", employmentDurationMonths: "" }
+        : current.loanType === "education" && current.employmentType === "student"
+          ? { employmentType: "salaried" }
+          : {}),
     }));
+    setIsCalculatorAppliedToForm(true);
     setTouchedFields((current) => ({
       ...current,
       loanType: true,
@@ -629,6 +785,7 @@ const Loans = () => {
 
       toast.success(data.message || "Loan application submitted.");
       setForm(initialForm);
+      setIsCalculatorAppliedToForm(false);
       setSupportingDetails(initialSupportingDetails);
       setDocuments([]);
       setTouchedFields({});
@@ -646,7 +803,9 @@ const Loans = () => {
 
   const payNextEmi = async () => {
     if (!selectedLoan || !selectedLoanNextPendingEmi) return;
+    if (loanActionLocks.current.emi) return;
 
+    loanActionLocks.current.emi = true;
     setPayingEmiNumber(selectedLoanNextPendingEmi.emiNumber);
 
     try {
@@ -655,6 +814,7 @@ const Loans = () => {
         {
           paymentAccountNumber:
             selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
+          idempotencyKey: createLoanIdempotencyKey(),
         }
       );
 
@@ -666,12 +826,14 @@ const Loans = () => {
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to pay EMI.");
     } finally {
+      loanActionLocks.current.emi = false;
       setPayingEmiNumber(null);
     }
   };
 
   const postPartPayment = async () => {
     if (!selectedLoan) return;
+    if (loanActionLocks.current.partPayment) return;
     const amount = Number(partPaymentAmount || 0);
 
     if (amount <= 0) {
@@ -695,6 +857,7 @@ const Loans = () => {
       return;
     }
 
+    loanActionLocks.current.partPayment = true;
     setIsPostingPartPayment(true);
 
     try {
@@ -703,6 +866,7 @@ const Loans = () => {
         repaymentImpact: partPaymentImpact,
         paymentAccountNumber:
           selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
+        idempotencyKey: createLoanIdempotencyKey(),
       });
 
       setLoans((current) =>
@@ -714,19 +878,23 @@ const Loans = () => {
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to post part-payment.");
     } finally {
+      loanActionLocks.current.partPayment = false;
       setIsPostingPartPayment(false);
     }
   };
 
   const forecloseSelectedLoan = async () => {
     if (!selectedLoan) return;
+    if (loanActionLocks.current.foreclosure) return;
 
+    loanActionLocks.current.foreclosure = true;
     setIsForeclosing(true);
 
     try {
       const { data } = await api.post(`/loans/${selectedLoan.id}/foreclose`, {
         paymentAccountNumber:
           selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
+        idempotencyKey: createLoanIdempotencyKey(),
       });
 
       setLoans((current) =>
@@ -737,47 +905,8 @@ const Loans = () => {
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to foreclose loan.");
     } finally {
+      loanActionLocks.current.foreclosure = false;
       setIsForeclosing(false);
-    }
-  };
-
-  const acceptSanctionLetter = async () => {
-    if (!selectedLoan) return;
-
-    setAcceptingSanctionId(selectedLoan.id);
-
-    try {
-      const { data } = await api.patch(`/loans/${selectedLoan.id}/sanction/accept`);
-
-      setLoans((current) =>
-        current.map((loan) => (loan.id === data.loan.id ? data.loan : loan))
-      );
-      setSelectedLoanId(data.loan.id);
-      toast.success(data.message || "Sanction letter accepted.");
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to accept sanction letter.");
-    } finally {
-      setAcceptingSanctionId("");
-    }
-  };
-
-  const acceptLoanAgreement = async () => {
-    if (!selectedLoan) return;
-
-    setAcceptingAgreementId(selectedLoan.id);
-
-    try {
-      const { data } = await api.patch(`/loans/${selectedLoan.id}/agreement/accept`);
-
-      setLoans((current) =>
-        current.map((loan) => (loan.id === data.loan.id ? data.loan : loan))
-      );
-      setSelectedLoanId(data.loan.id);
-      toast.success(data.message || "Loan agreement accepted.");
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to accept loan agreement.");
-    } finally {
-      setAcceptingAgreementId("");
     }
   };
 
@@ -851,6 +980,11 @@ const Loans = () => {
                       </option>
                     ))}
                   </select>
+                  {calculatorValidationErrors.loanType && (
+                    <span className="mt-1 text-xs font-semibold text-red-600">
+                      {calculatorValidationErrors.loanType}
+                    </span>
+                  )}
                 </label>
                 <label className="label-field">
                   <span>Loan Amount</span>
@@ -866,6 +1000,11 @@ const Loans = () => {
                     {formatCurrency(calculatorRule?.minAmount || 0)} to{" "}
                     {formatCurrency(calculatorMaxAmount || calculatorRule?.maxAmount || 0)}
                   </span>
+                  {calculatorValidationErrors.amount && (
+                    <span className="mt-1 text-xs font-semibold text-red-600">
+                      {calculatorValidationErrors.amount}
+                    </span>
+                  )}
                 </label>
                 <label className="label-field">
                   <span>Tenure</span>
@@ -881,6 +1020,11 @@ const Loans = () => {
                     {calculatorRule?.minTenureMonths || 1} to{" "}
                     {calculatorRule?.maxTenureMonths || 240} months
                   </span>
+                  {calculatorValidationErrors.tenureMonths && (
+                    <span className="mt-1 text-xs font-semibold text-red-600">
+                      {calculatorValidationErrors.tenureMonths}
+                    </span>
+                  )}
                 </label>
               </div>
 
@@ -912,6 +1056,7 @@ const Loans = () => {
                   <button
                     type="button"
                     onClick={applyCalculatorToApplication}
+                    disabled={hasCalculatorValidationErrors}
                     className="btn-primary justify-center sm:col-span-2 xl:col-span-1"
                   >
                     <Send size={17} />
@@ -933,6 +1078,7 @@ const Loans = () => {
                 <select
                   value={form.loanType}
                   onChange={(event) => updateForm("loanType", event.target.value)}
+                  disabled={isCalculatorAppliedToForm}
                   className="input-field"
                 >
                   {(loanRules.loanTypes || []).map((rule) => (
@@ -951,6 +1097,7 @@ const Loans = () => {
                   max={effectiveMaxAmount || selectedRule?.maxAmount || undefined}
                   value={form.amount}
                   onChange={(event) => updateForm("amount", event.target.value)}
+                  disabled={isCalculatorAppliedToForm}
                   className="input-field"
                   required
                 />
@@ -958,27 +1105,24 @@ const Loans = () => {
               </label>
               <label className="label-field">
                 <span>Tenure<RequiredMark /></span>
-                <select
+                <input
+                  type="number"
+                  min={selectedRule?.minTenureMonths || 1}
+                  max={selectedRule?.maxTenureMonths || 240}
                   value={form.tenureMonths}
                   onChange={(event) => updateForm("tenureMonths", event.target.value)}
+                  disabled={isCalculatorAppliedToForm}
                   className="input-field"
-                >
-                  {[12, 24, 36, 48, 60, 84, 120, 180, 240]
-                    .filter(
-                      (months) =>
-                        months >= Number(selectedRule?.minTenureMonths || 1) &&
-                        months <= Number(selectedRule?.maxTenureMonths || 240)
-                    )
-                    .map((months) => (
-                      <option key={months} value={months}>
-                        {months} months
-                      </option>
-                    ))}
-                </select>
+                  required
+                />
+                <span className="mt-1 text-xs font-semibold text-slate-500">
+                  {selectedRule?.minTenureMonths || 1} to{" "}
+                  {selectedRule?.maxTenureMonths || 240} months
+                </span>
                 {visibleErrors.tenureMonths && <span className="mt-1 text-xs font-semibold text-red-600">{visibleErrors.tenureMonths}</span>}
               </label>
               <label className="label-field">
-                <span>Monthly Income<RequiredMark /></span>
+                <span>{incomeFieldLabel}<RequiredMark /></span>
                 <input
                   type="number"
                   min="1"
@@ -990,7 +1134,7 @@ const Loans = () => {
                 {visibleErrors.monthlyIncome && <span className="mt-1 text-xs font-semibold text-red-600">{visibleErrors.monthlyIncome}</span>}
               </label>
               <label className="label-field">
-                Existing Monthly Liabilities
+                {liabilitiesFieldLabel}
                 <input
                   type="number"
                   min="0"
@@ -1009,6 +1153,7 @@ const Loans = () => {
                 <select
                   value={form.employmentType}
                   onChange={(event) => updateForm("employmentType", event.target.value)}
+                  disabled={isEducationLoan}
                   className="input-field"
                 >
                   <option value="salaried">Salaried</option>
@@ -1016,6 +1161,11 @@ const Loans = () => {
                   <option value="student">Student</option>
                   <option value="business">Business</option>
                 </select>
+                {visibleErrors.employmentType && (
+                  <span className="mt-1 text-xs font-semibold text-red-600">
+                    {visibleErrors.employmentType}
+                  </span>
+                )}
               </label>
               <label className="label-field">
                 <span>
@@ -1071,7 +1221,11 @@ const Loans = () => {
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                     {selectedSupportingFields.map((field) => (
                       <label key={field.key} className="label-field">
-                        {field.label}
+                        <span>
+                          {field.label}
+                          {form.loanType === "education" &&
+                            educationRequiredDetailFields.includes(field.key) && <RequiredMark />}
+                        </span>
                         {field.type === "select" ? (
                           <select
                             value={supportingDetails[form.loanType]?.[field.key] || ""}
@@ -1224,14 +1378,6 @@ const Loans = () => {
                     <p className="text-xs font-bold uppercase text-slate-500">Total Repayment</p>
                     <p className="mt-1 font-bold text-slate-950">{formatCurrency(totalRepayment)}</p>
                   </div>
-                  <div className="rounded-lg bg-emerald-50 p-3 ring-1 ring-emerald-100">
-                    <p className="text-xs font-bold uppercase text-emerald-700">
-                      {user?.classification || "Customer"} Benefit
-                    </p>
-                    <p className="mt-1 text-sm font-bold leading-5 text-emerald-800">
-                      {Number(classificationBenefit.interestDiscount || 0)}% discount / max {formatCurrency(effectiveMaxAmount)}
-                    </p>
-                  </div>
                 </div>
               </div>
               <button type="submit" disabled={isSubmitting} className="btn-primary md:col-span-2 xl:col-span-3">
@@ -1243,19 +1389,22 @@ const Loans = () => {
 
           <SectionCard
             title="Application Tracking"
-            subtitle="Manager decisions and request-for-information notes appear here."
+            subtitle="Select an application to view loan-specific details and next actions."
             icon={ClipboardList}
           >
             {loans.length === 0 ? (
               <EmptyState message="No loan applications have been submitted yet." />
             ) : (
-              <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-1 gap-3">
                 {loans.map((loan) => (
                   <button
                     key={loan.id}
                     type="button"
-                    onClick={() => setSelectedLoanId(loan.id)}
-                    className={`relative overflow-hidden rounded-xl border p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                    onClick={() => {
+                      setSelectedLoanId(loan.id);
+                      setSelectedLoanTab("overview");
+                    }}
+                    className={`relative overflow-hidden rounded-xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
                       selectedLoan?.id === loan.id
                         ? "border-blue-200 bg-blue-50/60"
                         : "border-bank-card-border bg-white"
@@ -1269,58 +1418,36 @@ const Loans = () => {
                           : "bg-blue-500"
                     }`} />
 
-                    <div className="grid grid-cols-1 gap-5 pt-2 lg:grid-cols-[1.2fr_1fr_1fr_auto] lg:items-start">
+                    <div className="grid grid-cols-1 gap-4 pt-2 md:grid-cols-[1.4fr_1fr_auto] md:items-center">
                       <div className="min-w-0">
                         <p className="break-words text-lg font-black text-slate-950">
                           {loan.loanTypeLabel}
                         </p>
                         <p className="mt-1 break-words text-sm font-semibold text-slate-500">
-                          {loan.id} / {formatCurrency(loan.amount)}
+                          {loan.id}
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-bank-card-border">
-                          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                            Monthly EMI
-                          </p>
-                          <p className="mt-1 font-black text-slate-950">
-                            {formatCurrency(loan.emiAmount)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-bank-card-border">
-                          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                            Rate
-                          </p>
-                          <p className="mt-1 font-black text-slate-950">
-                            {loan.annualInterestRate}% p.a.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-bank-card-border">
-                        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                          Credit Account
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                          Requested Amount
                         </p>
-                        <p className="mt-1 break-words text-sm font-bold text-slate-800">
-                          {loan.disbursementAccountType || "Account"} {loan.disbursementAccountNumber || "not selected"}
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {loan.documents?.length || 0} document(s)
+                        <p className="mt-1 break-words text-base font-black text-slate-950">
+                          {formatCurrency(loan.amount)}
                         </p>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                      <div className="flex flex-wrap items-center gap-2 md:justify-end">
                         <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusStyles[loan.status] || statusStyles.submitted}`}>
                           {statusLabel(loan.status)}
                         </span>
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600 ring-1 ring-bank-card-border">
-                          {loan.eligibilityRecommendation || "Under review"}
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-bank-accent ring-1 ring-bank-card-border">
+                          {selectedLoan?.id === loan.id ? "Details shown" : "View details"}
                         </span>
                       </div>
                     </div>
 
-                    {(loan.additionalInfoRequested || loan.rejectionReason) && (
+                    {selectedLoan?.id === loan.id && (loan.additionalInfoRequested || loan.rejectionReason) && (
                       <div className="mt-4">
                         {loan.additionalInfoRequested && (
                           <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
@@ -1343,7 +1470,91 @@ const Loans = () => {
 
         {selectedLoan && (
           <section className="grid grid-cols-1 gap-6">
-            <SectionCard title="Eligibility Snapshot" icon={Gauge}>
+            <SectionCard title="Selected Loan Details" icon={Gauge}>
+              <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-lg font-black text-slate-950">
+                        {selectedLoan.loanTypeLabel}
+                      </p>
+                      <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusStyles[selectedLoan.status] || statusStyles.submitted}`}>
+                        {statusLabel(selectedLoan.status)}
+                      </span>
+                    </div>
+                    <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                      {selectedLoan.id} / {formatCurrency(selectedLoan.amount)}
+                    </p>
+                    <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-bold leading-6 text-blue-800">
+                      {selectedLoanNextStep}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3 lg:min-w-[360px]">
+                    <div className="rounded-lg bg-bank-surface px-3 py-2">
+                      <p className="text-xs font-bold uppercase text-slate-500">EMI</p>
+                      <p className="mt-1 font-black text-slate-950">
+                        {formatCurrency(selectedLoan.emiAmount || 0)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-bank-surface px-3 py-2">
+                      <p className="text-xs font-bold uppercase text-slate-500">Rate</p>
+                      <p className="mt-1 font-black text-slate-950">
+                        {selectedLoan.annualInterestRate}% p.a.
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-bank-surface px-3 py-2">
+                      <p className="text-xs font-bold uppercase text-slate-500">Tenure</p>
+                      <p className="mt-1 font-black text-slate-950">
+                        {selectedLoan.tenureMonths || selectedLoan.remainingTenureMonths || 0} mo
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-5">
+                  {loanStageSteps.map((step, index) => {
+                    const isComplete = selectedLoanStageIndex >= index;
+                    const isCurrent = selectedLoan?.status === step.key;
+
+                    return (
+                      <div
+                        key={step.key}
+                        className={`rounded-lg border px-3 py-2 ${
+                          isCurrent
+                            ? "border-blue-200 bg-blue-50 text-blue-800"
+                            : isComplete
+                              ? "border-emerald-100 bg-emerald-50 text-emerald-800"
+                              : "border-bank-card-border bg-white text-slate-500"
+                        }`}
+                      >
+                        <p className="text-xs font-bold uppercase tracking-[0.12em]">
+                          {step.label}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2 border-t border-bank-card-border pt-4">
+                  {selectedLoanTabs.map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setSelectedLoanTab(tab.key)}
+                      className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
+                        selectedLoanTab === tab.key
+                          ? "bg-bank-accent text-white shadow-sm"
+                          : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {selectedLoanTab === "overview" && (
+                <>
               <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
@@ -1351,11 +1562,7 @@ const Loans = () => {
                       {selectedLoan.loanTypeLabel}
                     </p>
                     <h3 className="mt-1 text-2xl font-bold text-slate-950">
-                      You may be eligible for up to{" "}
-                      {formatCurrency(
-                        selectedLoan.eligibilityDetails?.classificationBenefit?.maxAmount ||
-                          selectedLoan.amount
-                      )}
+                      Requested amount {formatCurrency(selectedLoan.amount)}
                     </h3>
                     <p className="mt-1 text-sm font-semibold text-slate-500">
                       Final eligibility is confirmed after document verification and manager approval.
@@ -1398,15 +1605,6 @@ const Loans = () => {
                   tone={selectedLoan.eligibilityScore >= 65 ? "success" : "warning"}
                 />
               </div>
-              {selectedLoan.eligibilityDetails?.classificationBenefit && (
-                <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold leading-6 text-blue-800">
-                  {Number(selectedLoan.eligibilityDetails.classificationBenefit.interestDiscount || 0) > 0
-                    ? `A ${selectedLoan.eligibilityDetails.classificationBenefit.interestDiscount}% customer benefit has been applied to your estimated rate.`
-                    : "No interest discount is currently available for this profile."}{" "}
-                  Maximum eligible amount:{" "}
-                  {formatCurrency(selectedLoan.eligibilityDetails.classificationBenefit.maxAmount)}.
-                </div>
-              )}
               {Object.entries(selectedLoan.supportingDetails || {}).filter(([, value]) => value).length > 0 && (
                 <div className="mt-4 rounded-xl border border-bank-card-border bg-white p-4">
                   <p className="font-bold text-slate-950">Supporting Details</p>
@@ -1443,163 +1641,66 @@ const Loans = () => {
                   );
                 })}
               </div>
+                </>
+              )}
             </SectionCard>
 
-            {selectedLoan.sanctionLetter?.fileUrl && (
+            {selectedLoanTab === "documents" && selectedLoanDocuments.length > 0 && (
               <SectionCard
-                title="Sanction Letter"
-                subtitle="Review and accept the sanctioned terms before disbursal."
+                title="Loan Documents"
+                subtitle="Sanction, agreement, and repayment schedule PDFs appear here when generated."
                 icon={FileText}
               >
-                <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                        {statusLabel(selectedLoan.sanctionLetter.status || "generated")}
-                      </p>
-                      <p className="mt-1 text-lg font-black text-slate-950">
-                        {selectedLoan.sanctionLetter.fileName || "Loan sanction letter"}
-                      </p>
-                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
-                        Generated on{" "}
-                        {selectedLoan.sanctionLetter.generatedAt
-                          ? new Date(selectedLoan.sanctionLetter.generatedAt).toLocaleDateString()
-                          : "approval"}.
-                        {selectedLoan.sanctionLetter.acceptedAt
-                          ? ` Accepted on ${new Date(selectedLoan.sanctionLetter.acceptedAt).toLocaleDateString()}.`
-                          : " Acceptance is required before the manager can disburse the loan."}
-                      </p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <a
-                        href={getUploadUrl(selectedLoan.sanctionLetter.fileUrl)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn-secondary justify-center px-4 py-2 text-sm"
-                      >
-                        <FileText size={16} />
-                        View PDF
-                      </a>
-                      <button
-                        type="button"
-                        onClick={acceptSanctionLetter}
-                        disabled={
-                          selectedLoan.sanctionLetter.status === "accepted" ||
-                          acceptingSanctionId === selectedLoan.id
-                        }
-                        className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        <CheckCircle2 size={16} />
-                        {selectedLoan.sanctionLetter.status === "accepted"
-                          ? "Accepted"
-                          : acceptingSanctionId === selectedLoan.id
-                            ? "Accepting..."
-                            : "Accept Terms"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </SectionCard>
-            )}
-
-            {selectedLoan.loanAgreement?.fileUrl && (
-              <SectionCard
-                title="Loan Agreement"
-                subtitle="Review and accept the legal repayment contract before disbursal."
-                icon={FileText}
-              >
-                <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                        {statusLabel(selectedLoan.loanAgreement.status || "generated")}
-                      </p>
-                      <p className="mt-1 text-lg font-black text-slate-950">
-                        {selectedLoan.loanAgreement.fileName || "Loan agreement"}
-                      </p>
-                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
-                        Generated on{" "}
-                        {selectedLoan.loanAgreement.generatedAt
-                          ? new Date(selectedLoan.loanAgreement.generatedAt).toLocaleDateString()
-                          : "sanction acceptance"}.
-                        {selectedLoan.loanAgreement.acceptedAt
-                          ? ` Accepted on ${new Date(selectedLoan.loanAgreement.acceptedAt).toLocaleDateString()}.`
-                          : " Manager disbursal is enabled only after agreement acceptance."}
-                      </p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <a
-                        href={getUploadUrl(selectedLoan.loanAgreement.fileUrl)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn-secondary justify-center px-4 py-2 text-sm"
-                      >
-                        <FileText size={16} />
-                        View PDF
-                      </a>
-                      <button
-                        type="button"
-                        onClick={acceptLoanAgreement}
-                        disabled={
-                          selectedLoan.loanAgreement.status === "accepted" ||
-                          acceptingAgreementId === selectedLoan.id
-                        }
-                        className="btn-primary justify-center px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        <CheckCircle2 size={16} />
-                        {selectedLoan.loanAgreement.status === "accepted"
-                          ? "Accepted"
-                          : acceptingAgreementId === selectedLoan.id
-                            ? "Accepting..."
-                            : "Accept Agreement"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </SectionCard>
-            )}
-
-            {selectedLoan.repaymentScheduleDocument?.fileUrl && (
-              <SectionCard
-                title="Repayment Schedule PDF"
-                subtitle="Download the final EMI schedule generated at disbursal."
-                icon={CalendarClock}
-              >
-                <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                        {statusLabel(selectedLoan.repaymentScheduleDocument.status || "generated")}
-                      </p>
-                      <p className="mt-1 text-lg font-black text-slate-950">
-                        {selectedLoan.repaymentScheduleDocument.fileName || "Repayment schedule"}
-                      </p>
-                      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
-                        Generated on{" "}
-                        {selectedLoan.repaymentScheduleDocument.generatedAt
-                          ? new Date(selectedLoan.repaymentScheduleDocument.generatedAt).toLocaleDateString()
-                          : "disbursal"}.
-                      </p>
-                    </div>
-                    <a
-                      href={getUploadUrl(selectedLoan.repaymentScheduleDocument.fileUrl)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-secondary justify-center px-4 py-2 text-sm"
+                <div className="grid grid-cols-1 gap-3">
+                  {selectedLoanDocuments.map((document) => (
+                    <div
+                      key={document.key}
+                      className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm"
                     >
-                      <FileText size={16} />
-                      View PDF
-                    </a>
-                  </div>
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-lg font-black text-slate-950">
+                              {document.title}
+                            </p>
+                            <span className="rounded-full bg-bank-surface px-3 py-1 text-xs font-bold text-slate-600">
+                              {statusLabel(document.status)}
+                            </span>
+                          </div>
+                          <p className="mt-1 break-words text-sm font-bold text-slate-700">
+                            {document.fileName}
+                          </p>
+                          <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                            Generated on{" "}
+                            {document.generatedAt
+                              ? new Date(document.generatedAt).toLocaleDateString()
+                              : document.fallbackDate}
+                            .
+                          </p>
+                        </div>
+                        <a
+                          href={getUploadUrl(document.fileUrl)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn-secondary justify-center px-4 py-2 text-sm"
+                        >
+                          <FileText size={16} />
+                          View PDF
+                        </a>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </SectionCard>
             )}
 
-            <SectionCard
-              title="Repayment Management"
-              subtitle="Track live loan balance, penalties, part-payments, and foreclosure amount."
-              icon={ReceiptText}
-            >
+            {selectedLoanTab === "repayment" &&
+              ["approved", "disbursed", "closed"].includes(selectedLoan.status) && (
+              <SectionCard
+                title="Repayment Management"
+                subtitle="Track live loan balance, penalties, part-payments, and foreclosure amount."
+                icon={ReceiptText}
+              >
               <div className="metric-grid">
                 <MetricTile
                   label="Outstanding Principal"
@@ -1805,22 +1906,17 @@ const Loans = () => {
                   </tbody>
                 </table>
               </div>
-            </SectionCard>
+              </SectionCard>
+            )}
 
-            <SectionCard
-              title="Amortization Schedule"
-              subtitle={
-                ["approved", "disbursed", "closed"].includes(selectedLoan.status)
-                  ? "Repayment schedule for the approved loan."
-                  : "Estimated schedule shown for review before manager approval."
-              }
-              icon={CalendarClock}
-            >
-              {!["approved", "disbursed", "closed"].includes(selectedLoan.status) && (
-                <div className="mb-4 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                  This schedule is provisional. EMI dates and repayment tracking start after manager approval and disbursal.
-                </div>
-              )}
+            {selectedLoanTab === "schedule" &&
+              ["approved", "disbursed", "closed"].includes(selectedLoan.status) &&
+              (selectedLoan.amortizationSchedule || []).length > 0 && (
+                <SectionCard
+                  title="Amortization Schedule"
+                  subtitle="Repayment schedule for the approved loan."
+                  icon={CalendarClock}
+                >
               {selectedLoan.status === "disbursed" && selectedLoanNextPendingEmi && (
                 <div className="mb-4 flex flex-col gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -1862,7 +1958,7 @@ const Loans = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {(selectedLoan.amortizationSchedule || []).map((row) => (
+                    {amortizationPagination.pageRows.map((row) => (
                       <tr key={row.emiNumber} className="table-row">
                         <td className="px-4 py-3 font-bold">{row.emiNumber}</td>
                         <td className="px-4 py-3">{row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "Not set"}</td>
@@ -1879,8 +1975,16 @@ const Loans = () => {
                     ))}
                   </tbody>
                 </table>
+                <TablePagination
+                  page={amortizationPagination.page}
+                  pageSize={amortizationPagination.pageSize}
+                  setPage={amortizationPagination.setPage}
+                  totalItems={amortizationPagination.totalItems}
+                  totalPages={amortizationPagination.totalPages}
+                />
               </div>
-            </SectionCard>
+                </SectionCard>
+              )}
           </section>
         )}
       </PageContent>

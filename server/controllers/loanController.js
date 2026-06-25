@@ -26,6 +26,7 @@ const {
 } = require('../utils/bankSettlementAccount');
 
 const toNumber = (value) => Number(value || 0);
+const normalizeIdempotencyKey = (value) => String(value || '').trim().slice(0, 128);
 const pdfMoney = (value) => `INR ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
 const money = (value) => `₹ ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
 const MISSED_EMI_FIXED_PENALTY = 500;
@@ -189,6 +190,35 @@ const appendRepaymentHistory = (loan, entry) => {
       paidAt: entry.paidAt || new Date(),
     },
   ];
+};
+
+const findIdempotentTransaction = (actorId, idempotencyKey, session) => {
+  if (!idempotencyKey) return null;
+
+  return Transaction.findOne({
+    sender: actorId,
+    idempotencyKey,
+  }).session(session);
+};
+
+const sendDuplicateLoanActionResponse = async ({
+  res,
+  loanId,
+  transaction,
+  message = 'Loan action already processed.',
+}) => {
+  const responseLoan = await Loan.findOne({ loanId })
+    .populate('customer', 'name customerId email classification accounts account')
+    .populate('reviewedBy', 'name');
+
+  return res.status(200).json({
+    message,
+    duplicate: true,
+    loan: responseLoan
+      ? await serializeLoanWithActiveLoanCount(responseLoan)
+      : null,
+    transaction,
+  });
 };
 
 const sendLoanEmail = async ({ customer, subject, text, html }) => {
@@ -1450,8 +1480,17 @@ const createLoan = async (req, res) => {
     });
   }
 
+  if (loanType === 'education' && employmentType !== 'student') {
+    return res.status(400).json({
+      message: 'Education loans are available only under the student category',
+    });
+  }
+
+  const isStudentEducationLoan = loanType === 'education' && employmentType === 'student';
+  const incomeLabel = isStudentEducationLoan ? 'Co-applicant monthly income' : 'Monthly income';
+
   if (monthlyIncome <= 0) {
-    return res.status(400).json({ message: 'Monthly income is required' });
+    return res.status(400).json({ message: `${incomeLabel} is required` });
   }
 
   if (existingMonthlyLiabilities < 0) {
@@ -1517,6 +1556,24 @@ const createLoan = async (req, res) => {
     !['Confirmed', 'Provisional', 'Awaiting Result'].includes(supportingDetails.admissionStatus)
   ) {
     return res.status(400).json({ message: 'Select a valid admission status' });
+  }
+
+  if (loanType === 'education') {
+    const requiredEducationDetails = [
+      ['instituteName', 'Institute name'],
+      ['courseName', 'Course name'],
+      ['admissionStatus', 'Admission status'],
+      ['academicYear', 'Academic year'],
+    ];
+    const missingEducationDetail = requiredEducationDetails.find(
+      ([key]) => !String(supportingDetails[key] || '').trim()
+    );
+
+    if (missingEducationDetail) {
+      return res.status(400).json({
+        message: `${missingEducationDetail[1]} is required for education loans`,
+      });
+    }
   }
 
   const emiAmount = calculateEmi({
@@ -1823,6 +1880,7 @@ const attemptLoanEmiDeduction = async ({
   paymentType = 'emi',
   markMissedOnFailure = false,
   now = new Date(),
+  idempotencyKey = '',
   session,
 }) => {
   const emiRow = emiNumber
@@ -2033,21 +2091,22 @@ const attemptLoanEmiDeduction = async ({
 
   const [transaction] = await Transaction.create(
     [
-      {
-        transactionId: `LNEMI${Date.now()}`,
-        sender: customer._id,
+        {
+          transactionId: `LNEMI${Date.now()}`,
+          sender: customer._id,
         senderName: customer.name,
         receiverName: SETTLEMENT_ACCOUNT_NAME,
         receiverType: 'bank',
         fromAccountNumber: paymentAccount.accountNumber,
         toAccountNumber: loan.loanId,
         amount: amountDue,
-        remarks: `EMI ${emiRow.emiNumber} payment for loan ${loan.loanId}`,
-        status: 'success',
-        type: 'loan-emi-payment',
-        ...getLoanTransactionMeta({
-          loan,
-          title: `Loan EMI payment for loan ${loan.loanId}`,
+          remarks: `EMI ${emiRow.emiNumber} payment for loan ${loan.loanId}`,
+          status: 'success',
+          type: 'loan-emi-payment',
+          idempotencyKey,
+          ...getLoanTransactionMeta({
+            loan,
+            title: `Loan EMI payment for loan ${loan.loanId}`,
           subtitle: `EMI ${emiRow.emiNumber}: principal ${money(principalPaid)}, interest ${money(interestPaid)}`,
         }),
       },
@@ -2064,6 +2123,7 @@ const attemptLoanEmiDeduction = async ({
     penaltyPaid,
     status: 'success',
     transactionId: transaction.transactionId,
+    idempotencyKey,
     accountNumber: paymentAccount.accountNumber,
     remarks: `EMI ${emiRow.emiNumber} paid successfully.`,
   });
@@ -2107,6 +2167,7 @@ const attemptLoanEmiDeduction = async ({
 };
 
 const disburseLoan = async (req, res) => {
+  const idempotencyKey = normalizeIdempotencyKey(req.body.idempotencyKey);
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -2114,6 +2175,18 @@ const disburseLoan = async (req, res) => {
     const loan = await Loan.findOne({ loanId: req.params.id }).session(session);
 
     if (!loan) throw new Error('Loan application not found');
+    const existingTransaction = await findIdempotentTransaction(req.user._id, idempotencyKey, session);
+
+    if (existingTransaction) {
+      await session.commitTransaction();
+      return sendDuplicateLoanActionResponse({
+        res,
+        loanId: loan.loanId,
+        transaction: existingTransaction,
+        message: 'Loan disbursal already processed.',
+      });
+    }
+
     if (loan.status !== 'approved') throw new Error('Only approved loans can be disbursed');
     if (!loan.sanctionLetter?.fileUrl) {
       throw new Error('Sanction letter must be generated before disbursal');
@@ -2185,6 +2258,7 @@ const disburseLoan = async (req, res) => {
       [
         {
           transactionId: `LNDISB${Date.now()}`,
+          sender: req.user._id,
           receiver: customer._id,
           senderType: 'bank',
           senderName: SETTLEMENT_ACCOUNT_NAME,
@@ -2195,6 +2269,7 @@ const disburseLoan = async (req, res) => {
           remarks: `Loan ${loan.loanId} disbursed to customer account`,
           status: 'success',
           type: 'loan-disbursement',
+          idempotencyKey,
           ...getLoanTransactionMeta({
             loan,
             title: `Loan disbursement for loan ${loan.loanId}`,
@@ -2278,6 +2353,22 @@ const disburseLoan = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+    if (error.code === 11000 && idempotencyKey) {
+      const existingTransaction = await Transaction.findOne({
+        sender: req.user._id,
+        idempotencyKey,
+      });
+
+      if (existingTransaction) {
+        return sendDuplicateLoanActionResponse({
+          res,
+          loanId: req.params.id,
+          transaction: existingTransaction,
+          message: 'Loan disbursal already processed.',
+        });
+      }
+    }
+
     res.status(400).json({ message: error.message });
   } finally {
     session.endSession();
@@ -2287,6 +2378,7 @@ const disburseLoan = async (req, res) => {
 const payLoanEmi = async (req, res) => {
   const emiNumber = Math.round(toNumber(req.params.emiNumber));
   const paymentAccountNumber = String(req.body.paymentAccountNumber || '').trim();
+  const idempotencyKey = normalizeIdempotencyKey(req.body.idempotencyKey);
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -2297,6 +2389,18 @@ const payLoanEmi = async (req, res) => {
     if (String(loan.customer) !== String(req.user._id)) {
       throw new Error('You can pay EMI only for your own loan');
     }
+    const existingTransaction = await findIdempotentTransaction(req.user._id, idempotencyKey, session);
+
+    if (existingTransaction) {
+      await session.commitTransaction();
+      return sendDuplicateLoanActionResponse({
+        res,
+        loanId: loan.loanId,
+        transaction: existingTransaction,
+        message: `EMI ${emiNumber} already processed.`,
+      });
+    }
+
     if (loan.status !== 'disbursed') {
       throw new Error('EMI payment is available only after loan disbursal');
     }
@@ -2329,6 +2433,7 @@ const payLoanEmi = async (req, res) => {
       paymentAccount,
       emiNumber,
       paymentType: 'emi',
+      idempotencyKey,
       session,
     });
 
@@ -2348,6 +2453,22 @@ const payLoanEmi = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+    if (error.code === 11000 && idempotencyKey) {
+      const existingTransaction = await Transaction.findOne({
+        sender: req.user._id,
+        idempotencyKey,
+      });
+
+      if (existingTransaction) {
+        return sendDuplicateLoanActionResponse({
+          res,
+          loanId: req.params.id,
+          transaction: existingTransaction,
+          message: `EMI ${emiNumber} already processed.`,
+        });
+      }
+    }
+
     res.status(400).json({ message: error.message });
   } finally {
     session.endSession();
@@ -2576,6 +2697,7 @@ const processMonthlyRepayments = async (req, res) => {
 
 const forecloseLoan = async (req, res) => {
   const paymentAccountNumber = String(req.body.paymentAccountNumber || '').trim();
+  const idempotencyKey = normalizeIdempotencyKey(req.body.idempotencyKey);
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -2586,6 +2708,18 @@ const forecloseLoan = async (req, res) => {
     if (String(loan.customer) !== String(req.user._id)) {
       throw new Error('You can foreclose only your own loan');
     }
+    const existingTransaction = await findIdempotentTransaction(req.user._id, idempotencyKey, session);
+
+    if (existingTransaction) {
+      await session.commitTransaction();
+      return sendDuplicateLoanActionResponse({
+        res,
+        loanId: loan.loanId,
+        transaction: existingTransaction,
+        message: 'Loan foreclosure already processed.',
+      });
+    }
+
     if (loan.status !== 'disbursed') {
       throw new Error('Foreclosure is available only after loan disbursal');
     }
@@ -2631,6 +2765,7 @@ const forecloseLoan = async (req, res) => {
           remarks: `Foreclosure payment for loan ${loan.loanId}`,
           status: 'success',
           type: 'loan-foreclosure',
+          idempotencyKey,
           ...getLoanTransactionMeta({
             loan,
             title: `Loan foreclosure for loan ${loan.loanId}`,
@@ -2660,6 +2795,7 @@ const forecloseLoan = async (req, res) => {
       foreclosureFeePaid: quote.foreclosureFee,
       status: 'success',
       transactionId: transaction.transactionId,
+      idempotencyKey,
       accountNumber: paymentAccount.accountNumber,
       remarks: 'Loan foreclosed by customer.',
     });
@@ -2706,6 +2842,22 @@ const forecloseLoan = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+    if (error.code === 11000 && idempotencyKey) {
+      const existingTransaction = await Transaction.findOne({
+        sender: req.user._id,
+        idempotencyKey,
+      });
+
+      if (existingTransaction) {
+        return sendDuplicateLoanActionResponse({
+          res,
+          loanId: req.params.id,
+          transaction: existingTransaction,
+          message: 'Loan foreclosure already processed.',
+        });
+      }
+    }
+
     res.status(400).json({ message: error.message });
   } finally {
     session.endSession();
@@ -2715,6 +2867,7 @@ const forecloseLoan = async (req, res) => {
 const makePartPayment = async (req, res) => {
   const paymentAccountNumber = String(req.body.paymentAccountNumber || '').trim();
   const amount = Math.round(toNumber(req.body.amount));
+  const idempotencyKey = normalizeIdempotencyKey(req.body.idempotencyKey);
   const repaymentImpact = ['reduce_emi', 'reduce_tenure'].includes(req.body.repaymentImpact)
     ? req.body.repaymentImpact
     : 'reduce_emi';
@@ -2728,6 +2881,18 @@ const makePartPayment = async (req, res) => {
     if (String(loan.customer) !== String(req.user._id)) {
       throw new Error('You can make part-payments only for your own loan');
     }
+    const existingTransaction = await findIdempotentTransaction(req.user._id, idempotencyKey, session);
+
+    if (existingTransaction) {
+      await session.commitTransaction();
+      return sendDuplicateLoanActionResponse({
+        res,
+        loanId: loan.loanId,
+        transaction: existingTransaction,
+        message: 'Loan part-payment already processed.',
+      });
+    }
+
     if (loan.status !== 'disbursed') {
       throw new Error('Part-payment is available only after loan disbursal');
     }
@@ -2808,6 +2973,7 @@ const makePartPayment = async (req, res) => {
           remarks: `Part-payment for loan ${loan.loanId}; principal ${money(amount)}; charge ${money(partPaymentCharge)}`,
           status: 'success',
           type: 'loan-part-payment',
+          idempotencyKey,
           ...getLoanTransactionMeta({
             loan,
             title: `Loan part-payment for loan ${loan.loanId}`,
@@ -2883,6 +3049,7 @@ const makePartPayment = async (req, res) => {
       principalPaid: amount,
       status: 'success',
       transactionId: transaction.transactionId,
+      idempotencyKey,
       accountNumber: paymentAccount.accountNumber,
       repaymentImpact,
       previousEmiAmount,
@@ -2974,6 +3141,22 @@ const makePartPayment = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+    if (error.code === 11000 && idempotencyKey) {
+      const existingTransaction = await Transaction.findOne({
+        sender: req.user._id,
+        idempotencyKey,
+      });
+
+      if (existingTransaction) {
+        return sendDuplicateLoanActionResponse({
+          res,
+          loanId: req.params.id,
+          transaction: existingTransaction,
+          message: 'Loan part-payment already processed.',
+        });
+      }
+    }
+
     res.status(400).json({ message: error.message });
   } finally {
     session.endSession();

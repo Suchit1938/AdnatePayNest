@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, Users, Wallet } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeftRight, Wallet } from "lucide-react";
 import api from "../../api/axios";
 import StatsCard from "../../components/dashboard/StatsCard";
 import PageContent from "../../components/ui/PageContent";
@@ -9,6 +9,14 @@ import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { BANK_NAME, formatCurrency, maskAccountNumber } from "../../data/mockData";
 import { useAuth } from "../../context/useAuth";
+
+const createTransferIdempotencyKey = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
 const TransferFunds = () => {
   const toast = useToast();
@@ -35,8 +43,14 @@ const TransferFunds = () => {
     amount: "",
     remarks: "",
   });
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [isOwnTransferring, setIsOwnTransferring] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const transferLocks = useRef({
+    beneficiary: false,
+    own: false,
+  });
   const firstAccountNumber = userAccounts[0]?.accountNumber || "";
 
   useEffect(() => {
@@ -149,6 +163,8 @@ const TransferFunds = () => {
 
   const submitTransfer = async (event) => {
     event.preventDefault();
+    if (transferLocks.current.beneficiary) return;
+
     setMessage("");
     setError("");
 
@@ -163,7 +179,12 @@ const TransferFunds = () => {
     }
 
     try {
-      const { data } = await api.post("/transfers", effectiveFormData);
+      transferLocks.current.beneficiary = true;
+      setIsTransferring(true);
+      const { data } = await api.post("/transfers", {
+        ...effectiveFormData,
+        idempotencyKey: createTransferIdempotencyKey(),
+      });
       const isPendingApproval = data.transaction?.status === "pending" || data.approval;
 
       const successMessage = isPendingApproval
@@ -186,11 +207,16 @@ const TransferFunds = () => {
       const errorMessage = transferError.response?.data?.message || "Transfer failed.";
       setError(errorMessage);
       toast.error(errorMessage);
+    } finally {
+      transferLocks.current.beneficiary = false;
+      setIsTransferring(false);
     }
   };
 
   const submitOwnTransfer = async (event) => {
     event.preventDefault();
+    if (transferLocks.current.own) return;
+
     setMessage("");
     setError("");
 
@@ -234,7 +260,12 @@ const TransferFunds = () => {
     }
 
     try {
-      const { data } = await api.post("/transfers/own-account", effectiveOwnFormData);
+      transferLocks.current.own = true;
+      setIsOwnTransferring(true);
+      const { data } = await api.post("/transfers/own-account", {
+        ...effectiveOwnFormData,
+        idempotencyKey: createTransferIdempotencyKey(),
+      });
 
       const successMessage = `${formatCurrency(ownFormData.amount)} moved from ${selectedOwnFromAccount?.accountType || "account"} to ${selectedOwnToAccount?.accountType || "account"}.`;
       setMessage(successMessage);
@@ -253,6 +284,9 @@ const TransferFunds = () => {
         transferError.response?.data?.message || "Own account transfer failed.";
       setError(errorMessage);
       toast.error(errorMessage);
+    } finally {
+      transferLocks.current.own = false;
+      setIsOwnTransferring(false);
     }
   };
 
@@ -460,9 +494,9 @@ const TransferFunds = () => {
             <button
               type="submit"
               className="btn-primary w-full lg:col-span-2 lg:w-fit"
-              disabled={beneficiaries.length === 0}
+              disabled={beneficiaries.length === 0 || isTransferring}
             >
-              Send Transfer Request
+              {isTransferring ? "Processing..." : "Send Transfer Request"}
             </button>
           </form>
           ) : (
@@ -565,9 +599,9 @@ const TransferFunds = () => {
               <button
                 type="submit"
                 className="btn-primary w-full lg:col-span-2 lg:w-fit"
-                disabled={userAccounts.length < 2}
+                disabled={userAccounts.length < 2 || isOwnTransferring}
               >
-                Transfer Between Own Accounts
+                {isOwnTransferring ? "Processing..." : "Transfer Between Own Accounts"}
               </button>
             </form>
           )}

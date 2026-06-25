@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Calculator,
   CalendarClock,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   RotateCcw,
   Search,
   Wallet,
+  X,
 } from "lucide-react";
 
 import api from "../../api/axios";
@@ -41,6 +43,7 @@ const rdTenureOptions = [
 ];
 
 const installmentOptions = ["500", "1000", "5000"];
+const PREMATURE_WITHDRAWAL_PENALTY_RATE = 0.01;
 
 const statusStyles = {
   active: "bg-emerald-50 text-emerald-700",
@@ -110,6 +113,24 @@ const PreviewMetric = ({ label, value, tone = "default" }) => {
   );
 };
 
+const buildRdWithdrawalPreview = (rd) => {
+  const accumulatedAmount = Number(
+    rd.accumulatedValue ||
+      Number(rd.monthlyInstallmentAmount || 0) * Number(rd.installmentsPaid || 0)
+  );
+  const prematurePenalty = Math.round(accumulatedAmount * PREMATURE_WITHDRAWAL_PENALTY_RATE);
+  const accruedPenalty = Number(rd.penaltyAccrued || 0);
+
+  return {
+    rd,
+    accumulatedAmount,
+    prematurePenalty,
+    accruedPenalty,
+    totalPenalty: prematurePenalty + accruedPenalty,
+    payoutAmount: Math.max(0, accumulatedAmount - prematurePenalty - accruedPenalty),
+  };
+};
+
 const RecurringDeposits = () => {
   const { user } = useAuth();
   const toast = useToast();
@@ -121,6 +142,7 @@ const RecurringDeposits = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [workingId, setWorkingId] = useState("");
   const [calculatedPreview, setCalculatedPreview] = useState(null);
+  const [withdrawalPreview, setWithdrawalPreview] = useState(null);
 
   const customerAccounts = getCustomerAccounts(user);
   const defaultAccountNumber = customerAccounts[0]?.accountNumber || "";
@@ -248,6 +270,9 @@ const RecurringDeposits = () => {
       const { data } = await api.post(`/recurring-deposits/${rd.id}/${path}`);
       toast.success(data.message || successMessage);
       await loadRecurringDeposits();
+      if (path === "premature-withdrawal") {
+        setWithdrawalPreview(null);
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || successMessage || "Unable to update RD.");
     } finally {
@@ -562,7 +587,7 @@ const RecurringDeposits = () => {
                                 <button
                                   type="button"
                                   disabled={workingId === `${rd.id}:premature-withdrawal`}
-                                  onClick={() => runRdAction(rd, "premature-withdrawal", "RD withdrawn")}
+                                  onClick={() => setWithdrawalPreview(buildRdWithdrawalPreview(rd))}
                                   className="btn-danger-soft px-3 py-2 text-xs"
                                 >
                                   <RotateCcw size={14} />
@@ -609,6 +634,93 @@ const RecurringDeposits = () => {
             <TablePagination {...pagination} />
           </SectionCard>
         </section>
+
+        {withdrawalPreview && (
+          <div className="fixed inset-0 z-50 flex items-stretch justify-center overflow-y-auto bg-slate-950/50 p-3 sm:items-center sm:p-4">
+            <div className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-amber-200 bg-white shadow-2xl sm:max-h-[calc(100vh-2rem)]">
+              <div className="shrink-0 border-b border-amber-100 bg-amber-50 px-4 py-4 sm:px-5">
+                <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 gap-3">
+                  <div className="rounded-lg bg-amber-100 p-2 text-amber-700">
+                    <AlertTriangle size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-extrabold text-slate-950">Premature RD Withdrawal</h3>
+                    <p className="mt-1 text-sm font-semibold text-amber-800">
+                      Penalties will be deducted before the accumulated value is paid out.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWithdrawalPreview(null)}
+                  className="rounded-lg p-2 text-slate-500 transition hover:bg-white hover:text-slate-800"
+                  aria-label="Close withdrawal warning"
+                >
+                  <X size={18} />
+                </button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+                <div className="rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">
+                    {withdrawalPreview.rd.rdNumber}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-700">
+                    {withdrawalPreview.rd.installmentsPaid || 0}/{withdrawalPreview.rd.tenureMonths} installments paid.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <PreviewMetric
+                    label="Accumulated Value"
+                    value={formatCurrency(withdrawalPreview.accumulatedAmount)}
+                    tone="info"
+                  />
+                  <PreviewMetric
+                    label="Premature Penalty"
+                    value={`- ${formatCurrency(withdrawalPreview.prematurePenalty)}`}
+                  />
+                  <PreviewMetric
+                    label="Existing Penalties"
+                    value={`- ${formatCurrency(withdrawalPreview.accruedPenalty)}`}
+                  />
+                  <PreviewMetric
+                    label="Estimated Payout"
+                    value={formatCurrency(withdrawalPreview.payoutAmount)}
+                    tone="success"
+                  />
+                </div>
+
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                  This will close the RD immediately. Missed-installment penalties and premature withdrawal penalty are deducted from the payout.
+                </p>
+              </div>
+
+              <div className="shrink-0 border-t border-bank-card-border bg-white p-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setWithdrawalPreview(null)}
+                    className="btn-secondary justify-center"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={workingId === `${withdrawalPreview.rd.id}:premature-withdrawal`}
+                    onClick={() => runRdAction(withdrawalPreview.rd, "premature-withdrawal", "RD withdrawn")}
+                    className="btn-danger-soft justify-center"
+                  >
+                    <AlertTriangle size={18} />
+                    Confirm Withdrawal
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </PageContent>
     </DashboardLayout>
   );

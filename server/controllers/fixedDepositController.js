@@ -122,6 +122,37 @@ const getApplicableDepositRate = (rateCards, productType, tenureMonths) =>
       tenureMonths <= rule.maxTenureMonths
   );
 
+const getHeldPeriodFdRate = (rateCards, heldMonths) =>
+  normalizeDepositRateCards(rateCards)
+    .filter((rule) => rule.productType === 'fd' && heldMonths >= rule.minTenureMonths)
+    .sort((left, right) => right.minTenureMonths - left.minTenureMonths)[0] || null;
+
+const calculatePrematureFdWithdrawal = (fixedDeposit, rateCards) => {
+  const elapsedMonths = Math.max(
+    1,
+    Math.floor((Date.now() - new Date(fixedDeposit.startDate).getTime()) / (30 * 24 * 60 * 60 * 1000))
+  );
+  const heldMonths = Math.min(elapsedMonths, toNumber(fixedDeposit.tenureMonths));
+  const heldPeriodRate = getHeldPeriodFdRate(rateCards, heldMonths);
+  const applicableRate = heldPeriodRate?.annualInterestRate || 0;
+  const penaltyRate = PREMATURE_WITHDRAWAL_PENALTY_RATE * 100;
+  const elapsedYears = heldMonths / 12;
+  const principal = toNumber(fixedDeposit.depositAmount);
+  const valueBeforePenalty = Math.round(principal * (1 + (applicableRate / 100) * elapsedYears));
+  const penaltyAmount = Math.round(principal * PREMATURE_WITHDRAWAL_PENALTY_RATE);
+  const payoutAmount = Math.max(0, valueBeforePenalty - penaltyAmount);
+
+  return {
+    elapsedMonths,
+    heldMonths,
+    applicableRate,
+    penaltyRate,
+    valueBeforePenalty,
+    penaltyAmount,
+    payoutAmount,
+  };
+};
+
 const addMonths = (value, months) => {
   const date = new Date(value);
   date.setMonth(date.getMonth() + Number(months || 0));
@@ -457,6 +488,7 @@ const requestPrematureWithdrawal = async (req, res) => {
 
   try {
     let responsePayload;
+    const rateConfig = await getDepositRuleConfig();
 
     await session.withTransaction(async () => {
       const [fixedDeposit, customer] = await Promise.all([
@@ -476,19 +508,12 @@ const requestPrematureWithdrawal = async (req, res) => {
 
       if (!paymentAccount) throw new Error('Linked account not found');
 
-      const elapsedMonths = Math.max(
-        1,
-        Math.floor((Date.now() - new Date(fixedDeposit.startDate).getTime()) / (30 * 24 * 60 * 60 * 1000))
+      const withdrawal = calculatePrematureFdWithdrawal(
+        fixedDeposit,
+        rateConfig.depositRules?.rateCards
       );
-      const elapsedYears = Math.min(elapsedMonths, fixedDeposit.tenureMonths) / 12;
-      const revisedRate = Math.max(0, toNumber(fixedDeposit.interestRate) - 1);
-      const revisedValue = Math.round(
-        toNumber(fixedDeposit.depositAmount) * (1 + (revisedRate / 100) * elapsedYears)
-      );
-      const penaltyAmount = Math.round(toNumber(fixedDeposit.depositAmount) * PREMATURE_WITHDRAWAL_PENALTY_RATE);
-      const payoutAmount = Math.max(0, revisedValue - penaltyAmount);
 
-      paymentAccount.walletBalance = toWholeRupees(paymentAccount.walletBalance) + payoutAmount;
+      paymentAccount.walletBalance = toWholeRupees(paymentAccount.walletBalance) + withdrawal.payoutAmount;
       paymentAccount.availableBalance = paymentAccount.walletBalance;
       await paymentAccount.save({ session });
 
@@ -506,7 +531,7 @@ const requestPrematureWithdrawal = async (req, res) => {
             receiverName: customer.name,
             fromAccountNumber: fixedDeposit.fdNumber,
             toAccountNumber: paymentAccount.accountNumber,
-            amount: payoutAmount,
+            amount: withdrawal.payoutAmount,
             remarks: `FD premature withdrawal ${fixedDeposit.fdNumber}`,
             status: 'success',
             type: 'fd-premature-withdrawal',
@@ -514,7 +539,7 @@ const requestPrematureWithdrawal = async (req, res) => {
             businessRefType: 'FixedDeposit',
             businessRefId: fixedDeposit.fdNumber,
             displayTitle: `FD withdrawal ${fixedDeposit.fdNumber}`,
-            displaySubtitle: `Penalty ${penaltyAmount}`,
+            displaySubtitle: `Fixed premature penalty ${withdrawal.penaltyRate}%`,
           },
         ],
         { session }
@@ -527,20 +552,12 @@ const requestPrematureWithdrawal = async (req, res) => {
         'fd.premature_withdrawal.customer',
         `Premature withdrawal completed for FD ${fixedDeposit.fdNumber}.`,
         'warning',
-        {
-          revisedRate,
-          revisedValue,
-          penaltyAmount,
-          payoutAmount,
-        }
+        withdrawal
       );
 
       responsePayload = {
         message: 'FD premature withdrawal completed',
-        revisedRate,
-        revisedValue,
-        penaltyAmount,
-        payoutAmount,
+        ...withdrawal,
         fixedDeposit: serializeFixedDeposit(fixedDeposit),
       };
     });

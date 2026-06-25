@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Banknote,
   Calculator,
   CalendarClock,
@@ -9,6 +10,7 @@ import {
   PiggyBank,
   Plus,
   Search,
+  X,
 } from "lucide-react";
 
 import api from "../api/axios";
@@ -41,6 +43,8 @@ const fdTenureOptions = [
   { label: "2 Years", value: "24" },
   { label: "5 Years", value: "60" },
 ];
+
+const PREMATURE_WITHDRAWAL_PENALTY_RATE = 0.01;
 
 const depositRateTemplates = [
   { productType: "fd", label: "FD 1 Year", minTenureMonths: 12, maxTenureMonths: 12, annualInterestRate: 7, minAmount: 1000 },
@@ -133,6 +137,39 @@ const PreviewMetric = ({ label, value, tone = "default" }) => {
   );
 };
 
+const getHeldPeriodFdRate = (rateCards, heldMonths) =>
+  normalizeAllowedRateCards(rateCards)
+    .filter((rule) => rule.productType === "fd" && heldMonths >= Number(rule.minTenureMonths || 0))
+    .sort((left, right) => Number(right.minTenureMonths || 0) - Number(left.minTenureMonths || 0))[0] || null;
+
+const buildFdWithdrawalPreview = (fd, rateCards) => {
+  const depositAmount = Number(fd.depositAmount || 0);
+  const tenureMonths = Number(fd.tenureMonths || 0);
+  const startDate = new Date(fd.startDate || new Date());
+  const elapsedMonths = Math.max(
+    1,
+    Math.floor((Date.now() - startDate.getTime()) / (30 * 24 * 60 * 60 * 1000))
+  );
+  const heldMonths = Math.min(elapsedMonths, tenureMonths || elapsedMonths);
+  const heldRate = getHeldPeriodFdRate(rateCards, heldMonths);
+  const applicableRate = Number(heldRate?.annualInterestRate || 0);
+  const penaltyRate = PREMATURE_WITHDRAWAL_PENALTY_RATE * 100;
+  const elapsedYears = heldMonths / 12;
+  const valueBeforePenalty = Math.round(depositAmount * (1 + (applicableRate / 100) * elapsedYears));
+  const penaltyAmount = Math.round(depositAmount * PREMATURE_WITHDRAWAL_PENALTY_RATE);
+
+  return {
+    fd,
+    elapsedMonths,
+    heldMonths,
+    applicableRate,
+    penaltyRate,
+    valueBeforePenalty,
+    penaltyAmount,
+    payoutAmount: Math.max(0, valueBeforePenalty - penaltyAmount),
+  };
+};
+
 const FixedDeposits = ({ adminMode = false }) => {
   const toast = useToast();
   const { user } = useAuth();
@@ -144,6 +181,7 @@ const FixedDeposits = ({ adminMode = false }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [updatingId, setUpdatingId] = useState("");
   const [calculatedPreview, setCalculatedPreview] = useState(null);
+  const [withdrawalPreview, setWithdrawalPreview] = useState(null);
   const customerAccounts = user?.accounts?.length
     ? user.accounts
     : [user?.account].filter(Boolean);
@@ -264,6 +302,9 @@ const FixedDeposits = ({ adminMode = false }) => {
       await api.post(`/fixed-deposits/${fd.id}/${action}`);
       toast.success(successMessage);
       await loadFixedDeposits();
+      if (action === "premature-withdrawal") {
+        setWithdrawalPreview(null);
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to update FD.");
     } finally {
@@ -602,7 +643,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                               <button
                                 type="button"
                                 disabled={updatingId === `${fd.id}:premature-withdrawal`}
-                                onClick={() => runFdAction(fd, "premature-withdrawal", "FD withdrawn")}
+                                onClick={() => setWithdrawalPreview(buildFdWithdrawalPreview(fd, rateCards))}
                                 className="rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-50 disabled:opacity-60"
                               >
                                 Withdraw
@@ -650,6 +691,86 @@ const FixedDeposits = ({ adminMode = false }) => {
           </SectionCard>
         </section>
 
+        {withdrawalPreview && (
+          <div className="fixed inset-0 z-50 flex items-stretch justify-center overflow-y-auto bg-slate-950/50 p-3 sm:items-center sm:p-4">
+            <div className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-amber-200 bg-white shadow-2xl sm:max-h-[calc(100vh-2rem)]">
+              <div className="shrink-0 border-b border-amber-100 bg-amber-50 px-4 py-4 sm:px-5">
+                <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 gap-3">
+                  <div className="rounded-lg bg-amber-100 p-2 text-amber-700">
+                    <AlertTriangle size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-extrabold text-slate-950">Premature FD Withdrawal</h3>
+                    <p className="mt-1 text-sm font-semibold text-amber-800">
+                      Interest is recalculated for the held period, then a fixed 1% penalty is deducted.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWithdrawalPreview(null)}
+                  className="rounded-lg p-2 text-slate-500 transition hover:bg-white hover:text-slate-800"
+                  aria-label="Close withdrawal warning"
+                >
+                  <X size={18} />
+                </button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+                <div className="rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">
+                    {withdrawalPreview.fd.fdNumber}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-700">
+                    Original {withdrawalPreview.fd.tenureMonths / 12}-year FD rate was {withdrawalPreview.fd.interestRate}% p.a.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <PreviewMetric label="Held Period" value={`${withdrawalPreview.heldMonths} months`} />
+                  <PreviewMetric label="Held-Period Rate" value={`${withdrawalPreview.applicableRate}% p.a.`} tone="info" />
+                  <PreviewMetric label="Fixed Penalty Rate" value={`${withdrawalPreview.penaltyRate}% of deposit`} />
+                  <PreviewMetric label="Value Before Penalty" value={formatCurrency(withdrawalPreview.valueBeforePenalty)} />
+                  <PreviewMetric label="Penalty Deduction" value={`- ${formatCurrency(withdrawalPreview.penaltyAmount)}`} />
+                  <PreviewMetric label="Estimated Payout" value={formatCurrency(withdrawalPreview.payoutAmount)} tone="success" />
+                </div>
+
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                  This will close the FD immediately. The original full-tenure rate will not apply because the deposit is being withdrawn before maturity.
+                </p>
+
+                {withdrawalPreview.applicableRate === 0 && (
+                  <p className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                    No FD interest slab applies yet because this deposit has been held for less than 12 months. The fixed 1% premature withdrawal penalty still applies.
+                  </p>
+                )}
+              </div>
+
+              <div className="shrink-0 border-t border-bank-card-border bg-white p-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setWithdrawalPreview(null)}
+                  className="btn-secondary justify-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={updatingId === `${withdrawalPreview.fd.id}:premature-withdrawal`}
+                  onClick={() => runFdAction(withdrawalPreview.fd, "premature-withdrawal", "FD withdrawn")}
+                  className="btn-danger-soft justify-center"
+                >
+                  <AlertTriangle size={18} />
+                  Confirm Withdrawal
+                </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </PageContent>
     </DashboardLayout>
   );
