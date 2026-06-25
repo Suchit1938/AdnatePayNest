@@ -56,6 +56,7 @@ const navItemsByRole = {
   manager: [
     { label: "Manager Overview", path: "/manager", icon: LayoutDashboard },
     { label: "Pending Reviews", path: "/manager/approvals", icon: ListChecks },
+    { label: "Deposit Approvals", path: "/manager/deposit-approvals", icon: PiggyBank },
     { label: "Loan Reviews", path: "/manager/loans", icon: BadgeIndianRupee },
     { label: "Loan Portfolio", path: "/manager/loan-portfolio", icon: FileBarChart },
     { label: "Decision History", path: "/manager/approval-history", icon: ClipboardCheck },
@@ -162,8 +163,8 @@ const Sidebar = () => {
         </button>
       </div>
     </aside>
-    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-bank-card-border bg-white/95 px-2 py-2 shadow-2xl shadow-slate-900/15 backdrop-blur lg:hidden">
-      <div className="app-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
+    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-bank-card-border bg-white/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-slate-900/15 backdrop-blur lg:hidden">
+      <div className="app-scrollbar flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1">
         {navItems.map(({ label, path, icon: Icon }) => (
           <NavLink
             key={label}
@@ -171,7 +172,7 @@ const Sidebar = () => {
             end={navEndPaths.has(path)}
             className={({ isActive }) =>
               [
-                "flex min-w-[76px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-2 py-2 text-[11px] font-bold transition-colors",
+                "flex min-w-[72px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-2 py-2 text-[10px] font-bold transition-colors min-[380px]:min-w-[76px] min-[380px]:text-[11px]",
                 isActive
                   ? "bg-bank-accent text-white shadow-sm"
                   : "text-slate-600 hover:bg-bank-surface hover:text-bank-eyebrow",
@@ -185,7 +186,7 @@ const Sidebar = () => {
         <button
           type="button"
           onClick={handleLogout}
-          className="flex min-w-[76px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-2 py-2 text-[11px] font-bold text-red-600 hover:bg-red-50"
+          className="flex min-w-[72px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-2 py-2 text-[10px] font-bold text-red-600 hover:bg-red-50 min-[380px]:min-w-[76px] min-[380px]:text-[11px]"
         >
           <LogOut size={18} />
           <span>Logout</span>

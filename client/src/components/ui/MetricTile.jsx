@@ -7,11 +7,11 @@ const toneStyles = {
 };
 
 const MetricTile = ({ label, value, tone = "default" }) => (
-  <div className={`metric-tile ${toneStyles[tone] || toneStyles.default}`}>
+  <div className={`metric-tile min-w-0 ${toneStyles[tone] || toneStyles.default}`}>
     <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
       {label}
     </p>
-    <p className="mt-2 break-words text-2xl font-bold">{value}</p>
+    <p className="mt-2 break-words text-xl font-bold leading-tight sm:text-2xl">{value}</p>
   </div>
 );
 

@@ -2,6 +2,7 @@ const Counter = require('../models/Counter');
 const BankAccount = require('../models/BankAccount');
 const BusinessRuleConfig = require('../models/BusinessRuleConfig');
 const FixedDeposit = require('../models/FixedDeposit');
+const DepositApprovalRequest = require('../models/DepositApprovalRequest');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts, toWholeRupees } = require('../utils/customerAccounts');
@@ -192,6 +193,16 @@ const getNextFdNumber = async () => {
   return `FD-${year}${String(counter.value).padStart(5, '0')}`;
 };
 
+const getNextDepositApprovalRequestId = async () => {
+  const counter = await Counter.findOneAndUpdate(
+    { key: 'depositApprovalRequest' },
+    { $inc: { value: 1 } },
+    { new: true, upsert: true }
+  );
+  const year = new Date().getFullYear().toString().slice(-2);
+  return `DAR-${year}${String(counter.value).padStart(5, '0')}`;
+};
+
 const serializeFixedDeposit = (fd) => ({
   id: fd._id,
   fdNumber: fd.fdNumber,
@@ -322,78 +333,68 @@ const createFixedDeposit = async (req, res) => {
         throw new Error('Insufficient balance to create FD');
       }
 
-      paymentAccount.walletBalance = toWholeRupees(paymentAccount.walletBalance) - roundedDepositAmount;
-      paymentAccount.availableBalance = paymentAccount.walletBalance;
-      await paymentAccount.save({ session });
+      const existingPendingRequest = await DepositApprovalRequest.findOne({
+        customer: customer._id,
+        productType: 'fd',
+        actionType: 'create',
+        status: 'pending',
+      }).session(session);
 
-      const [fixedDeposit] = await FixedDeposit.create(
+      if (existingPendingRequest) {
+        throw new Error('An FD creation request is already pending manager approval');
+      }
+
+      const [approvalRequest] = await DepositApprovalRequest.create(
         [
           {
-            fdNumber: await getNextFdNumber(),
+            requestId: await getNextDepositApprovalRequestId(),
             customer: customer._id,
             customerName: customer.name,
             customerId: customer.customerId,
-            bankName: bankName || 'Adnate Bank',
+            productType: 'fd',
+            actionType: 'create',
             linkedAccountNumber: paymentAccount.accountNumber,
-            depositAmount: roundedDepositAmount,
-            interestRate: effectiveInterestRate,
-            tenureMonths: numericTenureMonths,
-            startDate: openingDate,
-            payoutType: 'cumulative',
-            nomineeName,
-            notes,
-            ...calculation,
-            createdBy: req.user._id,
-          },
-        ],
-        { session }
-      );
-
-      await Transaction.create(
-        [
-          {
-            transactionId: `FDPAY${Date.now()}`,
-            sender: customer._id,
-            senderName: customer.name,
-            receiverName: 'Adnate Bank',
-            receiverType: 'bank',
-            fromAccountNumber: paymentAccount.accountNumber,
-            toAccountNumber: fixedDeposit.fdNumber,
             amount: roundedDepositAmount,
-            remarks: `FD created ${fixedDeposit.fdNumber}`,
-            status: 'success',
-            type: 'fd-creation',
-            category: 'investment',
-            businessRefType: 'FixedDeposit',
-            businessRefId: fixedDeposit.fdNumber,
-            displayTitle: `FD ${fixedDeposit.fdNumber}`,
-            displaySubtitle: 'Fixed deposit amount debited',
+            payload: {
+              bankName: bankName || 'Adnate Bank',
+              depositAmount: roundedDepositAmount,
+              interestRate: effectiveInterestRate,
+              tenureMonths: numericTenureMonths,
+              startDate: openingDate,
+              payoutType: 'cumulative',
+              nomineeName,
+              notes,
+              linkedAccountNumber: paymentAccount.accountNumber,
+            },
+            calculation,
           },
         ],
         { session }
       );
 
-      await syncCustomerAccounts(customer, { session });
+      await writeSystemLog({
+        action: 'fd.create.requested.customer',
+        message: `${customer.name} requested FD creation approval for ${approvalRequest.requestId}.`,
+        actor: customer._id,
+        actorName: customer.name,
+        recipient: customer._id,
+        entityType: 'DepositApprovalRequest',
+        entityId: approvalRequest.requestId,
+        severity: 'info',
+        metadata: {
+          depositAmount: roundedDepositAmount,
+          interestRate: effectiveInterestRate,
+          tenureMonths: numericTenureMonths,
+        },
+      }, { session });
 
-      await logFdEvent(
-        fixedDeposit,
-        customer,
-        'fd.created.customer',
-        `FD ${fixedDeposit.fdNumber} created successfully.`,
-        'success',
-        {
-          depositAmount: fixedDeposit.depositAmount,
-          interestRate: fixedDeposit.interestRate,
-          tenureMonths: fixedDeposit.tenureMonths,
-          maturityDate: fixedDeposit.maturityDate,
-          maturityAmount: fixedDeposit.maturityAmount,
-        }
-      );
-
-      responsePayload = { fixedDeposit: serializeFixedDeposit(fixedDeposit) };
+      responsePayload = {
+        message: 'FD request submitted for manager approval',
+        approvalRequest,
+      };
     });
 
-    res.status(201).json(responsePayload);
+    res.status(202).json(responsePayload);
   } catch (error) {
     res.status(400).json({ message: error.message || 'Unable to create FD' });
   } finally {
@@ -500,64 +501,65 @@ const requestPrematureWithdrawal = async (req, res) => {
       if (!customer) throw new Error('Customer not found');
       if (fixedDeposit.status !== 'active') throw new Error('Only active FDs can be withdrawn prematurely');
 
-      const paymentAccount = await findCustomerPaymentAccount(
-        customer,
-        fixedDeposit.linkedAccountNumber,
-        session
-      );
-
-      if (!paymentAccount) throw new Error('Linked account not found');
-
       const withdrawal = calculatePrematureFdWithdrawal(
         fixedDeposit,
         rateConfig.depositRules?.rateCards
       );
 
-      paymentAccount.walletBalance = toWholeRupees(paymentAccount.walletBalance) + withdrawal.payoutAmount;
-      paymentAccount.availableBalance = paymentAccount.walletBalance;
-      await paymentAccount.save({ session });
+      const existingPendingRequest = await DepositApprovalRequest.findOne({
+        customer: customer._id,
+        productType: 'fd',
+        actionType: 'premature_withdrawal',
+        depositRef: fixedDeposit._id,
+        status: 'pending',
+      }).session(session);
 
-      fixedDeposit.status = 'closed';
-      fixedDeposit.closedAt = new Date();
-      await fixedDeposit.save({ session });
+      if (existingPendingRequest) {
+        throw new Error('A premature withdrawal request is already pending for this FD');
+      }
 
-      await Transaction.create(
+      const [approvalRequest] = await DepositApprovalRequest.create(
         [
           {
-            transactionId: `FDWD${Date.now()}`,
-            sender: customer._id,
-            senderName: 'Adnate Bank',
-            receiver: customer._id,
-            receiverName: customer.name,
-            fromAccountNumber: fixedDeposit.fdNumber,
-            toAccountNumber: paymentAccount.accountNumber,
+            requestId: await getNextDepositApprovalRequestId(),
+            customer: customer._id,
+            customerName: customer.name,
+            customerId: customer.customerId,
+            productType: 'fd',
+            actionType: 'premature_withdrawal',
+            depositRef: fixedDeposit._id,
+            depositModel: 'FixedDeposit',
+            depositNumber: fixedDeposit.fdNumber,
+            linkedAccountNumber: fixedDeposit.linkedAccountNumber,
             amount: withdrawal.payoutAmount,
-            remarks: `FD premature withdrawal ${fixedDeposit.fdNumber}`,
-            status: 'success',
-            type: 'fd-premature-withdrawal',
-            category: 'investment',
-            businessRefType: 'FixedDeposit',
-            businessRefId: fixedDeposit.fdNumber,
-            displayTitle: `FD withdrawal ${fixedDeposit.fdNumber}`,
-            displaySubtitle: `Fixed premature penalty ${withdrawal.penaltyRate}%`,
+            payload: {
+              fdNumber: fixedDeposit.fdNumber,
+              depositAmount: fixedDeposit.depositAmount,
+              interestRate: fixedDeposit.interestRate,
+              tenureMonths: fixedDeposit.tenureMonths,
+            },
+            calculation: withdrawal,
           },
         ],
         { session }
       );
 
-      await syncCustomerAccounts(customer, { session });
-      await logFdEvent(
-        fixedDeposit,
-        customer,
-        'fd.premature_withdrawal.customer',
-        `Premature withdrawal completed for FD ${fixedDeposit.fdNumber}.`,
-        'warning',
-        withdrawal
-      );
+      await writeSystemLog({
+        action: 'fd.premature_withdrawal.requested.customer',
+        message: `${customer.name} requested premature withdrawal approval for FD ${fixedDeposit.fdNumber}.`,
+        actor: customer._id,
+        actorName: customer.name,
+        recipient: customer._id,
+        entityType: 'DepositApprovalRequest',
+        entityId: approvalRequest.requestId,
+        severity: 'warning',
+        metadata: withdrawal,
+      }, { session });
 
       responsePayload = {
-        message: 'FD premature withdrawal completed',
+        message: 'FD premature withdrawal request submitted for manager approval',
         ...withdrawal,
+        approvalRequest,
         fixedDeposit: serializeFixedDeposit(fixedDeposit),
       };
     });

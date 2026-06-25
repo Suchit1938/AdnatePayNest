@@ -17,6 +17,7 @@ const businessRuleRoutes = require('./routes/businessRuleRoutes');
 const loanRoutes = require('./routes/loanRoutes');
 const fixedDepositRoutes = require('./routes/fixedDepositRoutes');
 const recurringDepositRoutes = require('./routes/recurringDepositRoutes');
+const depositApprovalRoutes = require('./routes/depositApprovalRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
 
@@ -51,6 +52,7 @@ app.use('/api/business-rules', businessRuleRoutes);
 app.use('/api/loans', loanRoutes);
 app.use('/api/fixed-deposits', fixedDepositRoutes);
 app.use('/api/recurring-deposits', recurringDepositRoutes);
+app.use('/api/deposit-approvals', depositApprovalRoutes);
 app.use('/api/reports', reportRoutes);
 
 app.use(notFound);

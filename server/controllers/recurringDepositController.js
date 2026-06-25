@@ -2,6 +2,7 @@ const BusinessRuleConfig = require('../models/BusinessRuleConfig');
 const BankAccount = require('../models/BankAccount');
 const Counter = require('../models/Counter');
 const RecurringDeposit = require('../models/RecurringDeposit');
+const DepositApprovalRequest = require('../models/DepositApprovalRequest');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts, toWholeRupees } = require('../utils/customerAccounts');
@@ -175,6 +176,16 @@ const getNextRdNumber = async () => {
   return `RD-${year}${String(counter.value).padStart(5, '0')}`;
 };
 
+const getNextDepositApprovalRequestId = async () => {
+  const counter = await Counter.findOneAndUpdate(
+    { key: 'depositApprovalRequest' },
+    { $inc: { value: 1 } },
+    { new: true, upsert: true }
+  );
+  const year = new Date().getFullYear().toString().slice(-2);
+  return `DAR-${year}${String(counter.value).padStart(5, '0')}`;
+};
+
 const serializeRecurringDeposit = (rd) => ({
   id: rd._id,
   rdNumber: rd.rdNumber,
@@ -287,34 +298,85 @@ const createRecurringDeposit = async (req, res) => {
     startDate: openingDate,
   });
 
-  const rd = await RecurringDeposit.create({
-    rdNumber: await getNextRdNumber(),
-    customer: customer._id,
-    customerName: customer.name,
-    customerId: customer.customerId,
-    linkedAccountNumber,
-    monthlyInstallmentAmount: installment,
-    interestRate: matchingRate.annualInterestRate,
-    tenureMonths: numericTenureMonths,
-    startDate: openingDate,
-    ...calculation,
-    createdBy: req.user._id,
-  });
+  const session = await RecurringDeposit.startSession();
 
-  await logRdEvent(
-    rd,
-    customer,
-    'rd.created.customer',
-    `RD ${rd.rdNumber} created successfully.`,
-    'success',
-    {
-      monthlyInstallmentAmount: installment,
-      tenureMonths: numericTenureMonths,
-      maturityAmount: calculation.maturityAmount,
-    }
-  );
+  try {
+    let responsePayload;
 
-  res.status(201).json({ recurringDeposit: serializeRecurringDeposit(rd) });
+    await session.withTransaction(async () => {
+      const paymentAccount = await findCustomerPaymentAccount(customer, linkedAccountNumber, session);
+
+      if (!paymentAccount) throw new Error('Linked account not found');
+      if (toWholeRupees(paymentAccount.walletBalance) < installment) {
+        throw new Error('Insufficient balance for the first RD installment');
+      }
+
+      const existingPendingRequest = await DepositApprovalRequest.findOne({
+        customer: customer._id,
+        productType: 'rd',
+        actionType: 'create',
+        status: 'pending',
+      }).session(session);
+
+      if (existingPendingRequest) {
+        throw new Error('An RD creation request is already pending manager approval');
+      }
+
+      const [approvalRequest] = await DepositApprovalRequest.create(
+        [
+          {
+            requestId: await getNextDepositApprovalRequestId(),
+            customer: customer._id,
+            customerName: customer.name,
+            customerId: customer.customerId,
+            productType: 'rd',
+            actionType: 'create',
+            linkedAccountNumber: paymentAccount.accountNumber,
+            amount: installment,
+            payload: {
+              linkedAccountNumber: paymentAccount.accountNumber,
+              monthlyInstallmentAmount: installment,
+              interestRate: matchingRate.annualInterestRate,
+              tenureMonths: numericTenureMonths,
+              startDate: openingDate,
+            },
+            calculation,
+          },
+        ],
+        { session }
+      );
+
+      await writeSystemLog(
+        {
+          action: 'rd.create.requested.customer',
+          message: `${customer.name} requested RD creation approval for ${approvalRequest.requestId}.`,
+          actor: customer._id,
+          actorName: customer.name,
+          recipient: customer._id,
+          entityType: 'DepositApprovalRequest',
+          entityId: approvalRequest.requestId,
+          severity: 'info',
+          metadata: {
+            monthlyInstallmentAmount: installment,
+            tenureMonths: numericTenureMonths,
+            maturityAmount: calculation.maturityAmount,
+          },
+        },
+        { session }
+      );
+
+      responsePayload = {
+        message: 'RD request submitted for manager approval',
+        approvalRequest,
+      };
+    });
+
+    res.status(202).json(responsePayload);
+  } catch (error) {
+    res.status(400).json({ message: error.message || 'Unable to create RD request' });
+  } finally {
+    session.endSession();
+  }
 };
 
 const postMonthlyInstallment = async (req, res) => {
@@ -500,42 +562,69 @@ const requestPrematureWithdrawal = async (req, res) => {
       if (!customer) throw new Error('Customer not found');
       if (rd.status !== 'active') throw new Error('Only active RDs can be withdrawn prematurely');
 
-      const paymentAccount = await findCustomerPaymentAccount(customer, rd.linkedAccountNumber, session);
-      if (!paymentAccount) throw new Error('Linked account not found');
-
       const accumulatedAmount = calculateAccumulatedValue(rd);
       const penaltyAmount = Math.round(accumulatedAmount * PREMATURE_WITHDRAWAL_PENALTY_RATE);
       const payoutAmount = Math.max(0, accumulatedAmount - penaltyAmount - toNumber(rd.penaltyAccrued));
 
-      paymentAccount.walletBalance = toWholeRupees(paymentAccount.walletBalance) + payoutAmount;
-      paymentAccount.availableBalance = paymentAccount.walletBalance;
-      await paymentAccount.save({ session });
+      const existingPendingRequest = await DepositApprovalRequest.findOne({
+        customer: customer._id,
+        productType: 'rd',
+        actionType: 'premature_withdrawal',
+        depositRef: rd._id,
+        status: 'pending',
+      }).session(session);
 
-      rd.status = 'closed';
-      rd.closedAt = new Date();
-      rd.accumulatedValue = accumulatedAmount;
-      rd.penaltyAccrued += penaltyAmount;
-      await rd.save({ session });
-      await syncCustomerAccounts(customer, { session });
+      if (existingPendingRequest) {
+        throw new Error('A premature withdrawal request is already pending for this RD');
+      }
+
+      const [approvalRequest] = await DepositApprovalRequest.create(
+        [
+          {
+            requestId: await getNextDepositApprovalRequestId(),
+            customer: customer._id,
+            customerName: customer.name,
+            customerId: customer.customerId,
+            productType: 'rd',
+            actionType: 'premature_withdrawal',
+            depositRef: rd._id,
+            depositModel: 'RecurringDeposit',
+            depositNumber: rd.rdNumber,
+            linkedAccountNumber: rd.linkedAccountNumber,
+            amount: payoutAmount,
+            payload: {
+              rdNumber: rd.rdNumber,
+              monthlyInstallmentAmount: rd.monthlyInstallmentAmount,
+              interestRate: rd.interestRate,
+              tenureMonths: rd.tenureMonths,
+              installmentsPaid: rd.installmentsPaid,
+            },
+            calculation: {
+              accumulatedAmount,
+              penaltyAmount,
+              payoutAmount,
+              accruedPenalty: rd.penaltyAccrued,
+            },
+          },
+        ],
+        { session }
+      );
 
       await logRdEvent(
         rd,
         customer,
-        'rd.premature_withdrawal.customer',
-        `Premature withdrawal completed for RD ${rd.rdNumber}.`,
+        'rd.premature_withdrawal.requested.customer',
+        `Premature withdrawal requested for RD ${rd.rdNumber}.`,
         'warning',
-        {
-          accumulatedAmount,
-          penaltyAmount,
-          payoutAmount,
-        },
+        { accumulatedAmount, penaltyAmount, payoutAmount },
         session
       );
 
       responsePayload = {
-        message: 'RD premature withdrawal completed',
+        message: 'RD premature withdrawal request submitted for manager approval',
         penaltyAmount,
         payoutAmount,
+        approvalRequest,
         recurringDeposit: serializeRecurringDeposit(rd),
       };
     });

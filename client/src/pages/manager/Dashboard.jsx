@@ -311,6 +311,7 @@ function ManagerDashboard() {
   const { section = "dashboard" } = useParams();
   const { logout, user, setSessionUser } = useAuth();
   const [approvals, setApprovals] = useState([]);
+  const [depositApprovals, setDepositApprovals] = useState([]);
   const [loans, setLoans] = useState([]);
   const [approvalMessage, setApprovalMessage] = useState("");
   const [approvalError, setApprovalError] = useState("");
@@ -403,9 +404,11 @@ function ManagerDashboard() {
 
     return Promise.all([
       api.get("/approvals"),
+      api.get("/deposit-approvals"),
       api.get("/loans"),
-    ]).then(([approvalsResult, loansResult]) => {
+    ]).then(([approvalsResult, depositApprovalsResult, loansResult]) => {
       setApprovals(approvalsResult.data.approvals || []);
+      setDepositApprovals(depositApprovalsResult.data.requests || []);
       setLoans(loansResult.data.loans || []);
     });
   }, []);
@@ -427,6 +430,13 @@ function ManagerDashboard() {
   );
   const approvalHistory = approvals.filter((approval) =>
     ["approved", "rejected"].includes(approval.status)
+  );
+  const pendingDepositApprovals = depositApprovals.filter(
+    (request) => request.status === "pending"
+  );
+  const pendingDepositApprovalValue = pendingDepositApprovals.reduce(
+    (sum, request) => sum + Number(request.amount || 0),
+    0
   );
   const pendingLoanReviews = loans.filter((loan) =>
     ["submitted", "under_review"].includes(loan.status)
@@ -875,6 +885,7 @@ function ManagerDashboard() {
 
   const visibleApprovalQueue = pendingApprovalsByAmount;
   const approvalPagination = usePaginatedRows(visibleApprovalQueue);
+  const depositApprovalPagination = usePaginatedRows(pendingDepositApprovals);
   const decisionHistoryPagination = usePaginatedRows(decisionHistory);
   const overdraftCustomerPagination = usePaginatedRows(filteredOverdraftCustomers);
   const overdraftPayoffPagination = usePaginatedRows(overdraftPayoffTransactions);
@@ -889,6 +900,7 @@ function ManagerDashboard() {
   const pageTitle = {
     dashboard: "Manager Dashboard",
     approvals: "Approval Queue",
+    "deposit-approvals": "Deposit Approvals",
     loans: "Loan Reviews",
     "loan-portfolio": "Loan Portfolio",
     "approval-history": "Decision History",
@@ -998,6 +1010,28 @@ function ManagerDashboard() {
       const errorMessage = error.response?.data?.message || "Unable to update loan review.";
       setLoanError(errorMessage);
       toast.error(errorMessage);
+    }
+  };
+
+  const updateDepositApproval = async (request, status) => {
+    setApprovalMessage("");
+    setApprovalError("");
+
+    try {
+      const { data } = await api.patch(`/deposit-approvals/${request.id}`, {
+        status,
+        ...(status === "rejected" ? { managerNote: "Rejected by manager." } : {}),
+      });
+      setDepositApprovals((current) =>
+        current.map((item) => (item.id === request.id ? data.request : item))
+      );
+      setApprovalMessage(data.message || "Deposit request updated.");
+      toast.success(data.message || "Deposit request updated.");
+      await loadDashboard();
+    } catch (error) {
+      const message = error.response?.data?.message || "Unable to update deposit request.";
+      setApprovalError(message);
+      toast.error(message);
     }
   };
 
@@ -1355,6 +1389,135 @@ function ManagerDashboard() {
           </tbody>
         </table>
         <TablePagination {...approvalPagination} />
+      </div>
+    </section>
+  );
+
+  const depositApprovalTable = (
+    <section className="table-shell">
+      <div className="flex flex-col gap-4 border-b border-slate-100 p-6 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Deposit Approval Queue</h2>
+          <p className="text-sm text-slate-500">
+            FD/RD opening and premature withdrawal requests wait here until a manager decides.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-amber-50 px-3 py-1 text-sm font-semibold text-amber-700">
+            {pendingDepositApprovals.length} pending
+          </span>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">
+            {formatCurrency(pendingDepositApprovalValue)} requested
+          </span>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        {approvalMessage && <div className="alert-success mx-6 mt-6">{approvalMessage}</div>}
+        {approvalError && <div className="alert-error mx-6 mt-6">{approvalError}</div>}
+        <table className="w-full min-w-[1120px] table-fixed text-left">
+          <thead className="table-head">
+            <tr>
+              <th className="w-[15%] px-6 py-4">Request</th>
+              <th className="w-[20%] px-6 py-4">Customer</th>
+              <th className="w-[17%] px-6 py-4">Product</th>
+              <th className="w-[16%] px-6 py-4">Amount</th>
+              <th className="w-[16%] px-6 py-4">Account / Deposit</th>
+              <th className="w-[16%] px-6 py-4">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pendingDepositApprovals.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-6 py-8">
+                  <EmptyState message="No FD or RD requests are waiting for approval." />
+                </td>
+              </tr>
+            )}
+            {depositApprovalPagination.pageRows.map((request) => {
+              const isCreateRequest = request.actionType === "create";
+              const productLabel = String(request.productType || "").toUpperCase();
+              const actionLabel = formatStatusLabel(request.actionType);
+
+              return (
+                <tr key={request.id} className="table-row align-top">
+                  <td className="px-6 py-4">
+                    <p className="break-words font-bold text-slate-950">{request.id}</p>
+                    <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
+                      Submitted {formatDateTime(request.createdAt)}
+                    </p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="break-words font-semibold text-slate-900">
+                      {request.customerName || "Customer"}
+                    </p>
+                    <p className="mt-2 break-words text-xs font-semibold text-slate-500">
+                      {request.customerId || "Customer ID unavailable"}
+                    </p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-bold text-blue-700">
+                      {productLabel || "Deposit"}
+                    </span>
+                    <p className="mt-3 break-words text-sm font-semibold text-slate-600">
+                      {actionLabel}
+                    </p>
+                    {request.payload?.tenureMonths && (
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        {request.payload.tenureMonths} months
+                      </p>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="break-words text-lg font-bold text-slate-950">
+                      {formatCurrency(request.amount)}
+                    </p>
+                    {request.calculation?.payoutAmount && (
+                      <p className="mt-2 break-words text-xs font-semibold text-slate-500">
+                        Payout {formatCurrency(request.calculation.payoutAmount)}
+                      </p>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="rounded-lg bg-bank-surface px-3 py-2">
+                      <p className="text-xs font-bold uppercase text-slate-500">
+                        {isCreateRequest ? "Linked Account" : "Deposit"}
+                      </p>
+                      <p className="mt-1 break-words font-semibold text-slate-900">
+                        {isCreateRequest
+                          ? maskAccountNumber(request.linkedAccountNumber)
+                          : request.depositNumber || "Deposit number pending"}
+                      </p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="grid gap-2">
+                      <button
+                        type="button"
+                        onClick={() => updateDepositApproval(request, "approved")}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-100"
+                        aria-label={`Approve ${request.id}`}
+                      >
+                        <Check size={16} />
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateDepositApproval(request, "rejected")}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-100"
+                        aria-label={`Reject ${request.id}`}
+                      >
+                        <X size={16} />
+                        Reject
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <TablePagination {...depositApprovalPagination} />
       </div>
     </section>
   );
@@ -3749,13 +3912,17 @@ function ManagerDashboard() {
           />
 
           <StatsCard
-            title="Transactions Today"
-            value={dashboardData.stats.transactionsToday || 0}
-            icon={ReceiptText}
+            title="Deposit Approvals"
+            value={pendingDepositApprovals.length}
+            icon={BadgeIndianRupee}
             accent="bg-blue-500"
             iconTone="bg-blue-50 text-blue-600"
-            onClick={() => navigate("/manager/transactions")}
-            badge={{ text: "Live activity", tone: "neutral" }}
+            onClick={() => navigate("/manager/deposit-approvals")}
+            badge={{
+              text: pendingDepositApprovals.length > 0 ? "Needs review" : "Queue clear",
+              tone: pendingDepositApprovals.length > 0 ? "warning" : "success",
+            }}
+            footer={{ text: `${formatCurrency(pendingDepositApprovalValue)} requested` }}
           />
 
           <StatsCard
@@ -3896,8 +4063,8 @@ function ManagerDashboard() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <MetricTile label="Active OD Accounts" value={odCustomerSummary.activeCount} tone="accent" />
             <MetricTile label="Loan Reviews" value={pendingLoanReviews.length} tone={pendingLoanReviews.length > 0 ? "warning" : "success"} />
+            <MetricTile label="Deposit Approvals" value={pendingDepositApprovals.length} tone={pendingDepositApprovals.length > 0 ? "warning" : "success"} />
             <MetricTile label="Blocked OD" value={odCustomerSummary.blockedCount} tone={odCustomerSummary.blockedCount > 0 ? "danger" : "success"} />
-            <MetricTile label="Alerts" value={notifications.length} tone={notifications.length > 0 ? "warning" : "success"} />
           </div>
           <div className="mt-4 grid gap-2">
             <button
@@ -3906,6 +4073,14 @@ function ManagerDashboard() {
               className="inline-flex items-center justify-between rounded-lg border border-bank-card-border bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-bank-surface"
             >
               Review loan applications
+              <ArrowRight size={17} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/manager/deposit-approvals")}
+              className="inline-flex items-center justify-between rounded-lg border border-bank-card-border bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-bank-surface"
+            >
+              Review deposit approvals
               <ArrowRight size={17} />
             </button>
             <button
@@ -4019,6 +4194,7 @@ function ManagerDashboard() {
   const contentBySection = {
     dashboard: dashboardWorkbench,
     approvals: approvalTable,
+    "deposit-approvals": depositApprovalTable,
     loans: loanReviewsSection,
     "loan-portfolio": loanPortfolioSection,
     "approval-history": approvalHistoryTable,

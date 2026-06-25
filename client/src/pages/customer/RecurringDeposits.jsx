@@ -135,6 +135,7 @@ const RecurringDeposits = () => {
   const { user } = useAuth();
   const toast = useToast();
   const [recurringDeposits, setRecurringDeposits] = useState([]);
+  const [approvalRequests, setApprovalRequests] = useState([]);
   const [rateCards, setRateCards] = useState([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -154,13 +155,22 @@ const RecurringDeposits = () => {
       .then(({ data }) => setRecurringDeposits(data.recurringDeposits || []))
       .catch(() => toast.error("Unable to load recurring deposits.")), [toast]);
 
+  const loadApprovalRequests = useCallback(() =>
+    api
+      .get("/deposit-approvals")
+      .then(({ data }) =>
+        setApprovalRequests((data.requests || []).filter((request) => request.productType === "rd"))
+      )
+      .catch(() => setApprovalRequests([])), []);
+
   useEffect(() => {
     loadRecurringDeposits();
+    loadApprovalRequests();
     api
       .get("/fixed-deposits/rates")
       .then(({ data }) => setRateCards(data.rateCards || []))
       .catch(() => toast.error("Unable to load deposit rates."));
-  }, [loadRecurringDeposits, toast]);
+  }, [loadApprovalRequests, loadRecurringDeposits, toast]);
 
   const applicableRate = useMemo(
     () => getApplicableRate(rateCards, form.tenureMonths),
@@ -250,13 +260,14 @@ const RecurringDeposits = () => {
         ...form,
         linkedAccountNumber: selectedLinkedAccountNumber,
       });
-      toast.success("RD Created Successfully");
+      toast.success("RD request submitted for manager approval.");
       setForm((current) => ({
         ...initialForm,
         linkedAccountNumber: current.linkedAccountNumber || defaultAccountNumber,
       }));
       setCalculatedPreview(null);
       await loadRecurringDeposits();
+      await loadApprovalRequests();
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to create RD.");
     } finally {
@@ -268,8 +279,9 @@ const RecurringDeposits = () => {
     setWorkingId(`${rd.id}:${path}`);
     try {
       const { data } = await api.post(`/recurring-deposits/${rd.id}/${path}`);
-      toast.success(data.message || successMessage);
+      toast.success(path === "premature-withdrawal" ? "RD withdrawal request submitted for manager approval." : data.message || successMessage);
       await loadRecurringDeposits();
+      await loadApprovalRequests();
       if (path === "premature-withdrawal") {
         setWithdrawalPreview(null);
       }
@@ -321,6 +333,39 @@ const RecurringDeposits = () => {
             footer={{ text: "Penalty is recorded when auto-debit fails" }}
           />
         </div>
+
+        {approvalRequests.filter((request) => request.status === "pending").length > 0 && (
+          <SectionCard
+            title="Pending RD Approvals"
+            subtitle="These requests are waiting for manager review. The first installment is debited only after approval."
+            icon={CalendarClock}
+          >
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {approvalRequests
+                .filter((request) => request.status === "pending")
+                .map((request) => (
+                  <div key={request.id} className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-slate-950">{request.id}</p>
+                        <p className="mt-1 text-xs font-bold uppercase tracking-wide text-amber-700">
+                          {statusLabel(request.actionType)}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-amber-700">
+                        Pending
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm font-semibold text-slate-700">
+                      {request.actionType === "create"
+                        ? `${formatCurrency(request.amount)} monthly for ${request.payload?.tenureMonths || "-"} months`
+                        : `${request.depositNumber} payout ${formatCurrency(request.amount)}`}
+                    </p>
+                  </div>
+                ))}
+            </div>
+          </SectionCard>
+        )}
 
         <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <SectionCard

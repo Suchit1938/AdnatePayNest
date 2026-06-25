@@ -174,6 +174,7 @@ const FixedDeposits = ({ adminMode = false }) => {
   const toast = useToast();
   const { user } = useAuth();
   const [fixedDeposits, setFixedDeposits] = useState([]);
+  const [approvalRequests, setApprovalRequests] = useState([]);
   const [rateCards, setRateCards] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [query, setQuery] = useState("");
@@ -192,14 +193,23 @@ const FixedDeposits = ({ adminMode = false }) => {
       .then(({ data }) => setFixedDeposits(data.fixedDeposits || []))
       .catch(() => toast.error("Unable to load fixed deposits.")), [toast]);
 
+  const loadApprovalRequests = useCallback(() =>
+    api
+      .get("/deposit-approvals")
+      .then(({ data }) =>
+        setApprovalRequests((data.requests || []).filter((request) => request.productType === "fd"))
+      )
+      .catch(() => setApprovalRequests([])), []);
+
   useEffect(() => {
     loadFixedDeposits();
+    loadApprovalRequests();
     api
       .get("/fixed-deposits/rates")
       .then(({ data }) => setRateCards(normalizeAllowedRateCards(data.rateCards || [])))
       .catch(() => toast.error("Unable to load deposit rates."));
 
-  }, [loadFixedDeposits, toast]);
+  }, [loadApprovalRequests, loadFixedDeposits, toast]);
 
   const applicableFdRate = useMemo(
     () => getApplicableRate(rateCards, "fd", form.tenureMonths),
@@ -281,7 +291,7 @@ const FixedDeposits = ({ adminMode = false }) => {
     setIsSubmitting(true);
     try {
       await api.post("/fixed-deposits", formWithRate);
-      toast.success("Fixed deposit created.");
+      toast.success("FD request submitted for manager approval.");
       setForm({
         ...initialForm,
         interestRate: "",
@@ -289,6 +299,7 @@ const FixedDeposits = ({ adminMode = false }) => {
       });
       setCalculatedPreview(null);
       await loadFixedDeposits();
+      await loadApprovalRequests();
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to create fixed deposit.");
     } finally {
@@ -300,8 +311,9 @@ const FixedDeposits = ({ adminMode = false }) => {
     setUpdatingId(`${fd.id}:${action}`);
     try {
       await api.post(`/fixed-deposits/${fd.id}/${action}`);
-      toast.success(successMessage);
+      toast.success(action === "premature-withdrawal" ? "FD withdrawal request submitted for manager approval." : successMessage);
       await loadFixedDeposits();
+      await loadApprovalRequests();
       if (action === "premature-withdrawal") {
         setWithdrawalPreview(null);
       }
@@ -372,14 +384,47 @@ const FixedDeposits = ({ adminMode = false }) => {
           />
         </div>
 
-        <section className={adminMode ? "" : "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"}>
+        {!adminMode && approvalRequests.filter((request) => request.status === "pending").length > 0 && (
+          <SectionCard
+            title="Pending FD Approvals"
+            subtitle="These requests are waiting for manager review. Amounts move only after approval."
+            icon={CalendarClock}
+          >
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {approvalRequests
+                .filter((request) => request.status === "pending")
+                .map((request) => (
+                  <div key={request.id} className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-slate-950">{request.id}</p>
+                        <p className="mt-1 text-xs font-bold uppercase tracking-wide text-amber-700">
+                          {statusLabel(request.actionType)}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-amber-700">
+                        Pending
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm font-semibold text-slate-700">
+                      {request.actionType === "create"
+                        ? `${formatCurrency(request.amount)} for ${request.payload?.tenureMonths || "-"} months`
+                        : `${request.depositNumber} payout ${formatCurrency(request.amount)}`}
+                    </p>
+                  </div>
+                ))}
+            </div>
+          </SectionCard>
+        )}
+
+        <section className={adminMode ? "" : "grid grid-cols-1 gap-6 min-[1900px]:grid-cols-[minmax(520px,0.9fr)_minmax(680px,1.1fr)]"}>
           {!adminMode && (
             <SectionCard
               title="Create Fixed Deposit"
               subtitle="Enter deposit terms and review the cumulative maturity preview before saving."
               icon={Plus}
             >
-              <form onSubmit={createFixedDeposit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <form onSubmit={createFixedDeposit} className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <label className="label-field">
                 <span>Bank Name</span>
                 <input
@@ -471,7 +516,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                   placeholder="Optional"
                 />
               </label>
-              <label className="label-field sm:col-span-2">
+              <label className="label-field md:col-span-2">
                 <span>Notes</span>
                 <input
                   value={form.notes}
@@ -481,7 +526,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                 />
               </label>
 
-              <div className="sm:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+              <div className="md:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Current FD terms</p>
@@ -497,7 +542,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                 </div>
               </div>
 
-              <div className={`sm:col-span-2 rounded-lg border p-4 ${
+              <div className={`md:col-span-2 rounded-lg border p-4 ${
                 calculatedPreview
                   ? "border-blue-100 bg-blue-50"
                   : "border-dashed border-slate-300 bg-slate-50"
@@ -527,7 +572,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:col-span-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:col-span-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={calculateFixedDepositPreview}
@@ -579,7 +624,7 @@ const FixedDeposits = ({ adminMode = false }) => {
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-bank-card-border bg-white">
-              <table className="w-full min-w-[920px] text-left text-sm">
+              <table className={`w-full text-left text-sm ${adminMode ? "min-w-[920px]" : "min-w-[760px]"}`}>
                 <thead className="table-head">
                   <tr>
                     <th className="px-4 py-3">FD</th>

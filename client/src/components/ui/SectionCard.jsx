@@ -6,7 +6,7 @@ const SectionCard = ({
   className = "",
   ...sectionProps
 }) => (
-  <section className={`card-padded ${className}`.trim()} {...sectionProps}>
+  <section className={`card-padded min-w-0 ${className}`.trim()} {...sectionProps}>
     {(title || subtitle || Icon) && (
       <div className="mb-5 flex min-w-0 items-start gap-3">
         {Icon && (
