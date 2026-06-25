@@ -143,10 +143,29 @@ const calculateDrawdownInterest = (principal, interestRate, startedAt, drawdowns
 const getAccountRule = (policy, accountType) =>
   (policy?.accountTypeOdRules || []).find((rule) => rule.accountType === accountType);
 
+const overdraftTabs = [
+  { key: "overview", label: "Overview" },
+  { key: "usage", label: "Repay OD" },
+  { key: "activity", label: "Activity" },
+];
+
+const getTabFromLocation = (location) => {
+  const tab = new URLSearchParams(location.search).get("tab");
+  const validTabs = overdraftTabs.map((item) => item.key);
+
+  if (validTabs.includes(tab)) return tab;
+  if (tab === "rules" || location.hash === "#tier-policy" || location.hash === "#rules") {
+    return "overview";
+  }
+
+  return "overview";
+};
+
 const Overdraft = () => {
   const toast = useToast();
   const location = useLocation();
   const { setSessionUser, user } = useAuth();
+  const [activeTab, setActiveTab] = useState(() => getTabFromLocation(location));
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isPaying, setIsPaying] = useState(false);
@@ -167,15 +186,8 @@ const Overdraft = () => {
   }, []);
 
   useEffect(() => {
-    if (location.hash) {
-      const element = document.getElementById(location.hash.slice(1));
-      if (element) {
-        setTimeout(() => {
-          element.scrollIntoView({ behavior: "smooth" });
-        }, 100);
-      }
-    }
-  }, [location, tierPolicy]);
+    setActiveTab(getTabFromLocation(location));
+  }, [location]);
 
   const summary = getCustomerOverdraftSummary(user);
   const effectiveOdAccountNumber = odAccountNumber || activeOdAccount?.accountNumber || "";
@@ -213,21 +225,29 @@ const Overdraft = () => {
     effectivePayoffAmount > totalDueNow ||
     effectivePayoffAmount > paymentBalance;
 
-  const accountCards = accounts.map((account) => {
-    const limit = Number(account.overdraftLimit || 0);
-    const used = Number(account.overdraftUsed || 0);
-    const percent = limit > 0 ? Math.round((used / limit) * 100) : 0;
-    const rule = getAccountRule(tierPolicy, account.accountType);
+  const accountCards = accounts
+    .map((account) => {
+      const limit = Number(account.overdraftLimit || 0);
+      const used = Number(account.overdraftUsed || 0);
+      const percent = limit > 0 ? Math.round((used / limit) * 100) : 0;
+      const rule = getAccountRule(tierPolicy, account.accountType);
 
-    return {
-      ...account,
-      limit,
-      used,
-      available: Math.max(0, limit - used),
-      percent,
-      monthlyOdUses: Number(rule?.monthlyOdUses ?? account.odMonthlyUseLimit ?? 3),
-    };
-  });
+      return {
+        ...account,
+        limit,
+        used,
+        available: Math.max(0, limit - used),
+        percent,
+        monthlyOdUses: Number(rule?.monthlyOdUses ?? account.odMonthlyUseLimit ?? 3),
+      };
+    })
+    .sort((left, right) => {
+      const rightActive = Number(right.used || 0) > 0 ? 1 : 0;
+      const leftActive = Number(left.used || 0) > 0 ? 1 : 0;
+
+      if (rightActive !== leftActive) return rightActive - leftActive;
+      return Number(right.used || 0) - Number(left.used || 0);
+    });
 
   const handlePayOffOverdraft = async () => {
     setMessage("");
@@ -289,6 +309,31 @@ const Overdraft = () => {
         {message && <div className="alert-success">{message}</div>}
         {error && <div className="alert-error">{error}</div>}
 
+        <div className="sticky top-0 z-20 rounded-xl border border-bank-card-border bg-white/95 p-2 shadow-sm backdrop-blur">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {overdraftTabs.map((tab) => {
+              const isActive = activeTab === tab.key;
+
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`inline-flex min-h-11 items-center justify-center rounded-lg px-4 py-2 text-sm font-bold transition ${
+                    isActive
+                      ? "bg-bank-accent text-white shadow-sm"
+                      : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {activeTab === "overview" && (
+          <>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           <StatsCard
             title="Total OD Limit"
@@ -321,7 +366,41 @@ const Overdraft = () => {
           />
         </div>
 
+        <SectionCard
+          title="Overdraft Due"
+          subtitle="Select an account below, then repay the overdraft for that account."
+          icon={CreditCard}
+        >
+          <div className="flex flex-col gap-4 rounded-xl border border-bank-card-border bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                {odAccount?.accountType || "Selected"} account due
+              </p>
+              <p className="mt-1 text-2xl font-black text-slate-950">
+                {formatCurrency(totalDueNow)}
+              </p>
+              <p className="mt-1 text-sm font-bold text-bank-accent">
+                Selected: {odAccount?.accountType || "Account"} / {maskAccountNumber(odAccount?.accountNumber)}
+              </p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                Principal {formatCurrency(accountUsed)} + interest {formatCurrency(interest.interestAmount)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab("usage")}
+              disabled={accountUsed <= 0}
+              className="btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {accountUsed > 0 ? "Pay OD" : "No OD Due"}
+            </button>
+          </div>
+        </SectionCard>
+
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-3 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-800">
+            Active OD accounts are shown first. Select an account card to update the due amount and repayment form.
+          </div>
           {accountCards.map((account) => {
             const isSelected = account.accountNumber === odAccount?.accountNumber;
             const isBlocked = account.odBlocked;
@@ -354,14 +433,16 @@ const Overdraft = () => {
                   </div>
                   <span
                     className={`rounded-full px-3 py-1 text-xs font-bold ${
-                      isBlocked
+                      isSelected
+                        ? "bg-blue-600 text-white"
+                        : isBlocked
                         ? "bg-red-50 text-red-700"
                         : account.used > 0
                           ? "bg-amber-50 text-amber-700"
                           : "bg-emerald-50 text-emerald-700"
                     }`}
                   >
-                    {isBlocked ? "Blocked" : account.used > 0 ? "Active OD" : "Available"}
+                    {isSelected ? "Selected" : isBlocked ? "Blocked" : account.used > 0 ? "Active OD" : "Available"}
                   </span>
                 </div>
                 <div className="mt-5">
@@ -412,11 +493,14 @@ const Overdraft = () => {
             );
           })}
         </section>
+          </>
+        )}
 
+        {activeTab === "overview" && (
         <SectionCard
           id="tier-policy"
-          title="Your Tier Policy"
-          subtitle="Current limits and charges for your tier."
+          title="Tier & Charges"
+          subtitle="Current overdraft limits, usage allowance, interest, and penalty for the selected account."
           icon={ShieldCheck}
         >
           <div className="rounded-xl border border-bank-card-border bg-white p-4">
@@ -492,13 +576,22 @@ const Overdraft = () => {
             </p>
           </div>
         </SectionCard>
+        )}
 
+        {activeTab === "usage" && (
         <section>
           <SectionCard
             title={`${odAccount?.accountType || "Selected"} Account Payoff`}
             subtitle="Pay interest first, then reduce the selected account's OD principal"
             icon={CreditCard}
           >
+            <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold leading-6 text-blue-800">
+              You are repaying overdraft for{" "}
+              <span className="font-black">
+                {odAccount?.accountType || "Account"} / {maskAccountNumber(odAccount?.accountNumber)}
+              </span>
+              . Go back to Overview to choose a different OD account.
+            </div>
             <div className="metric-grid">
               <MetricTile label="OD Limit" value={formatCurrency(accountLimit)} />
               <MetricTile
@@ -706,6 +799,94 @@ const Overdraft = () => {
             </button>
           </SectionCard>
         </section>
+        )}
+
+        {activeTab === "activity" && (
+          <SectionCard
+            title="Overdraft Activity"
+            subtitle="Review selected-account OD drawdowns and account-level OD status."
+            icon={AlertTriangle}
+          >
+            {interest.drawdowns.length === 0 ? (
+              <div className="empty-state">
+                No active overdraft drawdowns are recorded for the selected account.
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-bank-card-border bg-white">
+                {interest.drawdowns.map((entry, index) => (
+                  <div
+                    key={`${entry.usedAt || "od"}-${index}`}
+                    className={`grid grid-cols-1 gap-3 px-4 py-4 text-sm md:grid-cols-4 ${
+                      index === interest.drawdowns.length - 1
+                        ? ""
+                        : "border-b border-bank-card-border"
+                    }`}
+                  >
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Drawdown</p>
+                      <p className="mt-1 font-black text-slate-950">
+                        {formatCurrency(entry.amount)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Started</p>
+                      <p className="mt-1 font-bold text-slate-700">
+                        {entry.usedAt ? new Date(entry.usedAt).toLocaleDateString() : "Not set"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Active Days</p>
+                      <p className="mt-1 font-bold text-slate-700">
+                        {entry.interestDays} day{entry.interestDays === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Interest</p>
+                      <p className="mt-1 font-black text-amber-700">
+                        {formatCurrency(entry.interestAmount)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              {accountCards.map((account) => (
+                <div
+                  key={account.accountNumber}
+                  className="rounded-xl border border-bank-card-border bg-white p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">
+                        {account.accountType}
+                      </p>
+                      <p className="mt-1 font-black text-slate-950">
+                        {maskAccountNumber(account.accountNumber)}
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-bold ${
+                        account.odBlocked
+                          ? "bg-red-50 text-red-700"
+                          : account.used > 0
+                            ? "bg-amber-50 text-amber-700"
+                            : "bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      {account.odBlocked ? "Blocked" : account.used > 0 ? "Active OD" : "Clear"}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                    <MetricTile label="Used" value={formatCurrency(account.used)} tone={account.used > 0 ? "warning" : "success"} />
+                    <MetricTile label="Available" value={formatCurrency(account.available)} tone="success" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )}
       </PageContent>
     </DashboardLayout>
   );

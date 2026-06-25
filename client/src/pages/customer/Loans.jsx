@@ -270,6 +270,7 @@ const Loans = () => {
   const [isPostingPartPayment, setIsPostingPartPayment] = useState(false);
   const [isForeclosing, setIsForeclosing] = useState(false);
   const [selectedLoanTab, setSelectedLoanTab] = useState("overview");
+  const [activeLoanPageTab, setActiveLoanPageTab] = useState("apply");
   const loanActionLocks = useRef({
     emi: false,
     partPayment: false,
@@ -437,6 +438,11 @@ const Loans = () => {
           : []),
       ]
     : [];
+  const loanPageTabs = [
+    { key: "apply", label: "Apply Loan", count: pendingLoans.length },
+    { key: "calculator", label: "EMI Calculator" },
+    { key: "loans", label: "My Loans", count: loans.length },
+  ];
   const partPaymentPolicy = loanRules.partPaymentPolicy || {
     enabled: true,
     minimumAmount: 1000,
@@ -959,7 +965,40 @@ const Loans = () => {
           />
         </div>
 
+        <div className="sticky top-0 z-20 rounded-xl border border-bank-card-border bg-white/95 p-2 shadow-sm backdrop-blur">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {loanPageTabs.map((tab) => {
+              const isActive = activeLoanPageTab === tab.key;
+
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveLoanPageTab(tab.key)}
+                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${
+                    isActive
+                      ? "bg-bank-accent text-white shadow-sm"
+                      : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  {typeof tab.count === "number" && (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-black ${
+                        isActive ? "bg-white/20 text-white" : "bg-white text-slate-500"
+                      }`}
+                    >
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <section className="grid grid-cols-1 gap-6">
+          {activeLoanPageTab === "calculator" && (
           <SectionCard
             title="EMI Calculator"
             subtitle="Estimate repayment before starting a loan application."
@@ -1066,7 +1105,9 @@ const Loans = () => {
               </div>
             </div>
           </SectionCard>
+          )}
 
+          {activeLoanPageTab === "apply" && (
           <SectionCard
             title="Apply For Loan"
             subtitle="The system calculates EMI and a provisional eligibility score before manager review."
@@ -1386,7 +1427,9 @@ const Loans = () => {
               </button>
             </form>
           </SectionCard>
+          )}
 
+          {activeLoanPageTab === "loans" && (
           <SectionCard
             title="Application Tracking"
             subtitle="Select an application to view loan-specific details and next actions."
@@ -1466,9 +1509,10 @@ const Loans = () => {
               </div>
             )}
           </SectionCard>
+          )}
         </section>
 
-        {selectedLoan && (
+        {activeLoanPageTab === "loans" && selectedLoan && (
           <section className="grid grid-cols-1 gap-6">
             <SectionCard title="Selected Loan Details" icon={Gauge}>
               <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">

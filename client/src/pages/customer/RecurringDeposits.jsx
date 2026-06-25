@@ -367,13 +367,13 @@ const RecurringDeposits = () => {
           </SectionCard>
         )}
 
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <section className="grid grid-cols-1 gap-6 min-[1900px]:grid-cols-[minmax(520px,0.9fr)_minmax(680px,1.1fr)]">
           <SectionCard
             title="Create Recurring Deposit"
             subtitle="Select monthly installment and tenure, then review maturity details before saving."
             icon={PiggyBank}
           >
-            <form onSubmit={createRecurringDeposit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <form onSubmit={createRecurringDeposit} className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <label className="label-field">
                 <span>Monthly Installment (₹)</span>
                 <select
@@ -439,7 +439,7 @@ const RecurringDeposits = () => {
                 />
               </label>
 
-              <label className="label-field sm:col-span-2">
+              <label className="label-field md:col-span-2">
                 <span>Applicable Interest Rate (% p.a.)</span>
                 <input
                   type="number"
@@ -454,7 +454,7 @@ const RecurringDeposits = () => {
                 </p>
               </label>
 
-              <div className="sm:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+              <div className="md:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Current RD terms</p>
@@ -470,7 +470,7 @@ const RecurringDeposits = () => {
                 </div>
               </div>
 
-              <div className={`sm:col-span-2 rounded-lg border p-4 ${
+              <div className={`md:col-span-2 rounded-lg border p-4 ${
                 calculatedPreview
                   ? "border-blue-100 bg-blue-50"
                   : "border-dashed border-slate-300 bg-slate-50"
@@ -504,7 +504,7 @@ const RecurringDeposits = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:col-span-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:col-span-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={calculateRecurringDepositPreview}
@@ -555,7 +555,7 @@ const RecurringDeposits = () => {
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-bank-card-border bg-white">
-              <table className="w-full min-w-[1040px] text-left text-sm">
+              <table className="w-full min-w-[820px] text-left text-sm">
                 <thead className="table-head">
                   <tr>
                     <th className="px-4 py-3">RD</th>

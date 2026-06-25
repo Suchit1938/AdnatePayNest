@@ -545,7 +545,7 @@ const Dashboard = () => {
                     {user?.classification || "Standard"}
                   </span>
                   <button
-                    onClick={() => navigate("/overdraft#tier-policy")}
+                    onClick={() => navigate("/overdraft")}
                     className="text-xs font-bold text-blue-600 hover:text-blue-800 inline-flex items-center cursor-pointer"
                   >
                     Details <ChevronRight size={14} />
