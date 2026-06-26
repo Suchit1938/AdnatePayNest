@@ -9,24 +9,38 @@ const placeholderValues = new Set([
 
 const isPlaceholder = (value) => placeholderValues.has(String(value || '').trim());
 
+const envValue = (key, fallback = '') => String(process.env[key] ?? fallback).trim();
+
+const emailHost = () => envValue('EMAIL_HOST');
+const emailUser = () => envValue('EMAIL_USER');
+const emailPass = () => envValue('EMAIL_PASS').replace(/\s/g, '');
+const emailPort = () => Number(envValue('EMAIL_PORT', '587'));
+const emailSecure = () => {
+  const value = envValue('EMAIL_SECURE').toLowerCase();
+  return value === 'true' || emailPort() === 465;
+};
+
 const hasEmailConfig = () =>
   Boolean(
-    process.env.EMAIL_HOST &&
-      process.env.EMAIL_USER &&
-      process.env.EMAIL_PASS &&
-      !isPlaceholder(process.env.EMAIL_USER) &&
-      !isPlaceholder(process.env.EMAIL_PASS)
+    emailHost() &&
+      emailUser() &&
+      emailPass() &&
+      !isPlaceholder(emailUser()) &&
+      !isPlaceholder(emailPass())
   );
 
 const createTransporter = () =>
   nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: Number(process.env.EMAIL_PORT || 587),
-    secure: process.env.EMAIL_SECURE === 'true',
+    host: emailHost(),
+    port: emailPort(),
+    secure: emailSecure(),
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: String(process.env.EMAIL_PASS || '').replace(/\s/g, ''),
+      user: emailUser(),
+      pass: emailPass(),
     },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
   });
 
 const getLogoAttachment = () =>
@@ -93,6 +107,7 @@ const addLogoAttachment = (attachments = []) => {
 
 const sendEmail = async ({ to, subject, text, html, attachments }) => {
   if (!hasEmailConfig()) {
+    console.warn('Email skipped: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS is missing or still a placeholder.');
     return {
       sent: false,
       skipped: true,
@@ -104,7 +119,7 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
 
   try {
     const info = await transporter.sendMail({
-      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      from: envValue('EMAIL_FROM') || emailUser(),
       to,
       subject,
       text,
@@ -117,6 +132,13 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
       messageId: info.messageId,
     };
   } catch (error) {
+    console.warn('Email send failed:', {
+      code: error.code,
+      command: error.command,
+      responseCode: error.responseCode,
+      message: error.response || error.message || 'Email provider rejected the message.',
+    });
+
     return {
       sent: false,
       message: error.response || error.message || 'Email provider rejected the message.',
