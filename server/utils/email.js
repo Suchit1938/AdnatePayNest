@@ -17,12 +17,16 @@ const emailHost = () => envValue('EMAIL_HOST');
 const emailUser = () => envValue('EMAIL_USER');
 const emailPass = () => envValue('EMAIL_PASS').replace(/\s/g, '');
 const emailPort = () => Number(envValue('EMAIL_PORT', '587'));
+const emailFrom = () => envValue('EMAIL_FROM') || emailUser();
+const resendApiKey = () => envValue('RESEND_API_KEY');
 const emailSecure = () => {
   const value = envValue('EMAIL_SECURE').toLowerCase();
   return value === 'true' || emailPort() === 465;
 };
 
-const hasEmailConfig = () =>
+const hasResendConfig = () => Boolean(resendApiKey() && envValue('EMAIL_FROM'));
+
+const hasSmtpConfig = () =>
   Boolean(
     emailHost() &&
     emailUser() &&
@@ -30,6 +34,8 @@ const hasEmailConfig = () =>
     !isPlaceholder(emailUser()) &&
     !isPlaceholder(emailPass())
   );
+
+const hasEmailConfig = () => hasResendConfig() || hasSmtpConfig();
 
 const resolveEmailHost = async () => {
   const host = emailHost();
@@ -96,6 +102,58 @@ const sendMailWithFallbackTransport = async (mailOptions, error) => {
 
   return (await createTransporter({ port: 465, secure: true })).sendMail(mailOptions);
 };
+
+const toResendAttachment = (attachment) => {
+  if (!attachment || attachment.cid) {
+    return null;
+  }
+
+  const content = attachment.content ?? (attachment.path ? fs.readFileSync(attachment.path) : null);
+
+  if (!content) {
+    return null;
+  }
+
+  return {
+    filename: attachment.filename,
+    content: Buffer.isBuffer(content) ? content.toString('base64') : Buffer.from(String(content)).toString('base64'),
+  };
+};
+
+const sendMailWithResend = async ({ from, to, subject, text, html, attachments }) => {
+  const resendAttachments = (attachments || [])
+    .map(toResendAttachment)
+    .filter(Boolean);
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${resendApiKey()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      text,
+      html: html || buildHtmlFromText(text),
+      attachments: resendAttachments.length ? resendAttachments : undefined,
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message = result?.message || result?.error || `Resend rejected the email with status ${response.status}.`;
+    const error = new Error(message);
+    error.code = result?.name || `RESEND_${response.status}`;
+    throw error;
+  }
+
+  return {
+    messageId: result?.id,
+  };
+};
 const getLogoAttachment = () =>
   fs.existsSync(logoPath)
     ? {
@@ -160,7 +218,7 @@ const addLogoAttachment = (attachments = []) => {
 
 const sendEmail = async ({ to, subject, text, html, attachments }) => {
   if (!hasEmailConfig()) {
-    console.warn('Email skipped: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS is missing or still a placeholder.');
+    console.warn('Email skipped: RESEND_API_KEY + EMAIL_FROM or SMTP settings are missing.');
     return {
       sent: false,
       skipped: true,
@@ -168,22 +226,33 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
     };
   }
 
-  const mailOptions = {
-    from: envValue('EMAIL_FROM') || emailUser(),
+  const from = emailFrom();
+  const commonMailOptions = {
+    from,
     to,
     subject,
     text,
-    html: addLogoToHtml(html, text),
-    attachments: addLogoAttachment(attachments),
+    html,
+    attachments,
   };
 
   try {
     let info;
 
-    try {
-      info = await sendMailWithConfiguredTransport(mailOptions);
-    } catch (error) {
-      info = await sendMailWithFallbackTransport(mailOptions, error);
+    if (hasResendConfig()) {
+      info = await sendMailWithResend(commonMailOptions);
+    } else {
+      const smtpMailOptions = {
+        ...commonMailOptions,
+        html: addLogoToHtml(html, text),
+        attachments: addLogoAttachment(attachments),
+      };
+
+      try {
+        info = await sendMailWithConfiguredTransport(smtpMailOptions);
+      } catch (error) {
+        info = await sendMailWithFallbackTransport(smtpMailOptions, error);
+      }
     }
 
     return {
