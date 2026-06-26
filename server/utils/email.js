@@ -29,19 +29,20 @@ const hasEmailConfig = () =>
     !isPlaceholder(emailPass())
   );
 
-const transporter = nodemailer.createTransport({
-  host: emailHost(),
-  port: emailPort(),
-  secure: emailSecure(),
-  family: 4,
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-  auth: {
-    user: emailUser(),
-    pass: emailPass(),
-  },
-});
+const createTransporter = () =>
+  nodemailer.createTransport({
+    host: emailHost(),
+    port: emailPort(),
+    secure: emailSecure(),
+    family: 4,
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
+    auth: {
+      user: emailUser(),
+      pass: emailPass(),
+    },
+  });
 const getLogoAttachment = () =>
   fs.existsSync(logoPath)
     ? {
