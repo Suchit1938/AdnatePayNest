@@ -133,13 +133,25 @@ const filterOptions = [
 
 const getPriorityMeta = (type) => priorityMeta[type] || priorityMeta.info;
 
-const getCategoryMeta = (action) =>
-  categoryMeta[action] || {
+const getCategoryMeta = (action) => {
+  if (String(action || "").startsWith("deposit.")) {
+    return {
+      label: "Deposit Approval",
+      group: "approvals",
+      icon: Clock3,
+      nextStep: String(action || "").includes(".requested.")
+        ? "Manager review is in progress."
+        : "Review the manager decision and your FD/RD status.",
+    };
+  }
+
+  return categoryMeta[action] || {
     label: "Account Update",
     group: "account",
     icon: Bell,
     nextStep: "Keep this update for your records.",
   };
+};
 
 const formatDateTime = (value) => {
   if (!value) return "Recently";

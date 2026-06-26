@@ -1898,6 +1898,21 @@ const attemptLoanEmiDeduction = async ({
     throw new Error(`Please pay EMI ${firstPendingEmi.emiNumber} before later installments`);
   }
 
+  const dueDate = emiRow.dueDate ? new Date(emiRow.dueDate) : null;
+  const dueDay = dueDate && !Number.isNaN(dueDate.getTime()) ? new Date(dueDate) : null;
+  const currentDay = new Date(now);
+  dueDay?.setHours(0, 0, 0, 0);
+  currentDay.setHours(0, 0, 0, 0);
+
+  if (
+    paymentType === 'emi' &&
+    emiRow.status === 'pending' &&
+    dueDay &&
+    dueDay > currentDay
+  ) {
+    throw new Error(`EMI ${emiRow.emiNumber} is scheduled for ${dueDay.toLocaleDateString('en-IN')} and is not due yet`);
+  }
+
   const unpaidPenalty = Math.max(0, toNumber(emiRow.penaltyAmount) - toNumber(emiRow.penaltyPaid));
   const amountDue = Math.round(toNumber(emiRow.emiAmount) + unpaidPenalty);
   const currentBalance = toNumber(paymentAccount.walletBalance);

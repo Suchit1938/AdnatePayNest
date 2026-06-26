@@ -23,8 +23,7 @@ import Statement from "../pages/customer/Statement";
 import Profile from "../pages/customer/Profile";
 import Overdraft from "../pages/customer/Overdraft";
 import Loans from "../pages/customer/Loans";
-import FixedDeposits from "../pages/customer/FixedDeposits";
-import RecurringDeposits from "../pages/customer/RecurringDeposits";
+import Deposits from "../pages/customer/Deposits";
 
 const customerRoute = (element) => (
   <ProtectedRoutes allowedRoles={["customer"]}>
@@ -126,8 +125,9 @@ const AppRoutes = () => {
           <Route path="/accounts" element={customerRoute(<Accounts />)} />
           <Route path="/overdraft" element={customerRoute(<Overdraft />)} />
           <Route path="/loans" element={customerRoute(<Loans />)} />
-          <Route path="/fixed-deposits" element={customerRoute(<FixedDeposits />)} />
-          <Route path="/recurring-deposits" element={customerRoute(<RecurringDeposits />)} />
+          <Route path="/deposits" element={customerRoute(<Deposits />)} />
+          <Route path="/fixed-deposits" element={customerRoute(<Deposits defaultTab="fixed" />)} />
+          <Route path="/recurring-deposits" element={customerRoute(<Deposits defaultTab="recurring" />)} />
           <Route path="/beneficiaries" element={customerRoute(<Beneficiaries />)} />
           <Route path="/transactions" element={customerRoute(<Transactions />)} />
           <Route path="/statement" element={customerRoute(<Statement />)} />

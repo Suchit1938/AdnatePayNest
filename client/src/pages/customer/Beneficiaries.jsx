@@ -6,6 +6,8 @@ import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { BANK_NAME, maskAccountNumber } from "../../data/mockData";
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const Beneficiaries = () => {
   const toast = useToast();
   const [beneficiaries, setBeneficiaries] = useState([]);
@@ -126,7 +128,7 @@ const Beneficiaries = () => {
             <h2 className="text-xl font-bold text-slate-900">Add Payee</h2>
 
           <label className="label-field mt-4">
-            Account Number
+            <span>Account Number<RequiredMark /></span>
             <input
               name="account"
               value={formData.account}
@@ -143,12 +145,8 @@ const Beneficiaries = () => {
               </p>
               <p className="mt-2 text-base font-bold text-slate-950">{verifiedPayee.name}</p>
               <p className="mt-1 text-sm text-slate-600">
-                {verifiedPayee.customerId} | {verifiedPayee.accountType || "Account"}
+                {verifiedPayee.accountType || "Account"} - {verifiedPayee.maskedAccountNumber}
               </p>
-              <p className="mt-1 text-sm text-slate-600">
-                {verifiedPayee.bankName || BANK_NAME} - {verifiedPayee.maskedAccountNumber}
-              </p>
-              <p className="mt-1 text-sm text-slate-600">IFSC {verifiedPayee.ifsc}</p>
             </div>
           )}
 
@@ -194,16 +192,13 @@ const Beneficiaries = () => {
                 >
                   <div>
                     <p className="font-bold text-slate-900">{beneficiary.name}</p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {beneficiary.customerId}
-                    </p>
                     <div className="mt-2 space-y-1">
                       {accounts.map((account) => (
                         <p
                           key={account.accountNumber}
                           className="text-sm text-slate-500"
                         >
-                          {BANK_NAME} - {account.accountType || "Account"} -{" "}
+                          {account.accountType || "Account"} -{" "}
                           {maskAccountNumber(account.accountNumber)}
                         </p>
                       ))}

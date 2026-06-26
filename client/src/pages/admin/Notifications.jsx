@@ -32,6 +32,11 @@ const iconByAction = {
   "overdraft.third_attempt": Clock3,
 };
 
+const getIconByAction = (action) =>
+  String(action || "").startsWith("deposit.")
+    ? Clock3
+    : iconByAction[action] || Bell;
+
 const iconToneByType = {
   info: "bg-blue-100 text-blue-700",
   success: "bg-emerald-100 text-emerald-700",
@@ -46,6 +51,11 @@ const actionLabels = {
   "customer.created": "Customer",
   "overdraft.third_attempt": "Overdraft",
 };
+
+const getActionLabel = (action) =>
+  String(action || "").startsWith("deposit.")
+    ? "Deposit Approval"
+    : actionLabels[action] || "System";
 
 const priorityLabels = {
   danger: "Critical",
@@ -72,10 +82,12 @@ const AdminNotifications = () => {
       escalations: notifications.filter(
         (notification) =>
           notification.action === "approval.created" ||
-          notification.action === "overdraft.third_attempt"
+          notification.action === "overdraft.third_attempt" ||
+          String(notification.action || "").includes(".requested.admin")
       ).length,
       managerDecisions: notifications.filter((notification) =>
-        ["approval.approved", "approval.rejected"].includes(notification.action)
+        ["approval.approved", "approval.rejected"].includes(notification.action) ||
+        /^deposit\..*\.(approved|rejected)\.admin$/.test(notification.action || "")
       ).length,
       odAlerts: notifications.filter(
         (notification) => notification.action === "overdraft.third_attempt"
@@ -174,7 +186,7 @@ const AdminNotifications = () => {
             ) : (
               <div className="space-y-4">
                 {notificationPagination.pageRows.map((notification) => {
-                  const Icon = iconByAction[notification.action] || Bell;
+                  const Icon = getIconByAction(notification.action);
 
                   return (
                     <article
@@ -191,7 +203,7 @@ const AdminNotifications = () => {
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="text-xs font-bold uppercase text-slate-500">
-                                {actionLabels[notification.action] || "System"}
+                                {getActionLabel(notification.action)}
                               </p>
                               <h3 className="mt-1 text-lg font-bold text-slate-950">
                                 {notification.title}

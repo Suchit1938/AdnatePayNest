@@ -9,6 +9,8 @@ import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 import { useAuth } from "../../context/useAuth";
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const AdminProfile = () => {
   const toast = useToast();
   const { user, setSessionUser } = useAuth();
@@ -191,7 +193,7 @@ const AdminProfile = () => {
 
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
               <label className="label-field">
-                Full Name
+                <span>Full Name<RequiredMark /></span>
                 <div className="relative">
                   <User className="pointer-events-none absolute left-4 top-5 text-slate-400" size={18} />
                   <input

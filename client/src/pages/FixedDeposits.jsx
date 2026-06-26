@@ -28,7 +28,6 @@ import { formatCurrency } from "../utils/format";
 
 const initialForm = {
   customerId: "",
-  bankName: "Adnate Bank",
   depositAmount: "100000",
   interestRate: "",
   tenureMonths: "12",
@@ -137,6 +136,8 @@ const PreviewMetric = ({ label, value, tone = "default" }) => {
   );
 };
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const getHeldPeriodFdRate = (rateCards, heldMonths) =>
   normalizeAllowedRateCards(rateCards)
     .filter((rule) => rule.productType === "fd" && heldMonths >= Number(rule.minTenureMonths || 0))
@@ -170,7 +171,7 @@ const buildFdWithdrawalPreview = (fd, rateCards) => {
   };
 };
 
-const FixedDeposits = ({ adminMode = false }) => {
+const FixedDeposits = ({ adminMode = false, embedded = false }) => {
   const toast = useToast();
   const { user } = useAuth();
   const [fixedDeposits, setFixedDeposits] = useState([]);
@@ -186,6 +187,14 @@ const FixedDeposits = ({ adminMode = false }) => {
   const customerAccounts = user?.accounts?.length
     ? user.accounts
     : [user?.account].filter(Boolean);
+  const hasMultipleCustomerAccounts = customerAccounts.length > 1;
+  const defaultLinkedAccountNumber = customerAccounts[0]?.accountNumber || "";
+  const selectedLinkedAccount =
+    customerAccounts.find((account) => account.accountNumber === form.linkedAccountNumber) ||
+    customerAccounts[0];
+  const selectedLinkedAccountNumber = hasMultipleCustomerAccounts
+    ? form.linkedAccountNumber
+    : form.linkedAccountNumber || defaultLinkedAccountNumber;
 
   const loadFixedDeposits = useCallback(() =>
     api
@@ -247,7 +256,7 @@ const FixedDeposits = ({ adminMode = false }) => {
           fd.fdNumber,
           fd.customerName,
           fd.customerId,
-          fd.bankName,
+          adminMode ? fd.bankName : "",
           fd.nomineeName,
         ]
           .join(" ")
@@ -257,7 +266,7 @@ const FixedDeposits = ({ adminMode = false }) => {
 
       return matchesSearch && matchesStatus;
     });
-  }, [fixedDeposits, query, statusFilter]);
+  }, [adminMode, fixedDeposits, query, statusFilter]);
   const pagination = usePaginatedRows(filteredFixedDeposits);
 
   const updateForm = (field, value) => {
@@ -288,9 +297,19 @@ const FixedDeposits = ({ adminMode = false }) => {
       return;
     }
 
+    if (hasMultipleCustomerAccounts && !selectedLinkedAccountNumber) {
+      toast.warning("Select the account to debit for this FD.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      await api.post("/fixed-deposits", formWithRate);
+      const fixedDepositPayload = { ...formWithRate };
+      delete fixedDepositPayload.bankName;
+
+      fixedDepositPayload.linkedAccountNumber = selectedLinkedAccountNumber;
+
+      await api.post("/fixed-deposits", fixedDepositPayload);
       toast.success("FD request submitted for manager approval.");
       setForm({
         ...initialForm,
@@ -337,10 +356,10 @@ const FixedDeposits = ({ adminMode = false }) => {
     }
   };
 
-  return (
-    <DashboardLayout>
-      <PageContent>
-        <PageHeader
+  const content = (
+    <PageContent>
+        {!embedded && (
+          <PageHeader
           eyebrow={adminMode ? "Admin / Fixed Deposits" : "Customer / Fixed Deposits"}
           title={adminMode ? "Fixed Deposits" : "My Fixed Deposits"}
           subtitle={
@@ -349,6 +368,7 @@ const FixedDeposits = ({ adminMode = false }) => {
               : "Track your active FDs, interest earned, maturity date, and total maturity amount."
           }
         />
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           <StatsCard
@@ -426,15 +446,7 @@ const FixedDeposits = ({ adminMode = false }) => {
             >
               <form onSubmit={createFixedDeposit} className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <label className="label-field">
-                <span>Bank Name</span>
-                <input
-                  value={form.bankName}
-                  onChange={(event) => updateForm("bankName", event.target.value)}
-                  className="input-field"
-                />
-              </label>
-              <label className="label-field">
-                <span>Deposit Amount (₹)</span>
+                <span>Deposit Amount (₹)<RequiredMark /></span>
                 <input
                   type="number"
                   min={minimumFdAmount}
@@ -443,25 +455,19 @@ const FixedDeposits = ({ adminMode = false }) => {
                   className="input-field"
                 />
               </label>
-              <label className="label-field">
-                <span>Applicable Interest Rate (% p.a.)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={formWithRate.interestRate}
-                  onChange={(event) => updateForm("interestRate", event.target.value)}
-                  className="input-field disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600"
-                  disabled={Boolean(applicableFdRate)}
-                />
+              <div className="rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Interest Rate</p>
+                <p className="mt-1 text-lg font-extrabold text-slate-950">
+                  {formWithRate.interestRate || "0"}% p.a.
+                </p>
                 <p className="mt-2 text-xs font-semibold text-slate-500">
                   {applicableFdRate
                     ? `${applicableFdRate.label} from configured FD rates`
                     : "No configured FD rate matched this tenure."}
                 </p>
-              </label>
+              </div>
               <div className="label-field">
-                <span>Tenure</span>
+                <span>Tenure<RequiredMark /></span>
                 <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg border border-bank-card-border bg-bank-surface p-1">
                   {fdTenureOptions.map((option) => {
                     const isSelected = option.value === form.tenureMonths;
@@ -483,30 +489,36 @@ const FixedDeposits = ({ adminMode = false }) => {
                   })}
                 </div>
               </div>
-              <label className="label-field">
-                <span>Start Date</span>
-                <input
-                  type="date"
-                  value={form.startDate}
-                  onChange={(event) => updateForm("startDate", event.target.value)}
-                  className="input-field"
-                />
-              </label>
-              <label className="label-field">
-                <span>Linked Account</span>
-                <select
-                  value={form.linkedAccountNumber}
-                  onChange={(event) => updateForm("linkedAccountNumber", event.target.value)}
-                  className="input-field"
-                >
-                  {customerAccounts.length === 0 && <option value="">Default account</option>}
-                  {customerAccounts.map((account) => (
-                    <option key={account.accountNumber} value={account.accountNumber}>
-                      {account.accountType || "Account"} / {account.accountNumber}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Opening Date</p>
+                <p className="mt-1 text-sm font-semibold text-slate-700">{formatDate(form.startDate)}</p>
+              </div>
+              {hasMultipleCustomerAccounts ? (
+                <label className="label-field">
+                  <span>Linked Account<RequiredMark /></span>
+                  <select
+                    value={selectedLinkedAccountNumber}
+                    onChange={(event) => updateForm("linkedAccountNumber", event.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">Select linked account</option>
+                    {customerAccounts.map((account) => (
+                      <option key={account.accountNumber} value={account.accountNumber}>
+                        {account.accountType || "Account"} / {account.accountNumber}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="label-field">
+                  <span>Linked Account</span>
+                  <div className="input-field bg-slate-100 font-semibold text-slate-600">
+                    {selectedLinkedAccount
+                      ? `${selectedLinkedAccount.accountType || "Account"} / ${selectedLinkedAccount.accountNumber}`
+                      : "Default account"}
+                  </div>
+                </div>
+              )}
               <label className="label-field">
                 <span>Nominee</span>
                 <input
@@ -607,7 +619,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="input-field pl-10"
-                  placeholder={adminMode ? "Search FD, customer, bank" : "Search FD, bank, nominee"}
+                  placeholder={adminMode ? "Search FD, customer, bank" : "Search FD or nominee"}
                 />
               </label>
               <select
@@ -645,7 +657,7 @@ const FixedDeposits = ({ adminMode = false }) => {
                       <td className="px-4 py-3">
                         <p className="font-bold text-slate-900">{fd.fdNumber}</p>
                         <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {fd.bankName} / {formatDate(fd.startDate)}
+                          {adminMode ? `${fd.bankName} / ` : ""}{formatDate(fd.startDate)}
                         </p>
                       </td>
                       {adminMode && (
@@ -817,6 +829,15 @@ const FixedDeposits = ({ adminMode = false }) => {
           </div>
         )}
       </PageContent>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <DashboardLayout>
+      {content}
     </DashboardLayout>
   );
 };

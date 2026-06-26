@@ -227,6 +227,24 @@ const createLoanIdempotencyKey = () => {
   return `loan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+const isEmiPayableNow = (row) => {
+  if (!row || ["paid", "foreclosed"].includes(row.status)) return false;
+  if (["missed", "overdue"].includes(row.status)) return true;
+
+  const dueDate = row.dueDate ? new Date(row.dueDate) : null;
+  if (!dueDate || Number.isNaN(dueDate.getTime())) return false;
+
+  const dueDay = new Date(dueDate);
+  const today = new Date();
+  dueDay.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+
+  return dueDay <= today;
+};
+
+const formatDate = (value) =>
+  value ? new Date(value).toLocaleDateString("en-IN") : "Not scheduled";
+
 const supportingDetailFieldsByLoanType = {
   personal: [
     { key: "expenseCategory", label: "Expense Category", placeholder: "Medical, travel, wedding, renovation" },
@@ -281,6 +299,7 @@ const Loans = () => {
     () => (user?.accounts?.length ? user.accounts : [user?.account].filter(Boolean)),
     [user]
   );
+  const hasMultipleCustomerAccounts = customerAccounts.length > 1;
   const loadLoans = useCallback(() =>
     api.get("/loans").then(({ data }) => {
       setLoans(data.loans || []);
@@ -292,7 +311,8 @@ const Loans = () => {
           ...current,
           loanType: current.loanType || firstRule.key,
           disbursementAccountNumber:
-            current.disbursementAccountNumber || customerAccounts[0]?.accountNumber || "",
+            current.disbursementAccountNumber ||
+            (customerAccounts.length === 1 ? customerAccounts[0]?.accountNumber || "" : ""),
         }));
         setCalculator((current) => ({
           ...current,
@@ -360,9 +380,12 @@ const Loans = () => {
       ["pending", "missed", "overdue"].includes(row.status)
     ) ||
     summaryLoan?.amortizationSchedule?.[0];
-  const selectedLoanNextPendingEmi = selectedLoan?.amortizationSchedule?.find(
+  const selectedLoanNextScheduledEmi = selectedLoan?.amortizationSchedule?.find(
     (row) => !["paid", "foreclosed"].includes(row.status)
   );
+  const selectedLoanNextPayableEmi = isEmiPayableNow(selectedLoanNextScheduledEmi)
+    ? selectedLoanNextScheduledEmi
+    : null;
   const selectedLoanForeclosureQuote = selectedLoan?.foreclosureQuote || {};
   const selectedLoanDocuments = selectedLoan
     ? [
@@ -417,8 +440,10 @@ const Loans = () => {
             ? "Next step: manager decision is pending."
             : selectedLoan.status === "approved"
               ? "Next step: manager disbursal is pending."
-              : selectedLoan.status === "disbursed" && selectedLoanNextPendingEmi
-                ? `Next step: EMI ${selectedLoanNextPendingEmi.emiNumber} for ${formatCurrency(selectedLoanNextPendingEmi.emiAmount)}.`
+              : selectedLoan.status === "disbursed" && selectedLoanNextPayableEmi
+                ? `Next step: pay EMI ${selectedLoanNextPayableEmi.emiNumber} for ${formatCurrency(selectedLoanNextPayableEmi.emiAmount)}.`
+                : selectedLoan.status === "disbursed" && selectedLoanNextScheduledEmi
+                  ? `Next EMI ${selectedLoanNextScheduledEmi.emiNumber} is scheduled for ${formatDate(selectedLoanNextScheduledEmi.dueDate)}.`
                 : selectedLoan.status === "closed"
                   ? "Loan is closed. No further customer action is required."
                   : "Track the latest status and documents here."
@@ -513,8 +538,9 @@ const Loans = () => {
     const numericLiabilities = Number(form.existingMonthlyLiabilities || 0);
     const numericEmploymentDuration = Number(form.employmentDurationMonths || 0);
     const purpose = form.purpose.trim();
-    const selectedAccount =
-      form.disbursementAccountNumber || customerAccounts[0]?.accountNumber || "";
+    const selectedAccount = hasMultipleCustomerAccounts
+      ? form.disbursementAccountNumber
+      : form.disbursementAccountNumber || customerAccounts[0]?.accountNumber || "";
     const minimumEmploymentDurationByType = {
       salaried: 6,
       "self-employed": 12,
@@ -808,15 +834,18 @@ const Loans = () => {
   };
 
   const payNextEmi = async () => {
-    if (!selectedLoan || !selectedLoanNextPendingEmi) return;
+    if (!selectedLoan || !selectedLoanNextPayableEmi) {
+      toast.warning("The next scheduled EMI is not due yet.");
+      return;
+    }
     if (loanActionLocks.current.emi) return;
 
     loanActionLocks.current.emi = true;
-    setPayingEmiNumber(selectedLoanNextPendingEmi.emiNumber);
+    setPayingEmiNumber(selectedLoanNextPayableEmi.emiNumber);
 
     try {
       const { data } = await api.patch(
-        `/loans/${selectedLoan.id}/emis/${selectedLoanNextPendingEmi.emiNumber}/pay`,
+        `/loans/${selectedLoan.id}/emis/${selectedLoanNextPayableEmi.emiNumber}/pay`,
         {
           paymentAccountNumber:
             selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
@@ -965,8 +994,7 @@ const Loans = () => {
           />
         </div>
 
-        <div className="sticky top-0 z-20 rounded-xl border border-bank-card-border bg-white/95 p-2 shadow-sm backdrop-blur">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
             {loanPageTabs.map((tab) => {
               const isActive = activeLoanPageTab === tab.key;
 
@@ -975,17 +1003,17 @@ const Loans = () => {
                   key={tab.key}
                   type="button"
                   onClick={() => setActiveLoanPageTab(tab.key)}
-                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${
+                  className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
                     isActive
-                      ? "bg-bank-accent text-white shadow-sm"
-                      : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
+                      ? "bg-bank-sidebar text-white shadow-sm hover:bg-bank-sidebar-hover"
+                      : "text-slate-600 hover:bg-bank-surface hover:text-bank-eyebrow"
                   }`}
                 >
                   <span>{tab.label}</span>
                   {typeof tab.count === "number" && (
                     <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-black ${
-                        isActive ? "bg-white/20 text-white" : "bg-white text-slate-500"
+                        isActive ? "bg-white/20 text-white" : "bg-bank-surface text-slate-500"
                       }`}
                     >
                       {tab.count}
@@ -994,7 +1022,6 @@ const Loans = () => {
                 </button>
               );
             })}
-          </div>
         </div>
 
         <section className="grid grid-cols-1 gap-6">
@@ -1191,17 +1218,20 @@ const Loans = () => {
               </label>
               <label className="label-field">
                 <span>Employment Type<RequiredMark /></span>
-                <select
-                  value={form.employmentType}
-                  onChange={(event) => updateForm("employmentType", event.target.value)}
-                  disabled={isEducationLoan}
-                  className="input-field"
-                >
-                  <option value="salaried">Salaried</option>
-                  <option value="self-employed">Self-employed</option>
-                  <option value="student">Student</option>
-                  <option value="business">Business</option>
-                </select>
+                {isEducationLoan ? (
+                  <div className="input-field bg-slate-100 font-semibold text-slate-600">Student</div>
+                ) : (
+                  <select
+                    value={form.employmentType}
+                    onChange={(event) => updateForm("employmentType", event.target.value)}
+                    className="input-field"
+                  >
+                    <option value="salaried">Salaried</option>
+                    <option value="self-employed">Self-employed</option>
+                    <option value="student">Student</option>
+                    <option value="business">Business</option>
+                  </select>
+                )}
                 {visibleErrors.employmentType && (
                   <span className="mt-1 text-xs font-semibold text-red-600">
                     {visibleErrors.employmentType}
@@ -1229,17 +1259,26 @@ const Loans = () => {
               </label>
               <label className="label-field md:col-span-2 xl:col-span-3">
                 <span>Receive Loan Amount In<RequiredMark /></span>
-                <select
-                  value={form.disbursementAccountNumber || customerAccounts[0]?.accountNumber || ""}
-                  onChange={(event) => updateForm("disbursementAccountNumber", event.target.value)}
-                  className="input-field"
-                >
-                  {customerAccounts.map((account) => (
-                    <option key={account.accountNumber} value={account.accountNumber}>
-                      {account.accountType || "Account"} - {account.accountNumber} - {formatCurrency(account.balance || 0)}
-                    </option>
-                  ))}
-                </select>
+                {hasMultipleCustomerAccounts ? (
+                  <select
+                    value={form.disbursementAccountNumber}
+                    onChange={(event) => updateForm("disbursementAccountNumber", event.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">Select credit account</option>
+                    {customerAccounts.map((account) => (
+                      <option key={account.accountNumber} value={account.accountNumber}>
+                        {account.accountType || "Account"} - {account.accountNumber} - {formatCurrency(account.balance || 0)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="input-field bg-slate-100 font-semibold text-slate-600">
+                    {customerAccounts[0]
+                      ? `${customerAccounts[0].accountType || "Account"} - ${customerAccounts[0].accountNumber} - ${formatCurrency(customerAccounts[0].balance || 0)}`
+                      : "No active account"}
+                  </div>
+                )}
                 {visibleErrors.disbursementAccountNumber && (
                   <span className="mt-1 text-xs font-semibold text-red-600">
                     {visibleErrors.disbursementAccountNumber}
@@ -1961,27 +2000,44 @@ const Loans = () => {
                   subtitle="Repayment schedule for the approved loan."
                   icon={CalendarClock}
                 >
-              {selectedLoan.status === "disbursed" && selectedLoanNextPendingEmi && (
-                <div className="mb-4 flex flex-col gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              {selectedLoan.status === "disbursed" && selectedLoanNextScheduledEmi && (
+                <div className={`mb-4 flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+                  selectedLoanNextPayableEmi
+                    ? "border-emerald-100 bg-emerald-50"
+                    : "border-blue-100 bg-blue-50"
+                }`}>
                   <div>
-                    <p className="text-sm font-bold text-emerald-900">
-                      Next EMI: {formatCurrency(selectedLoanNextPendingEmi.emiAmount)}
+                    <p className={`text-sm font-bold ${
+                      selectedLoanNextPayableEmi ? "text-emerald-900" : "text-blue-900"
+                    }`}>
+                      Next EMI: {formatCurrency(selectedLoanNextScheduledEmi.emiAmount)}
                     </p>
-                    <p className="mt-1 text-xs font-semibold text-emerald-700">
-                      EMI {selectedLoanNextPendingEmi.emiNumber} will be paid from the disbursement account.
+                    <p className={`mt-1 text-xs font-semibold ${
+                      selectedLoanNextPayableEmi ? "text-emerald-700" : "text-blue-700"
+                    }`}>
+                      EMI {selectedLoanNextScheduledEmi.emiNumber} is due on {formatDate(selectedLoanNextScheduledEmi.dueDate)}.
+                      {selectedLoanNextPayableEmi
+                        ? " It can be paid from the disbursement account."
+                        : " It will become payable on the due date. Use part-payment for extra principal payment."}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={payNextEmi}
-                    disabled={payingEmiNumber === selectedLoanNextPendingEmi.emiNumber}
-                    className="btn-primary justify-center bg-emerald-600 px-4 py-2 text-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    <CheckCircle2 size={16} />
-                    {payingEmiNumber === selectedLoanNextPendingEmi.emiNumber
-                      ? "Paying..."
-                      : "Pay Next EMI"}
-                  </button>
+                  {selectedLoanNextPayableEmi ? (
+                    <button
+                      type="button"
+                      onClick={payNextEmi}
+                      disabled={payingEmiNumber === selectedLoanNextPayableEmi.emiNumber}
+                      className="btn-primary justify-center bg-emerald-600 px-4 py-2 text-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      <CheckCircle2 size={16} />
+                      {payingEmiNumber === selectedLoanNextPayableEmi.emiNumber
+                        ? "Paying..."
+                        : "Pay Next EMI"}
+                    </button>
+                  ) : (
+                    <span className="inline-flex min-h-10 items-center justify-center rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700">
+                      Upcoming
+                    </span>
+                  )}
                 </div>
               )}
               {selectedLoan.status === "closed" && (

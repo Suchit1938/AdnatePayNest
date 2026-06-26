@@ -39,6 +39,8 @@ const GRACE_PERIOD_DAYS = 3;
 const REVIEW_CYCLE = "Monthly";
 const ACCOUNT_TYPES = ["Savings", "Salary", "Current"];
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const normalizeAccountTypeOdRules = (rules = [], fallbackOdLimit = "") =>
   ACCOUNT_TYPES.map((accountType) => {
     const rule = rules.find((item) => item.accountType === accountType) || {};
@@ -216,7 +218,7 @@ const AccountTypeRulesEditor = ({ form, errors, onChange }) => {
             </div>
             <label className="mt-4 block">
               <span className="text-xs font-bold uppercase text-slate-500">
-                OD Limit (₹)
+                OD Limit (₹)<RequiredMark />
               </span>
               <input
                 type="number"
@@ -233,7 +235,7 @@ const AccountTypeRulesEditor = ({ form, errors, onChange }) => {
             </label>
             <label className="mt-4 block">
               <span className="text-xs font-bold uppercase text-slate-500">
-                Minimum Opening Balance (₹)
+                Minimum Opening Balance (₹)<RequiredMark />
               </span>
               <input
                 type="number"
@@ -669,7 +671,7 @@ function Classifications() {
             <div className="grid grid-cols-1 gap-4 p-6 md:grid-cols-2">
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Classification Name
+                  Classification Name<RequiredMark />
                 </span>
                 <input
                   required
@@ -683,7 +685,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Per Transfer Limit (₹)
+                  Per Transfer Limit (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -700,7 +702,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Daily Limit (₹)
+                  Daily Limit (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -717,7 +719,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Monthly Limit (₹)
+                  Monthly Limit (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -734,7 +736,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Penalty Amount (₹)
+                  Penalty Amount (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -751,7 +753,7 @@ function Classifications() {
 
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Monthly OD Interest (%)
+                  Monthly OD Interest (%)<RequiredMark />
                 </span>
                 <input
                   required
@@ -859,7 +861,7 @@ function Classifications() {
             <div className="grid grid-cols-1 gap-4 p-6 md:grid-cols-2">
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Classification Name
+                  Classification Name<RequiredMark />
                 </span>
                 <input
                   required
@@ -872,7 +874,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Per Transfer Limit (₹)
+                  Per Transfer Limit (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -889,7 +891,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Daily Limit (₹)
+                  Daily Limit (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -906,7 +908,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Monthly Limit (₹)
+                  Monthly Limit (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -923,7 +925,7 @@ function Classifications() {
 
               <label className="block">
                 <span className="text-sm font-semibold text-slate-600">
-                  Penalty Amount (₹)
+                  Penalty Amount (₹)<RequiredMark />
                 </span>
                 <input
                   required
@@ -940,7 +942,7 @@ function Classifications() {
 
               <label className="block md:col-span-2">
                 <span className="text-sm font-semibold text-slate-600">
-                  Monthly OD Interest (%)
+                  Monthly OD Interest (%)<RequiredMark />
                 </span>
                 <input
                   required

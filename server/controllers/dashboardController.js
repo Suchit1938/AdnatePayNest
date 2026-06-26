@@ -493,6 +493,10 @@ const getManagerDashboard = async (req, res) => {
             action: 'loan.part_payment.manager',
             recipient: req.user._id,
           },
+          {
+            action: /^deposit\..*\.manager$/,
+            recipient: req.user._id,
+          },
         ],
       })
         .sort({ createdAt: -1 })

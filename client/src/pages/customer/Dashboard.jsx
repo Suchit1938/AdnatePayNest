@@ -267,7 +267,7 @@ const Dashboard = () => {
               icon={PiggyBank}
               accent="bg-cyan-500"
               iconTone="bg-cyan-50 text-cyan-600"
-              onClick={() => navigate("/fixed-deposits")}
+              onClick={() => navigate("/deposits?tab=fixed")}
               badge={{
                 text: `${completedInvestments.length} completed`,
                 tone: completedInvestments.length > 0 ? "success" : "neutral",
@@ -351,7 +351,7 @@ const Dashboard = () => {
                 <button
                   key={`${row.product}-${row.id}`}
                   type="button"
-                  onClick={() => navigate(row.product === "FD" ? "/fixed-deposits" : "/recurring-deposits")}
+                  onClick={() => navigate(row.product === "FD" ? "/deposits?tab=fixed" : "/deposits?tab=recurring")}
                   className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-left transition hover:border-amber-300 hover:bg-amber-100"
                 >
                   <p className="text-xs font-bold uppercase tracking-[0.12em] text-amber-700">

@@ -23,6 +23,8 @@ import { formatCurrency, maskAccountNumber } from "../../utils/format";
 import { getCustomerAccounts, getCustomerOverdraftSummary } from "../../utils/overdraft";
 import { getTierTone } from "../../utils/ui";
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const parseMonthlyInterestRate = (value) => {
   const match = String(value || "").match(/(\d+(?:\.\d+)?)/);
 
@@ -309,8 +311,7 @@ const Overdraft = () => {
         {message && <div className="alert-success">{message}</div>}
         {error && <div className="alert-error">{error}</div>}
 
-        <div className="sticky top-0 z-20 rounded-xl border border-bank-card-border bg-white/95 p-2 shadow-sm backdrop-blur">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
             {overdraftTabs.map((tab) => {
               const isActive = activeTab === tab.key;
 
@@ -319,17 +320,16 @@ const Overdraft = () => {
                   key={tab.key}
                   type="button"
                   onClick={() => setActiveTab(tab.key)}
-                  className={`inline-flex min-h-11 items-center justify-center rounded-lg px-4 py-2 text-sm font-bold transition ${
+                  className={`inline-flex min-h-10 items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold transition ${
                     isActive
-                      ? "bg-bank-accent text-white shadow-sm"
-                      : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
+                      ? "bg-bank-sidebar text-white shadow-sm hover:bg-bank-sidebar-hover"
+                      : "text-slate-600 hover:bg-bank-surface hover:text-bank-eyebrow"
                   }`}
                 >
                   {tab.label}
                 </button>
               );
             })}
-          </div>
         </div>
 
         {activeTab === "overview" && (
@@ -698,7 +698,7 @@ const Overdraft = () => {
 
             <div className="mt-6 rounded-xl border border-bank-card-border bg-bank-surface p-5">
               <label className="label-field">
-                Pay From Account
+                <span>Pay From Account<RequiredMark /></span>
                 <select
                   value={paymentAccount?.accountNumber || ""}
                   onChange={(event) => {
@@ -719,7 +719,7 @@ const Overdraft = () => {
               </label>
 
               <label className="label-field mt-5">
-                Payment Amount
+                <span>Payment Amount<RequiredMark /></span>
                 <input
                   type="number"
                   min="1"

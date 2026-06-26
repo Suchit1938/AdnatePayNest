@@ -6,7 +6,10 @@ const RecurringDeposit = require('../models/RecurringDeposit');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts, toWholeRupees } = require('../utils/customerAccounts');
-const { writeSystemLog } = require('../utils/systemLog');
+const {
+  sendDepositDecisionEmail,
+  writeDepositDecisionNotifications,
+} = require('../utils/depositNotifications');
 
 const toNumber = (value) => Number(value || 0);
 
@@ -371,6 +374,7 @@ const decideDepositApprovalRequest = async (req, res) => {
 
   try {
     let responsePayload;
+    let decisionCustomer = null;
 
     await session.withTransaction(async () => {
       const request = await DepositApprovalRequest.findOne({
@@ -382,6 +386,7 @@ const decideDepositApprovalRequest = async (req, res) => {
 
       const customer = await User.findById(request.customer).session(session);
       if (!customer) throw new Error('Customer not found');
+      decisionCustomer = customer;
 
       let executionResult = {};
 
@@ -410,26 +415,13 @@ const decideDepositApprovalRequest = async (req, res) => {
       }
       await request.save({ session });
 
-      await writeSystemLog(
-        {
-          action: `deposit.${request.productType}.${request.actionType}.${status}.manager`,
-          message: `${req.user.name} ${status} ${request.productType.toUpperCase()} ${request.actionType.replace(/_/g, ' ')} request ${request.requestId}.`,
-          actor: req.user._id,
-          actorName: req.user.name,
-          recipient: customer._id,
-          entityType: 'DepositApprovalRequest',
-          entityId: request.requestId,
-          severity: status === 'approved' ? 'success' : 'warning',
-          metadata: {
-            productType: request.productType,
-            actionType: request.actionType,
-            depositNumber: request.depositNumber,
-            amount: request.amount,
-            managerNote: request.managerNote,
-          },
-        },
-        { session }
-      );
+      await writeDepositDecisionNotifications({
+        customer,
+        manager: req.user,
+        request,
+        status,
+        session,
+      });
 
       responsePayload = {
         message: `Deposit request ${status}.`,
@@ -437,7 +429,14 @@ const decideDepositApprovalRequest = async (req, res) => {
       };
     });
 
-    res.json(responsePayload);
+    const email = await sendDepositDecisionEmail({
+      customer: decisionCustomer,
+      manager: req.user,
+      request: responsePayload.request,
+      status,
+    });
+
+    res.json({ ...responsePayload, email });
   } catch (error) {
     res.status(400).json({ message: error.message || 'Unable to review deposit request' });
   } finally {

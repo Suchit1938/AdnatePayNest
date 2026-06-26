@@ -61,6 +61,26 @@ const statusStyles = {
   disbursed: "bg-violet-50 text-violet-700",
 };
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
+const DepositDetail = ({ label, value, tone = "default" }) => {
+  const toneStyles = {
+    default: "bg-white text-slate-900",
+    warning: "bg-amber-50 text-amber-800",
+    success: "bg-emerald-50 text-emerald-800",
+    info: "bg-blue-50 text-blue-800",
+  };
+
+  if (value === undefined || value === null || value === "") return null;
+
+  return (
+    <div className={`rounded-lg border border-slate-100 px-3 py-2 ${toneStyles[tone] || toneStyles.default}`}>
+      <p className="text-[10px] font-bold uppercase text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-extrabold leading-snug">{value}</p>
+    </div>
+  );
+};
+
 const createLoanIdempotencyKey = () => {
   if (window.crypto?.randomUUID) {
     return window.crypto.randomUUID();
@@ -312,6 +332,7 @@ function ManagerDashboard() {
   const { logout, user, setSessionUser } = useAuth();
   const [approvals, setApprovals] = useState([]);
   const [depositApprovals, setDepositApprovals] = useState([]);
+  const [expandedDepositApprovalId, setExpandedDepositApprovalId] = useState("");
   const [loans, setLoans] = useState([]);
   const [approvalMessage, setApprovalMessage] = useState("");
   const [approvalError, setApprovalError] = useState("");
@@ -402,15 +423,22 @@ function ManagerDashboard() {
         setBusinessRules({ managerTierPermissions: tierPermissionDefaults });
       });
 
-    return Promise.all([
-      api.get("/approvals"),
-      api.get("/deposit-approvals"),
-      api.get("/loans"),
-    ]).then(([approvalsResult, depositApprovalsResult, loansResult]) => {
-      setApprovals(approvalsResult.data.approvals || []);
-      setDepositApprovals(depositApprovalsResult.data.requests || []);
-      setLoans(loansResult.data.loans || []);
-    });
+    const loadApprovals = api
+      .get("/approvals")
+      .then(({ data }) => setApprovals(data.approvals || []))
+      .catch(() => setApprovals([]));
+
+    const loadDepositApprovals = api
+      .get("/deposit-approvals")
+      .then(({ data }) => setDepositApprovals(data.requests || []))
+      .catch(() => setDepositApprovals([]));
+
+    const loadLoans = api
+      .get("/loans")
+      .then(({ data }) => setLoans(data.loans || []))
+      .catch(() => setLoans([]));
+
+    return Promise.all([loadApprovals, loadDepositApprovals, loadLoans]);
   }, []);
 
   useEffect(() => {
@@ -1357,7 +1385,7 @@ function ManagerDashboard() {
                     <td colSpan={6} className="px-6 py-5">
                       <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
                         <label className="label-field">
-                          Rejection Reason
+                          <span>Rejection Reason<RequiredMark /></span>
                           <textarea
                             value={rejectionReview.reason}
                             onChange={(event) => updateRejectionReason(event.target.value)}
@@ -1436,83 +1464,178 @@ function ManagerDashboard() {
             )}
             {depositApprovalPagination.pageRows.map((request) => {
               const isCreateRequest = request.actionType === "create";
+              const isWithdrawalRequest = request.actionType === "premature_withdrawal";
               const productLabel = String(request.productType || "").toUpperCase();
               const actionLabel = formatStatusLabel(request.actionType);
+              const payload = request.payload || {};
+              const calculation = request.calculation || {};
+              const primaryAmountLabel = isCreateRequest
+                ? request.productType === "rd"
+                  ? "Monthly Installment"
+                  : "Deposit Amount"
+                : "Estimated Payout";
+              const decisionReason = isCreateRequest
+                ? `${productLabel} opening needs manager approval before debiting the customer account.`
+                : `${productLabel} premature withdrawal needs manager approval before closing the deposit and crediting payout.`;
+              const isExpanded = expandedDepositApprovalId === request.id;
 
               return (
-                <tr key={request.id} className="table-row align-top">
-                  <td className="px-6 py-4">
-                    <p className="break-words font-bold text-slate-950">{request.id}</p>
-                    <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
-                      Submitted {formatDateTime(request.createdAt)}
-                    </p>
-                  </td>
-                  <td className="px-6 py-4">
-                    <p className="break-words font-semibold text-slate-900">
-                      {request.customerName || "Customer"}
-                    </p>
-                    <p className="mt-2 break-words text-xs font-semibold text-slate-500">
-                      {request.customerId || "Customer ID unavailable"}
-                    </p>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-bold text-blue-700">
-                      {productLabel || "Deposit"}
-                    </span>
-                    <p className="mt-3 break-words text-sm font-semibold text-slate-600">
-                      {actionLabel}
-                    </p>
-                    {request.payload?.tenureMonths && (
-                      <p className="mt-1 text-xs font-semibold text-slate-500">
-                        {request.payload.tenureMonths} months
+                <Fragment key={request.id}>
+                  <tr className="table-row align-top">
+                    <td className="px-6 py-4">
+                      <p className="break-words font-bold text-slate-950">{request.id}</p>
+                      <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
+                        Submitted {formatDateTime(request.createdAt)}
                       </p>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <p className="break-words text-lg font-bold text-slate-950">
-                      {formatCurrency(request.amount)}
-                    </p>
-                    {request.calculation?.payoutAmount && (
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="break-words font-semibold text-slate-900">
+                        {request.customerName || "Customer"}
+                      </p>
                       <p className="mt-2 break-words text-xs font-semibold text-slate-500">
-                        Payout {formatCurrency(request.calculation.payoutAmount)}
+                        {request.customerId || "Customer ID unavailable"}
                       </p>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="rounded-lg bg-bank-surface px-3 py-2">
-                      <p className="text-xs font-bold uppercase text-slate-500">
-                        {isCreateRequest ? "Linked Account" : "Deposit"}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-bold text-blue-700">
+                        {productLabel || "Deposit"}
+                      </span>
+                      <p className="mt-3 break-words text-sm font-semibold text-slate-600">
+                        {actionLabel}
                       </p>
-                      <p className="mt-1 break-words font-semibold text-slate-900">
-                        {isCreateRequest
-                          ? maskAccountNumber(request.linkedAccountNumber)
-                          : request.depositNumber || "Deposit number pending"}
+                      {request.payload?.tenureMonths && (
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          {request.payload.tenureMonths} months
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="break-words text-lg font-bold text-slate-950">
+                        {formatCurrency(request.amount)}
                       </p>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="grid gap-2">
-                      <button
-                        type="button"
-                        onClick={() => updateDepositApproval(request, "approved")}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-100"
-                        aria-label={`Approve ${request.id}`}
-                      >
-                        <Check size={16} />
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateDepositApproval(request, "rejected")}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-100"
-                        aria-label={`Reject ${request.id}`}
-                      >
-                        <X size={16} />
-                        Reject
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                      <p className="mt-2 break-words text-xs font-semibold text-slate-500">
+                        {primaryAmountLabel}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="rounded-lg bg-bank-surface px-3 py-2">
+                        <p className="text-xs font-bold uppercase text-slate-500">
+                          {isCreateRequest ? "Linked Account" : "Deposit"}
+                        </p>
+                        <p className="mt-1 break-words font-semibold text-slate-900">
+                          {isCreateRequest
+                            ? maskAccountNumber(request.linkedAccountNumber)
+                            : request.depositNumber || "Deposit number pending"}
+                        </p>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="grid gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedDepositApprovalId(isExpanded ? "" : request.id)}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? "Hide" : "Show"} details for ${request.id}`}
+                        >
+                          <FileText size={16} />
+                          {isExpanded ? "Hide Details" : "Show Details"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateDepositApproval(request, "approved")}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-100"
+                          aria-label={`Approve ${request.id}`}
+                        >
+                          <Check size={16} />
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateDepositApproval(request, "rejected")}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-100"
+                          aria-label={`Reject ${request.id}`}
+                        >
+                          <X size={16} />
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr className="border-b border-slate-100 bg-slate-50/70">
+                      <td colSpan={6} className="px-6 py-5">
+                        <div className="rounded-lg border border-slate-200 bg-white p-4">
+                          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <p className="text-sm font-extrabold text-slate-950">Request Details</p>
+                              <p className="mt-1 text-sm font-semibold leading-6 text-slate-600">
+                                {decisionReason}
+                              </p>
+                            </div>
+                            <span className="w-fit rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700">
+                              Pending manager decision
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                            <DepositDetail
+                              label={primaryAmountLabel}
+                              value={formatCurrency(request.amount)}
+                              tone={isWithdrawalRequest ? "success" : "info"}
+                            />
+                            <DepositDetail
+                              label="Interest Rate"
+                              value={payload.interestRate !== undefined ? `${payload.interestRate}% p.a.` : undefined}
+                            />
+                            <DepositDetail
+                              label="Tenure"
+                              value={payload.tenureMonths ? `${payload.tenureMonths} months` : undefined}
+                            />
+                            <DepositDetail
+                              label="Opening Date"
+                              value={payload.startDate ? formatDateTime(payload.startDate) : undefined}
+                            />
+                            <DepositDetail
+                              label="Maturity Amount"
+                              value={calculation.maturityAmount ? formatCurrency(calculation.maturityAmount) : undefined}
+                              tone="success"
+                            />
+                            <DepositDetail
+                              label="Interest Earned"
+                              value={calculation.interestEarned ? formatCurrency(calculation.interestEarned) : undefined}
+                            />
+                            <DepositDetail
+                              label="Value Before Penalty"
+                              value={calculation.valueBeforePenalty ? formatCurrency(calculation.valueBeforePenalty) : undefined}
+                            />
+                            <DepositDetail
+                              label="Penalty"
+                              value={calculation.penaltyAmount ? formatCurrency(calculation.penaltyAmount) : undefined}
+                              tone="warning"
+                            />
+                            <DepositDetail
+                              label="Existing Penalties"
+                              value={calculation.accruedPenalty ? formatCurrency(calculation.accruedPenalty) : undefined}
+                              tone="warning"
+                            />
+                            <DepositDetail
+                              label="Held Period"
+                              value={calculation.heldMonths ? `${calculation.heldMonths} months` : undefined}
+                            />
+                            <DepositDetail
+                              label="Installments Paid"
+                              value={payload.installmentsPaid !== undefined ? `${payload.installmentsPaid}/${payload.tenureMonths || "-"}` : undefined}
+                            />
+                            <DepositDetail
+                              label="Monthly Installment"
+                              value={payload.monthlyInstallmentAmount ? formatCurrency(payload.monthlyInstallmentAmount) : undefined}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
@@ -3068,9 +3191,12 @@ function ManagerDashboard() {
                                   loanDocumentReview?.documentId === document.id && (
                                     <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50/80 p-3">
                                       <label className="label-field text-xs">
-                                        {loanDocumentReview.reviewStatus === "mismatch"
-                                          ? "Mismatch Reason"
-                                          : "Information Needed"}
+                                        <span>
+                                          {loanDocumentReview.reviewStatus === "mismatch"
+                                            ? "Mismatch Reason"
+                                            : "Information Needed"}
+                                          <RequiredMark />
+                                        </span>
                                         <textarea
                                           value={loanDocumentReview.note}
                                           onChange={(event) =>
@@ -3214,7 +3340,7 @@ function ManagerDashboard() {
                 {loanReview?.id === loan.id && (
                   <div className="border-t border-amber-100 bg-amber-50/70 p-4">
                     <label className="label-field">
-                      Manager Note
+                      <span>Manager Note<RequiredMark /></span>
                       <textarea
                         value={loanReview.note}
                         onChange={(event) => updateLoanReviewNote(event.target.value)}

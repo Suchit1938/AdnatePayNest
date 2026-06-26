@@ -6,6 +6,10 @@ const DepositApprovalRequest = require('../models/DepositApprovalRequest');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts, toWholeRupees } = require('../utils/customerAccounts');
+const {
+  sendDepositRequestEmail,
+  writeDepositRequestNotifications,
+} = require('../utils/depositNotifications');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const DEFAULT_RD_RATE_CARDS = [
@@ -346,24 +350,14 @@ const createRecurringDeposit = async (req, res) => {
         { session }
       );
 
-      await writeSystemLog(
-        {
-          action: 'rd.create.requested.customer',
-          message: `${customer.name} requested RD creation approval for ${approvalRequest.requestId}.`,
-          actor: customer._id,
-          actorName: customer.name,
-          recipient: customer._id,
-          entityType: 'DepositApprovalRequest',
-          entityId: approvalRequest.requestId,
-          severity: 'info',
-          metadata: {
-            monthlyInstallmentAmount: installment,
-            tenureMonths: numericTenureMonths,
-            maturityAmount: calculation.maturityAmount,
-          },
-        },
-        { session }
-      );
+      await writeDepositRequestNotifications({
+        customer,
+        request: approvalRequest,
+        productType: 'rd',
+        actionType: 'create',
+        amount: installment,
+        session,
+      });
 
       responsePayload = {
         message: 'RD request submitted for manager approval',
@@ -371,7 +365,12 @@ const createRecurringDeposit = async (req, res) => {
       };
     });
 
-    res.status(202).json(responsePayload);
+    const email = await sendDepositRequestEmail({
+      customer,
+      request: responsePayload.approvalRequest,
+    });
+
+    res.status(202).json({ ...responsePayload, email });
   } catch (error) {
     res.status(400).json({ message: error.message || 'Unable to create RD request' });
   } finally {
@@ -386,10 +385,14 @@ const postMonthlyInstallment = async (req, res) => {
     let responsePayload;
 
     await session.withTransaction(async () => {
-      const [rd, customer] = await Promise.all([
-        RecurringDeposit.findOne({ _id: req.params.id, customer: req.user._id }).session(session),
-        User.findOne({ _id: req.user._id, role: 'customer' }).session(session),
-      ]);
+      const rd = await RecurringDeposit.findOne({
+        _id: req.params.id,
+        customer: req.user._id,
+      }).session(session);
+      const customer = await User.findOne({
+        _id: req.user._id,
+        role: 'customer',
+      }).session(session);
 
       if (!rd) throw new Error('Recurring deposit not found');
       if (!customer) throw new Error('Customer not found');
@@ -538,7 +541,12 @@ const postMonthlyInstallment = async (req, res) => {
       };
     });
 
-    res.json(responsePayload);
+    const email = await sendDepositRequestEmail({
+      customer: req.user,
+      request: responsePayload.approvalRequest,
+    });
+
+    res.json({ ...responsePayload, email });
   } catch (error) {
     res.status(400).json({ message: error.message || 'Unable to post RD installment' });
   } finally {
@@ -553,10 +561,14 @@ const requestPrematureWithdrawal = async (req, res) => {
     let responsePayload;
 
     await session.withTransaction(async () => {
-      const [rd, customer] = await Promise.all([
-        RecurringDeposit.findOne({ _id: req.params.id, customer: req.user._id }).session(session),
-        User.findOne({ _id: req.user._id, role: 'customer' }).session(session),
-      ]);
+      const rd = await RecurringDeposit.findOne({
+        _id: req.params.id,
+        customer: req.user._id,
+      }).session(session);
+      const customer = await User.findOne({
+        _id: req.user._id,
+        role: 'customer',
+      }).session(session);
 
       if (!rd) throw new Error('Recurring deposit not found');
       if (!customer) throw new Error('Customer not found');
@@ -610,15 +622,15 @@ const requestPrematureWithdrawal = async (req, res) => {
         { session }
       );
 
-      await logRdEvent(
-        rd,
+      await writeDepositRequestNotifications({
         customer,
-        'rd.premature_withdrawal.requested.customer',
-        `Premature withdrawal requested for RD ${rd.rdNumber}.`,
-        'warning',
-        { accumulatedAmount, penaltyAmount, payoutAmount },
-        session
-      );
+        request: approvalRequest,
+        productType: 'rd',
+        actionType: 'premature_withdrawal',
+        amount: payoutAmount,
+        depositNumber: rd.rdNumber,
+        session,
+      });
 
       responsePayload = {
         message: 'RD premature withdrawal request submitted for manager approval',
@@ -644,10 +656,14 @@ const requestMaturityPayout = async (req, res) => {
     let responsePayload;
 
     await session.withTransaction(async () => {
-      const [rd, customer] = await Promise.all([
-        RecurringDeposit.findOne({ _id: req.params.id, customer: req.user._id }).session(session),
-        User.findOne({ _id: req.user._id, role: 'customer' }).session(session),
-      ]);
+      const rd = await RecurringDeposit.findOne({
+        _id: req.params.id,
+        customer: req.user._id,
+      }).session(session);
+      const customer = await User.findOne({
+        _id: req.user._id,
+        role: 'customer',
+      }).session(session);
 
       if (!rd) throw new Error('Recurring deposit not found');
       if (!customer) throw new Error('Customer not found');

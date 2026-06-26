@@ -22,6 +22,8 @@ import { isValidEmail } from "../../utils/emailValidation";
 
 const emailErrorMessage = "Enter a valid email address.";
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const getEmailError = (value) => {
   const normalizedEmail = value.trim().toLowerCase();
   return normalizedEmail && !isValidEmail(normalizedEmail) ? emailErrorMessage : "";
@@ -268,7 +270,7 @@ function Login() {
 
               <form onSubmit={handleLogin} className="mt-6">
                 <label className="label-field">
-                  Email ID
+                  <span>Email ID<RequiredMark /></span>
                   <div className="relative">
                     <Mail
                       size={18}
@@ -297,7 +299,7 @@ function Login() {
                 </datalist>
 
                 <label className="label-field mt-5">
-                  Password
+                  <span>Password<RequiredMark /></span>
                   <div className="relative">
                     <Lock
                       size={18}
@@ -372,7 +374,7 @@ function Login() {
               className="space-y-4 p-5"
             >
               <label className="label-field">
-                Registered Email
+                <span>Registered Email<RequiredMark /></span>
                 <input
                   type="email"
                   value={forgotForm.email}
@@ -392,7 +394,7 @@ function Login() {
               {forgotStep === "reset" && (
                 <>
                   <label className="label-field">
-                    OTP
+                    <span>OTP<RequiredMark /></span>
                     <input
                       value={forgotForm.otp}
                       onChange={(event) => updateForgotForm("otp", event.target.value)}
@@ -403,7 +405,7 @@ function Login() {
                     />
                   </label>
                   <label className="label-field">
-                    New Password
+                    <span>New Password<RequiredMark /></span>
                     <div className="relative">
                       <input
                         type={visiblePasswords.forgotNew ? "text" : "password"}
@@ -424,7 +426,7 @@ function Login() {
                     </div>
                   </label>
                   <label className="label-field">
-                    Confirm Password
+                    <span>Confirm Password<RequiredMark /></span>
                     <div className="relative">
                       <input
                         type={visiblePasswords.forgotConfirm ? "text" : "password"}

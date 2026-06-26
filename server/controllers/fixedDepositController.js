@@ -6,6 +6,10 @@ const DepositApprovalRequest = require('../models/DepositApprovalRequest');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { ensureBankAccountsForUser, syncCustomerAccounts, toWholeRupees } = require('../utils/customerAccounts');
+const {
+  sendDepositRequestEmail,
+  writeDepositRequestNotifications,
+} = require('../utils/depositNotifications');
 const { writeSystemLog } = require('../utils/systemLog');
 
 const toNumber = (value) => Number(value || 0);
@@ -372,21 +376,14 @@ const createFixedDeposit = async (req, res) => {
         { session }
       );
 
-      await writeSystemLog({
-        action: 'fd.create.requested.customer',
-        message: `${customer.name} requested FD creation approval for ${approvalRequest.requestId}.`,
-        actor: customer._id,
-        actorName: customer.name,
-        recipient: customer._id,
-        entityType: 'DepositApprovalRequest',
-        entityId: approvalRequest.requestId,
-        severity: 'info',
-        metadata: {
-          depositAmount: roundedDepositAmount,
-          interestRate: effectiveInterestRate,
-          tenureMonths: numericTenureMonths,
-        },
-      }, { session });
+      await writeDepositRequestNotifications({
+        customer,
+        request: approvalRequest,
+        productType: 'fd',
+        actionType: 'create',
+        amount: roundedDepositAmount,
+        session,
+      });
 
       responsePayload = {
         message: 'FD request submitted for manager approval',
@@ -394,7 +391,12 @@ const createFixedDeposit = async (req, res) => {
       };
     });
 
-    res.status(202).json(responsePayload);
+    const email = await sendDepositRequestEmail({
+      customer,
+      request: responsePayload.approvalRequest,
+    });
+
+    res.status(202).json({ ...responsePayload, email });
   } catch (error) {
     res.status(400).json({ message: error.message || 'Unable to create FD' });
   } finally {
@@ -492,10 +494,14 @@ const requestPrematureWithdrawal = async (req, res) => {
     const rateConfig = await getDepositRuleConfig();
 
     await session.withTransaction(async () => {
-      const [fixedDeposit, customer] = await Promise.all([
-        FixedDeposit.findOne({ _id: req.params.id, customer: req.user._id }).session(session),
-        User.findOne({ _id: req.user._id, role: 'customer' }).session(session),
-      ]);
+      const fixedDeposit = await FixedDeposit.findOne({
+        _id: req.params.id,
+        customer: req.user._id,
+      }).session(session);
+      const customer = await User.findOne({
+        _id: req.user._id,
+        role: 'customer',
+      }).session(session);
 
       if (!fixedDeposit) throw new Error('Fixed deposit not found');
       if (!customer) throw new Error('Customer not found');
@@ -544,17 +550,15 @@ const requestPrematureWithdrawal = async (req, res) => {
         { session }
       );
 
-      await writeSystemLog({
-        action: 'fd.premature_withdrawal.requested.customer',
-        message: `${customer.name} requested premature withdrawal approval for FD ${fixedDeposit.fdNumber}.`,
-        actor: customer._id,
-        actorName: customer.name,
-        recipient: customer._id,
-        entityType: 'DepositApprovalRequest',
-        entityId: approvalRequest.requestId,
-        severity: 'warning',
-        metadata: withdrawal,
-      }, { session });
+      await writeDepositRequestNotifications({
+        customer,
+        request: approvalRequest,
+        productType: 'fd',
+        actionType: 'premature_withdrawal',
+        amount: withdrawal.payoutAmount,
+        depositNumber: fixedDeposit.fdNumber,
+        session,
+      });
 
       responsePayload = {
         message: 'FD premature withdrawal request submitted for manager approval',
@@ -564,7 +568,12 @@ const requestPrematureWithdrawal = async (req, res) => {
       };
     });
 
-    res.json(responsePayload);
+    const email = await sendDepositRequestEmail({
+      customer: req.user,
+      request: responsePayload.approvalRequest,
+    });
+
+    res.json({ ...responsePayload, email });
   } catch (error) {
     res.status(400).json({ message: error.message || 'Unable to withdraw FD' });
   } finally {
@@ -579,10 +588,14 @@ const requestMaturityPayout = async (req, res) => {
     let responsePayload;
 
     await session.withTransaction(async () => {
-      const [fixedDeposit, customer] = await Promise.all([
-        FixedDeposit.findOne({ _id: req.params.id, customer: req.user._id }).session(session),
-        User.findOne({ _id: req.user._id, role: 'customer' }).session(session),
-      ]);
+      const fixedDeposit = await FixedDeposit.findOne({
+        _id: req.params.id,
+        customer: req.user._id,
+      }).session(session);
+      const customer = await User.findOne({
+        _id: req.user._id,
+        role: 'customer',
+      }).session(session);
 
       if (!fixedDeposit) throw new Error('Fixed deposit not found');
       if (!customer) throw new Error('Customer not found');

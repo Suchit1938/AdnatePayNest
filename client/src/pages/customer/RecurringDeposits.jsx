@@ -113,6 +113,8 @@ const PreviewMetric = ({ label, value, tone = "default" }) => {
   );
 };
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const buildRdWithdrawalPreview = (rd) => {
   const accumulatedAmount = Number(
     rd.accumulatedValue ||
@@ -131,7 +133,7 @@ const buildRdWithdrawalPreview = (rd) => {
   };
 };
 
-const RecurringDeposits = () => {
+const RecurringDeposits = ({ embedded = false }) => {
   const { user } = useAuth();
   const toast = useToast();
   const [recurringDeposits, setRecurringDeposits] = useState([]);
@@ -147,7 +149,13 @@ const RecurringDeposits = () => {
 
   const customerAccounts = getCustomerAccounts(user);
   const defaultAccountNumber = customerAccounts[0]?.accountNumber || "";
-  const selectedLinkedAccountNumber = form.linkedAccountNumber || defaultAccountNumber;
+  const hasMultipleCustomerAccounts = customerAccounts.length > 1;
+  const selectedLinkedAccountNumber = hasMultipleCustomerAccounts
+    ? form.linkedAccountNumber
+    : form.linkedAccountNumber || defaultAccountNumber;
+  const selectedLinkedAccount =
+    customerAccounts.find((account) => account.accountNumber === selectedLinkedAccountNumber) ||
+    customerAccounts[0];
 
   const loadRecurringDeposits = useCallback(() =>
     api
@@ -215,7 +223,7 @@ const RecurringDeposits = () => {
 
     return recurringDeposits.filter((rd) => {
       const matchesSearch = !searchText ||
-        [rd.rdNumber, rd.bankName, rd.linkedAccountNumber]
+        [rd.rdNumber, rd.linkedAccountNumber]
           .join(" ")
           .toLowerCase()
           .includes(searchText);
@@ -254,6 +262,11 @@ const RecurringDeposits = () => {
       return;
     }
 
+    if (hasMultipleCustomerAccounts && !selectedLinkedAccountNumber) {
+      toast.warning("Select the account to debit for this RD.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await api.post("/recurring-deposits", {
@@ -263,7 +276,7 @@ const RecurringDeposits = () => {
       toast.success("RD request submitted for manager approval.");
       setForm((current) => ({
         ...initialForm,
-        linkedAccountNumber: current.linkedAccountNumber || defaultAccountNumber,
+        linkedAccountNumber: hasMultipleCustomerAccounts ? "" : current.linkedAccountNumber || defaultAccountNumber,
       }));
       setCalculatedPreview(null);
       await loadRecurringDeposits();
@@ -292,14 +305,15 @@ const RecurringDeposits = () => {
     }
   };
 
-  return (
-    <DashboardLayout>
-      <PageContent>
-        <PageHeader
+  const content = (
+    <PageContent>
+        {!embedded && (
+          <PageHeader
           eyebrow="Customer / Recurring Deposits"
           title="My Recurring Deposits"
           subtitle="Create RDs, track monthly auto-debits, installment progress, maturity value, and closure actions."
         />
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           <StatsCard
@@ -375,7 +389,7 @@ const RecurringDeposits = () => {
           >
             <form onSubmit={createRecurringDeposit} className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <label className="label-field">
-                <span>Monthly Installment (₹)</span>
+                <span>Monthly Installment (₹)<RequiredMark /></span>
                 <select
                   value={form.monthlyInstallmentAmount}
                   onChange={(event) => updateForm("monthlyInstallmentAmount", event.target.value)}
@@ -390,7 +404,7 @@ const RecurringDeposits = () => {
               </label>
 
               <div className="label-field">
-                <span>Tenure</span>
+                <span>Tenure<RequiredMark /></span>
                 <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg border border-bank-card-border bg-bank-surface p-1">
                   {rdTenureOptions.map((option) => {
                     const isSelected = option.value === form.tenureMonths;
@@ -413,46 +427,49 @@ const RecurringDeposits = () => {
                 </div>
               </div>
 
-              <label className="label-field">
-                <span>Linked Account</span>
-                <select
-                  value={selectedLinkedAccountNumber}
-                  onChange={(event) => updateForm("linkedAccountNumber", event.target.value)}
-                  className="input-field"
-                >
-                  {customerAccounts.length === 0 && <option value="">Default account</option>}
-                  {customerAccounts.map((account) => (
-                    <option key={account.accountNumber} value={account.accountNumber}>
-                      {account.accountType || "Account"} / {account.accountNumber}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {hasMultipleCustomerAccounts ? (
+                <label className="label-field">
+                  <span>Linked Account<RequiredMark /></span>
+                  <select
+                    value={selectedLinkedAccountNumber}
+                    onChange={(event) => updateForm("linkedAccountNumber", event.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">Select linked account</option>
+                    {customerAccounts.map((account) => (
+                      <option key={account.accountNumber} value={account.accountNumber}>
+                        {account.accountType || "Account"} / {account.accountNumber}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="label-field">
+                  <span>Linked Account</span>
+                  <div className="input-field bg-slate-100 font-semibold text-slate-600">
+                    {selectedLinkedAccount
+                      ? `${selectedLinkedAccount.accountType || "Account"} / ${selectedLinkedAccount.accountNumber}`
+                      : "Default account"}
+                  </div>
+                </div>
+              )}
 
-              <label className="label-field">
-                <span>Start Date</span>
-                <input
-                  type="date"
-                  value={form.startDate}
-                  onChange={(event) => updateForm("startDate", event.target.value)}
-                  className="input-field"
-                />
-              </label>
+              <div className="rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Opening Date</p>
+                <p className="mt-1 text-sm font-semibold text-slate-700">{formatDate(form.startDate)}</p>
+              </div>
 
-              <label className="label-field md:col-span-2">
-                <span>Applicable Interest Rate (% p.a.)</span>
-                <input
-                  type="number"
-                  value={applicableRate?.annualInterestRate ?? ""}
-                  disabled
-                  className="input-field disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600"
-                />
+              <div className="md:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-bank-eyebrow">Interest Rate</p>
+                <p className="mt-1 text-lg font-extrabold text-slate-950">
+                  {applicableRate?.annualInterestRate ?? "0"}% p.a.
+                </p>
                 <p className="mt-2 text-xs font-semibold text-slate-500">
                   {applicableRate
                     ? `${applicableRate.label} from configured RD rates`
                     : "No configured RD rate matched this tenure."}
                 </p>
-              </label>
+              </div>
 
               <div className="md:col-span-2 rounded-lg border border-bank-card-border bg-bank-surface px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -578,7 +595,7 @@ const RecurringDeposits = () => {
                         <td className="px-4 py-3">
                           <p className="font-bold text-slate-900">{rd.rdNumber}</p>
                           <p className="mt-1 text-xs font-semibold text-slate-500">
-                            {rd.bankName} / {rd.linkedAccountNumber || "Linked account"}
+                            {rd.linkedAccountNumber || "Linked account"}
                           </p>
                         </td>
                         <td className="px-4 py-3">
@@ -767,6 +784,15 @@ const RecurringDeposits = () => {
           </div>
         )}
       </PageContent>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <DashboardLayout>
+      {content}
     </DashboardLayout>
   );
 };

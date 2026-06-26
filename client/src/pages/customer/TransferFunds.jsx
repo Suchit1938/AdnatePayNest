@@ -18,6 +18,11 @@ const createTransferIdempotencyKey = () => {
   return `transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
+const accountSelectLabel = (account) =>
+  `${account.accountType || "Account"} - ${maskAccountNumber(account.accountNumber)}`;
+
 const TransferFunds = () => {
   const toast = useToast();
   const { setSessionUser, user } = useAuth();
@@ -62,7 +67,7 @@ const TransferFunds = () => {
   const selectedBeneficiary =
     beneficiaries.find(
       (beneficiary) => String(beneficiary.id) === formData.beneficiaryId
-    ) || beneficiaries[0];
+    ) || null;
   const selectedBeneficiaryAccounts = selectedBeneficiary?.accounts?.length
     ? selectedBeneficiary.accounts
     : [{ accountNumber: selectedBeneficiary?.account, accountType: selectedBeneficiary?.accountType }].filter(
@@ -75,12 +80,16 @@ const TransferFunds = () => {
       (account) => account.accountNumber === formData.fromAccountNumber
     )
       ? formData.fromAccountNumber
-      : firstAccountNumber,
+      : userAccounts.length === 1
+        ? firstAccountNumber
+        : "",
     toAccountNumber: selectedBeneficiaryAccounts.some(
       (account) => account.accountNumber === formData.toAccountNumber
     )
       ? formData.toAccountNumber
-      : selectedBeneficiaryAccounts[0]?.accountNumber || "",
+      : selectedBeneficiaryAccounts.length === 1
+        ? selectedBeneficiaryAccounts[0]?.accountNumber || ""
+        : "",
   };
   const effectiveOwnFormData = {
     ...ownFormData,
@@ -88,14 +97,14 @@ const TransferFunds = () => {
       (account) => account.accountNumber === ownFormData.fromAccountNumber
     )
       ? ownFormData.fromAccountNumber
-      : firstAccountNumber,
+      : userAccounts.length === 1
+        ? firstAccountNumber
+        : "",
     toAccountNumber: userAccounts.some(
       (account) => account.accountNumber === ownFormData.toAccountNumber
     )
       ? ownFormData.toAccountNumber
-      : userAccounts.find(
-          (account) => account.accountNumber !== firstAccountNumber
-        )?.accountNumber || "",
+      : "",
   };
   const selectedFromAccount = userAccounts.find(
     (account) => account.accountNumber === effectiveFormData.fromAccountNumber
@@ -115,6 +124,8 @@ const TransferFunds = () => {
   const overdraftNeeded = Math.max(0, beneficiaryTransferAmount - selectedBalance);
   const ownTransferAmount = Number(ownFormData.amount || 0);
   const beneficiaryAccounts = selectedBeneficiaryAccounts;
+  const hasMultipleUserAccounts = userAccounts.length > 1;
+  const hasMultipleBeneficiaryAccounts = beneficiaryAccounts.length > 1;
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -132,7 +143,7 @@ const TransferFunds = () => {
         return {
           ...current,
           beneficiaryId: value,
-          toAccountNumber: accounts[0]?.accountNumber || "",
+          toAccountNumber: accounts.length === 1 ? accounts[0]?.accountNumber || "" : "",
         };
       }
 
@@ -145,15 +156,10 @@ const TransferFunds = () => {
 
     setOwnFormData((current) => {
       if (name === "fromAccountNumber") {
-        const nextToAccount =
-          current.toAccountNumber && current.toAccountNumber !== value
-            ? current.toAccountNumber
-            : userAccounts.find((account) => account.accountNumber !== value)?.accountNumber || "";
-
         return {
           ...current,
           fromAccountNumber: value,
-          toAccountNumber: nextToAccount,
+          toAccountNumber: current.toAccountNumber === value ? "" : current.toAccountNumber,
         };
       }
 
@@ -202,7 +208,13 @@ const TransferFunds = () => {
 
         setSessionUser(nextUser);
       }
-      setFormData((current) => ({ ...current, amount: "", remarks: "" }));
+      setFormData((current) => ({
+        ...current,
+        beneficiaryId: "",
+        toAccountNumber: "",
+        amount: "",
+        remarks: "",
+      }));
     } catch (transferError) {
       const errorMessage = transferError.response?.data?.message || "Transfer failed.";
       setError(errorMessage);
@@ -370,23 +382,28 @@ const TransferFunds = () => {
             <form onSubmit={submitTransfer} className="grid grid-cols-1 gap-x-5 gap-y-5 lg:grid-cols-2">
 
         <label className="label-field">
-          From Account
-          <select
-            name="fromAccountNumber"
-            value={effectiveFormData.fromAccountNumber}
-            onChange={handleChange}
-            className="input-field"
-          >
-            {userAccounts.map((account) => (
-              <option key={account.accountNumber} value={account.accountNumber}>
-                {account.accountType} - {maskAccountNumber(account.accountNumber)} -{" "}
-                {formatCurrency(account.balance || 0)}
-                {account.transferLimit
-                  ? ` - Limit ${formatCurrency(account.transferLimit)}`
-                  : ""}
-              </option>
-            ))}
-          </select>
+          <span>From Account<RequiredMark /></span>
+          {hasMultipleUserAccounts ? (
+            <select
+              name="fromAccountNumber"
+              value={effectiveFormData.fromAccountNumber}
+              onChange={handleChange}
+              className="input-field"
+            >
+              <option value="">Select source account</option>
+              {userAccounts.map((account) => (
+                <option key={account.accountNumber} value={account.accountNumber}>
+                  {accountSelectLabel(account)}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="input-field bg-slate-100 font-semibold text-slate-600">
+              {selectedFromAccount
+                ? accountSelectLabel(selectedFromAccount)
+                : "No active account"}
+            </div>
+          )}
           {selectedTransferLimit > 0 && (
             <span className="mt-2 block text-xs font-semibold text-slate-500">
               Per transfer limit: {formatCurrency(selectedTransferLimit)}. Higher amounts need manager approval.
@@ -428,7 +445,7 @@ const TransferFunds = () => {
         )}
 
         <label className="label-field">
-          Beneficiary
+          <span>Beneficiary<RequiredMark /></span>
           <select
             name="beneficiaryId"
             value={effectiveFormData.beneficiaryId}
@@ -436,39 +453,48 @@ const TransferFunds = () => {
             className="input-field"
             disabled={beneficiaries.length === 0}
           >
+            <option value="">Select beneficiary</option>
             {beneficiaries.length === 0 && (
               <option value="">No saved beneficiaries</option>
             )}
             {beneficiaries.map((beneficiary) => (
               <option key={beneficiary.id} value={beneficiary.id}>
-                {beneficiary.name} - {beneficiary.customerId}
+                {beneficiary.name}
               </option>
             ))}
           </select>
         </label>
 
-        <label className="label-field">
-          Beneficiary Account
-          <select
-            name="toAccountNumber"
-            value={effectiveFormData.toAccountNumber}
-            onChange={handleChange}
-            className="input-field"
-            disabled={beneficiaryAccounts.length === 0}
-          >
-            {beneficiaryAccounts.length === 0 && (
-              <option value="">No beneficiary account selected</option>
-            )}
-            {beneficiaryAccounts.map((account) => (
-              <option key={account.accountNumber} value={account.accountNumber}>
-                {account.accountType || "Account"} - {maskAccountNumber(account.accountNumber)}
-              </option>
-            ))}
-          </select>
-        </label>
+        {hasMultipleBeneficiaryAccounts ? (
+          <label className="label-field">
+            <span>Beneficiary Account<RequiredMark /></span>
+            <select
+              name="toAccountNumber"
+              value={effectiveFormData.toAccountNumber}
+              onChange={handleChange}
+              className="input-field"
+            >
+              <option value="">Select beneficiary account</option>
+              {beneficiaryAccounts.map((account) => (
+                <option key={account.accountNumber} value={account.accountNumber}>
+                  {account.accountType || "Account"} - {maskAccountNumber(account.accountNumber)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <div className="label-field">
+            <span>Beneficiary Account</span>
+            <div className="input-field bg-slate-100 font-semibold text-slate-600">
+              {beneficiaryAccounts[0]
+                ? `${beneficiaryAccounts[0].accountType || "Account"} - ${maskAccountNumber(beneficiaryAccounts[0].accountNumber)}`
+                : "No beneficiary account selected"}
+            </div>
+          </div>
+        )}
 
         <label className="label-field">
-          Amount
+          <span>Amount<RequiredMark /></span>
           <input
             name="amount"
             type="number"
@@ -508,7 +534,7 @@ const TransferFunds = () => {
               )}
 
               <label className="label-field">
-                From Account
+                <span>From Account<RequiredMark /></span>
                 <select
                   name="fromAccountNumber"
                   value={effectiveOwnFormData.fromAccountNumber}
@@ -516,17 +542,17 @@ const TransferFunds = () => {
                   className="input-field"
                   disabled={userAccounts.length < 2}
                 >
+                  <option value="">Select source account</option>
                   {userAccounts.map((account) => (
                     <option key={account.accountNumber} value={account.accountNumber}>
-                      {account.accountType} - {maskAccountNumber(account.accountNumber)} -{" "}
-                      {formatCurrency(account.balance || 0)}
+                      {accountSelectLabel(account)}
                     </option>
                   ))}
                 </select>
               </label>
 
               <label className="label-field">
-                To Account
+                <span>To Account<RequiredMark /></span>
                 <select
                   name="toAccountNumber"
                   value={effectiveOwnFormData.toAccountNumber}
@@ -534,19 +560,19 @@ const TransferFunds = () => {
                   className="input-field"
                   disabled={userAccounts.length < 2}
                 >
+                  <option value="">Select destination account</option>
                   {userAccounts
-                    .filter((account) => account.accountNumber !== effectiveOwnFormData.fromAccountNumber)
+                    .filter((account) => !effectiveOwnFormData.fromAccountNumber || account.accountNumber !== effectiveOwnFormData.fromAccountNumber)
                     .map((account) => (
                       <option key={account.accountNumber} value={account.accountNumber}>
-                        {account.accountType} - {maskAccountNumber(account.accountNumber)} -{" "}
-                        {formatCurrency(account.balance || 0)}
+                        {accountSelectLabel(account)}
                       </option>
                     ))}
                 </select>
               </label>
 
               <label className="label-field">
-                Amount
+                <span>Amount<RequiredMark /></span>
                 <input
                   name="amount"
                   type="number"

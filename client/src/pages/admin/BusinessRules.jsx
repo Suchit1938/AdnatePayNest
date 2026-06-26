@@ -20,6 +20,8 @@ import PageHeader from "../../components/ui/PageHeader";
 import { useToast } from "../../components/ui/useToast";
 import DashboardLayout from "../../layouts/DashboardLayout";
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const permissionFields = [
   {
     key: "perTxnLimit",
@@ -935,7 +937,7 @@ const BusinessRules = () => {
 
           <form onSubmit={sendMessage} className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
             <label className="label-field">
-              <span>Send To</span>
+              <span>Send To<RequiredMark /></span>
               <select
                 value={messageForm.targetType}
                 onChange={(event) => updateMessageForm("targetType", event.target.value)}
@@ -950,7 +952,7 @@ const BusinessRules = () => {
 
             {messageForm.targetType === "customer" ? (
               <label className="label-field">
-                <span>Customer</span>
+                <span>Customer<RequiredMark /></span>
                 <select
                   value={messageForm.targetUserId}
                   onChange={(event) => updateMessageForm("targetUserId", event.target.value)}
@@ -966,7 +968,7 @@ const BusinessRules = () => {
               </label>
             ) : messageForm.targetType === "customersByTier" ? (
               <label className="label-field">
-                <span>Classification</span>
+                <span>Classification<RequiredMark /></span>
                 <select
                   value={messageForm.targetTier}
                   onChange={(event) => updateMessageForm("targetTier", event.target.value)}
@@ -1016,7 +1018,7 @@ const BusinessRules = () => {
             )}
 
             <label className="label-field lg:col-span-2">
-              <span>Message Title</span>
+              <span>Message Title<RequiredMark /></span>
               <input
                 value={messageForm.title}
                 onChange={(event) => updateMessageForm("title", event.target.value)}
@@ -1026,7 +1028,7 @@ const BusinessRules = () => {
             </label>
 
             <label className="label-field lg:col-span-2">
-              <span>Message Body</span>
+              <span>Message Body<RequiredMark /></span>
               <textarea
                 rows={5}
                 value={messageForm.body}

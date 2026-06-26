@@ -22,6 +22,8 @@ import DashboardLayout from "../../layouts/DashboardLayout";
 import { useAuth } from "../../context/useAuth";
 import { BANK_NAME } from "../../utils/format";
 
+const RequiredMark = () => <span className="ml-1 text-sm font-black text-red-600">*</span>;
+
 const Profile = () => {
   const toast = useToast();
   const { user, setSessionUser } = useAuth();
@@ -354,7 +356,7 @@ const Profile = () => {
                 {passwordStep === "details" ? (
                   <>
                     <label className="label-field">
-                      Current Password
+                      <span>Current Password<RequiredMark /></span>
                       <div className="relative">
                         <input
                           type={visiblePasswords.current ? "text" : "password"}
@@ -377,7 +379,7 @@ const Profile = () => {
                       </div>
                     </label>
                     <label className="label-field">
-                      New Password
+                      <span>New Password<RequiredMark /></span>
                       <div className="relative">
                         <input
                           type={visiblePasswords.next ? "text" : "password"}
@@ -400,7 +402,7 @@ const Profile = () => {
                       </div>
                     </label>
                     <label className="label-field">
-                      Confirm New Password
+                      <span>Confirm New Password<RequiredMark /></span>
                       <div className="relative">
                         <input
                           type={visiblePasswords.confirm ? "text" : "password"}
@@ -425,7 +427,7 @@ const Profile = () => {
                   </>
                 ) : (
                   <label className="label-field">
-                    Email OTP
+                    <span>Email OTP<RequiredMark /></span>
                     <input
                       value={passwordForm.otp}
                       onChange={(event) => updatePasswordForm("otp", event.target.value)}

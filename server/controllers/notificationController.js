@@ -28,6 +28,24 @@ const titlesByAction = {
   'fd.premature_withdrawal.customer': 'FD Premature Withdrawal',
   'fd.renewed.customer': 'FD Renewed',
   'fd.maturity_credited.customer': 'Maturity Amount Credited',
+  'deposit.fd.create.requested.customer': 'FD Request Submitted',
+  'deposit.fd.create.requested.manager': 'FD Approval Needed',
+  'deposit.fd.create.requested.admin': 'FD Request Submitted',
+  'deposit.fd.create.approved.customer': 'FD Approved',
+  'deposit.fd.create.approved.manager': 'FD Approved',
+  'deposit.fd.create.approved.admin': 'FD Approved',
+  'deposit.fd.create.rejected.customer': 'FD Rejected',
+  'deposit.fd.create.rejected.manager': 'FD Rejected',
+  'deposit.fd.create.rejected.admin': 'FD Rejected',
+  'deposit.fd.premature_withdrawal.requested.customer': 'FD Withdrawal Submitted',
+  'deposit.fd.premature_withdrawal.requested.manager': 'FD Withdrawal Approval Needed',
+  'deposit.fd.premature_withdrawal.requested.admin': 'FD Withdrawal Submitted',
+  'deposit.fd.premature_withdrawal.approved.customer': 'FD Withdrawal Approved',
+  'deposit.fd.premature_withdrawal.approved.manager': 'FD Withdrawal Approved',
+  'deposit.fd.premature_withdrawal.approved.admin': 'FD Withdrawal Approved',
+  'deposit.fd.premature_withdrawal.rejected.customer': 'FD Withdrawal Rejected',
+  'deposit.fd.premature_withdrawal.rejected.manager': 'FD Withdrawal Rejected',
+  'deposit.fd.premature_withdrawal.rejected.admin': 'FD Withdrawal Rejected',
   'rd.created.customer': 'RD Created Successfully',
   'rd.maturity_soon.customer': 'RD Maturity Reminder',
   'rd.installment.paid.customer': 'RD Installment Paid',
@@ -36,6 +54,24 @@ const titlesByAction = {
   'rd.premature_withdrawal.customer': 'RD Premature Withdrawal',
   'rd.renewed.customer': 'RD Renewed',
   'rd.maturity_credited.customer': 'Maturity Amount Credited',
+  'deposit.rd.create.requested.customer': 'RD Request Submitted',
+  'deposit.rd.create.requested.manager': 'RD Approval Needed',
+  'deposit.rd.create.requested.admin': 'RD Request Submitted',
+  'deposit.rd.create.approved.customer': 'RD Approved',
+  'deposit.rd.create.approved.manager': 'RD Approved',
+  'deposit.rd.create.approved.admin': 'RD Approved',
+  'deposit.rd.create.rejected.customer': 'RD Rejected',
+  'deposit.rd.create.rejected.manager': 'RD Rejected',
+  'deposit.rd.create.rejected.admin': 'RD Rejected',
+  'deposit.rd.premature_withdrawal.requested.customer': 'RD Withdrawal Submitted',
+  'deposit.rd.premature_withdrawal.requested.manager': 'RD Withdrawal Approval Needed',
+  'deposit.rd.premature_withdrawal.requested.admin': 'RD Withdrawal Submitted',
+  'deposit.rd.premature_withdrawal.approved.customer': 'RD Withdrawal Approved',
+  'deposit.rd.premature_withdrawal.approved.manager': 'RD Withdrawal Approved',
+  'deposit.rd.premature_withdrawal.approved.admin': 'RD Withdrawal Approved',
+  'deposit.rd.premature_withdrawal.rejected.customer': 'RD Withdrawal Rejected',
+  'deposit.rd.premature_withdrawal.rejected.manager': 'RD Withdrawal Rejected',
+  'deposit.rd.premature_withdrawal.rejected.admin': 'RD Withdrawal Rejected',
   'overdraft.payoff.completed': 'Overdraft Paid Off',
   'overdraft.payoff.partial': 'Overdraft Payoff Posted',
   'overdraft.used': 'Overdraft Used',
@@ -172,11 +208,25 @@ const getNotifications = async (req, res) => {
     'overdraft.third_attempt',
     'tier.policy.updated.admin',
   ];
+  const customerLogFilter = {
+    $or: [
+      { recipient: req.user._id },
+      {
+        actor: req.user._id,
+        action: { $nin: ['loan.part_payment.manager'], $not: /\.manager$|\.admin$/ },
+      },
+    ],
+  };
   const filter = req.user.role === 'admin'
-    ? { action: { $in: adminActions } }
+    ? {
+        $or: [
+          { action: { $in: adminActions } },
+          { action: /^deposit\..*\.admin$/ },
+        ],
+      }
     : req.user.role === 'manager'
       ? { $or: [{ recipient: req.user._id }, { actor: req.user._id }] }
-      : { actor: req.user._id, action: { $ne: 'loan.part_payment.manager' } };
+      : customerLogFilter;
 
   const logs = await SystemLog.find(filter).sort({ createdAt: -1 }).limit(50);
 
