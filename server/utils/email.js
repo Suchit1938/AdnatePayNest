@@ -1,4 +1,6 @@
 const fs = require('fs');
+const dns = require('dns');
+const net = require('net');
 const nodemailer = require('nodemailer');
 const { logoCid, logoPath } = require('./branding');
 
@@ -29,9 +31,37 @@ const hasEmailConfig = () =>
     !isPlaceholder(emailPass())
   );
 
-const createTransporter = (overrides = {}) =>
-  nodemailer.createTransport({
-    host: emailHost(),
+const resolveEmailHost = async () => {
+  const host = emailHost();
+
+  if (net.isIP(host)) {
+    return { host };
+  }
+
+  try {
+    const [ipv4Address] = await dns.promises.resolve4(host);
+
+    if (ipv4Address) {
+      return {
+        host: ipv4Address,
+        servername: host,
+      };
+    }
+  } catch (error) {
+    console.warn('Email host IPv4 lookup failed, falling back to configured host:', {
+      host,
+      message: error.message,
+    });
+  }
+
+  return { host, servername: host };
+};
+
+const createTransporter = async (overrides = {}) => {
+  const resolvedHost = await resolveEmailHost();
+
+  return nodemailer.createTransport({
+    host: resolvedHost.host,
     port: overrides.port ?? emailPort(),
     secure: overrides.secure ?? emailSecure(),
     family: 4,
@@ -42,14 +72,20 @@ const createTransporter = (overrides = {}) =>
       user: emailUser(),
       pass: emailPass(),
     },
+    tls: resolvedHost.servername
+      ? {
+        servername: resolvedHost.servername,
+      }
+      : undefined,
   });
+};
 
 const isConnectionTimeout = (error) =>
   ['ETIMEDOUT', 'ESOCKET', 'ECONNECTION'].includes(error?.code) ||
   /timeout|timed out/i.test(error?.message || '');
 
-const sendMailWithConfiguredTransport = (mailOptions) =>
-  createTransporter().sendMail(mailOptions);
+const sendMailWithConfiguredTransport = async (mailOptions) =>
+  (await createTransporter()).sendMail(mailOptions);
 
 const sendMailWithFallbackTransport = async (mailOptions, error) => {
   if (!isConnectionTimeout(error) || emailPort() === 465) {
@@ -58,7 +94,7 @@ const sendMailWithFallbackTransport = async (mailOptions, error) => {
 
   console.warn('Email send retrying with SMTP SSL port 465 after connection timeout.');
 
-  return createTransporter({ port: 465, secure: true }).sendMail(mailOptions);
+  return (await createTransporter({ port: 465, secure: true })).sendMail(mailOptions);
 };
 const getLogoAttachment = () =>
   fs.existsSync(logoPath)
