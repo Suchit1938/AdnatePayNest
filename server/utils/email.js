@@ -29,11 +29,11 @@ const hasEmailConfig = () =>
     !isPlaceholder(emailPass())
   );
 
-const createTransporter = () =>
+const createTransporter = (overrides = {}) =>
   nodemailer.createTransport({
     host: emailHost(),
-    port: emailPort(),
-    secure: emailSecure(),
+    port: overrides.port ?? emailPort(),
+    secure: overrides.secure ?? emailSecure(),
     family: 4,
     connectionTimeout: 15000,
     greetingTimeout: 15000,
@@ -43,6 +43,23 @@ const createTransporter = () =>
       pass: emailPass(),
     },
   });
+
+const isConnectionTimeout = (error) =>
+  ['ETIMEDOUT', 'ESOCKET', 'ECONNECTION'].includes(error?.code) ||
+  /timeout|timed out/i.test(error?.message || '');
+
+const sendMailWithConfiguredTransport = (mailOptions) =>
+  createTransporter().sendMail(mailOptions);
+
+const sendMailWithFallbackTransport = async (mailOptions, error) => {
+  if (!isConnectionTimeout(error) || emailPort() === 465) {
+    throw error;
+  }
+
+  console.warn('Email send retrying with SMTP SSL port 465 after connection timeout.');
+
+  return createTransporter({ port: 465, secure: true }).sendMail(mailOptions);
+};
 const getLogoAttachment = () =>
   fs.existsSync(logoPath)
     ? {
@@ -115,17 +132,23 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
     };
   }
 
-  const transporter = createTransporter();
+  const mailOptions = {
+    from: envValue('EMAIL_FROM') || emailUser(),
+    to,
+    subject,
+    text,
+    html: addLogoToHtml(html, text),
+    attachments: addLogoAttachment(attachments),
+  };
 
   try {
-    const info = await transporter.sendMail({
-      from: envValue('EMAIL_FROM') || emailUser(),
-      to,
-      subject,
-      text,
-      html: addLogoToHtml(html, text),
-      attachments: addLogoAttachment(attachments),
-    });
+    let info;
+
+    try {
+      info = await sendMailWithConfiguredTransport(mailOptions);
+    } catch (error) {
+      info = await sendMailWithFallbackTransport(mailOptions, error);
+    }
 
     return {
       sent: true,
