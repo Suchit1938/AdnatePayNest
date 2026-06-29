@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BadgeCheck,
-  Building2,
   Eye,
   EyeOff,
   IdCard,
   KeyRound,
   Pencil,
-  Phone,
   Save,
   ShieldCheck,
-  User,
   X,
 } from "lucide-react";
 import api from "../../api/axios";
@@ -154,6 +150,10 @@ const Profile = () => {
       });
 
       toast.success(data.message || "Password changed successfully.");
+      if (data.user) {
+        setSessionUser(data.user);
+        setProfileUser(data.user);
+      }
       setPasswordForm({
         currentPassword: "",
         newPassword: "",

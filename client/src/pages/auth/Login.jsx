@@ -97,6 +97,11 @@ function Login() {
       const user = await login(normalizedEmail, password);
       saveRecentEmail(user.email);
 
+      if (user.mustChangePassword) {
+        navigate("/force-password-change");
+        return;
+      }
+
       if (user.role === "admin") {
         navigate("/admin");
       } else if (user.role === "manager") {

@@ -22,6 +22,8 @@ const DEFAULT_ASSIGNED_REGION = process.env.BANK_REGION || 'Jaipur';
 const GRACE_PERIOD_DAYS = 3;
 const REVIEW_CYCLE = 'Monthly';
 
+const normalizeIdempotencyKey = (value) => String(value || '').trim().slice(0, 128);
+
 const getCustomers = async (req, res) => {
   const customers = await User.find({ role: 'customer' }).sort({ createdAt: -1 });
   const bankAccounts = await BankAccount.find({
@@ -720,10 +722,34 @@ const createUser = async (req, res) => {
 
   const displayName = name || fullName;
   const normalizedEmail = email?.toLowerCase().trim();
+  const idempotencyKey = normalizeIdempotencyKey(
+    req.get('Idempotency-Key') || req.body.idempotencyKey
+  );
+  const idempotencyActor = req.user?._id;
   let emailDelivery = null;
 
   if (!displayName || !normalizedEmail) {
     return res.status(400).json({ message: 'Name and email are required' });
+  }
+
+  if (idempotencyKey && idempotencyActor) {
+    const existingIdempotentUser = await User.findOne({
+      userCreationIdempotencyActor: idempotencyActor,
+      userCreationIdempotencyKey: idempotencyKey,
+    }).select('+userCreationEmailDelivery +userCreationManagerReplacement');
+
+    if (existingIdempotentUser) {
+      if (!existingIdempotentUser.userCreationEmailDelivery && !existingIdempotentUser.userCreationManagerReplacement) {
+        return res.status(409).json({ message: 'User creation is already processing.' });
+      }
+
+      return res.json({
+        user: serializeUser(existingIdempotentUser),
+        email: existingIdempotentUser.userCreationEmailDelivery,
+        managerReplacement: existingIdempotentUser.userCreationManagerReplacement,
+        idempotent: true,
+      });
+    }
   }
 
   const normalizedPhone = phone?.trim();
@@ -903,6 +929,9 @@ const createUser = async (req, res) => {
     permissions,
     createdBy,
     accounts: isCustomer ? [userAccount] : [],
+    mustChangePassword: isCustomer,
+    userCreationIdempotencyKey: idempotencyKey || undefined,
+    userCreationIdempotencyActor: idempotencyActor || undefined,
   });
 
   if (!isCustomer) {
@@ -1051,6 +1080,10 @@ Our Technology, Your Trust`,
         message: delivery.message || 'Welcome email was not sent.',
       };
   }
+
+  user.userCreationEmailDelivery = emailDelivery;
+  user.userCreationManagerReplacement = isCustomer ? undefined : managerReplacement;
+  await user.save();
 
   res.status(201).json({
     user: serializeUser(user),

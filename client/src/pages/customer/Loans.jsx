@@ -289,10 +289,17 @@ const Loans = () => {
   const [isForeclosing, setIsForeclosing] = useState(false);
   const [selectedLoanTab, setSelectedLoanTab] = useState("overview");
   const [activeLoanPageTab, setActiveLoanPageTab] = useState("apply");
+  const [selectedPaymentAccountNumber, setSelectedPaymentAccountNumber] = useState("");
   const loanActionLocks = useRef({
     emi: false,
     partPayment: false,
     foreclosure: false,
+  });
+  const loanActionIdempotencyKeys = useRef({
+    application: createLoanIdempotencyKey(),
+    emi: createLoanIdempotencyKey(),
+    partPayment: createLoanIdempotencyKey(),
+    foreclosure: createLoanIdempotencyKey(),
   });
 
   const customerAccounts = useMemo(
@@ -367,6 +374,14 @@ const Loans = () => {
   const activeLoans = loans.filter((loan) => ["approved", "disbursed"].includes(loan.status));
   const pendingLoans = loans.filter((loan) => ["submitted", "under_review"].includes(loan.status));
   const selectedLoan = loans.find((loan) => loan.id === selectedLoanId);
+  const effectivePaymentAccountNumber =
+    selectedPaymentAccountNumber ||
+    selectedLoan?.disbursementAccountNumber ||
+    customerAccounts[0]?.accountNumber ||
+    "";
+  const selectedPaymentAccount =
+    customerAccounts.find((account) => account.accountNumber === effectivePaymentAccountNumber) ||
+    customerAccounts[0];
   const summaryLoan = selectedLoan || activeLoans[0] || loans[0];
   const selectedSupportingFields = supportingDetailFieldsByLoanType[form.loanType] || [];
   const isEducationLoan = form.loanType === "education";
@@ -487,6 +502,7 @@ const Loans = () => {
     )
   );
   const partPaymentPreviewAmount = Number(partPaymentAmount || 0);
+  const maxPartPaymentBeforeForeclosure = Math.floor(selectedOutstandingPrincipal * 0.9) - 1;
   const partPaymentCharge = Math.round(
     partPaymentPreviewAmount * Number(partPaymentPolicy.chargePercentage || 0) / 100
   );
@@ -587,7 +603,8 @@ const Loans = () => {
     }
 
     if (numericMonthlyIncome > 0 && emiPreview > numericMonthlyIncome * 0.5) {
-      errors.emiPreview = "EMI is above 50% of monthly income. Reduce amount or increase tenure.";
+      const emiRatio = Math.round((emiPreview / numericMonthlyIncome) * 100);
+      errors.emiPreview = `Estimated EMI is ${emiRatio}% of ${incomeFieldLabel.toLowerCase()}; the allowed maximum is 50%.`;
     }
 
     if (
@@ -595,7 +612,8 @@ const Loans = () => {
       numericLiabilities >= 0 &&
       numericLiabilities + emiPreview > numericMonthlyIncome * 0.6
     ) {
-      errors.totalObligations = "Existing liabilities plus EMI should stay within 60% of monthly income.";
+      const obligationRatio = Math.round(((numericLiabilities + emiPreview) / numericMonthlyIncome) * 100);
+      errors.totalObligations = `Total monthly obligations are ${obligationRatio}% of ${incomeFieldLabel.toLowerCase()}; the allowed maximum is 60%.`;
     }
 
     if (!selectedAccount) {
@@ -732,6 +750,7 @@ const Loans = () => {
       emiPreview: true,
       totalObligations: true,
     }));
+    setActiveLoanPageTab("apply");
 
     if (loanTypeChanged) {
       setDocuments([]);
@@ -798,6 +817,7 @@ const Loans = () => {
         monthlyIncome: Number(form.monthlyIncome),
         existingMonthlyLiabilities: Number(form.existingMonthlyLiabilities),
         employmentDurationMonths: Number(form.employmentDurationMonths),
+        idempotencyKey: loanActionIdempotencyKeys.current.application,
         disbursementAccountNumber:
           form.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
         supportingDetails: JSON.stringify(supportingDetails[form.loanType] || {}),
@@ -822,11 +842,12 @@ const Loans = () => {
       setDocuments([]);
       setTouchedFields({});
       setSubmitAttempted(false);
+      loanActionIdempotencyKeys.current.application = createLoanIdempotencyKey();
       await loadLoans();
     } catch (error) {
       toast.error(
         error.response?.data?.message ||
-          "Unable to reach the API server. Check that the backend is running on port 5000."
+          "Unable to reach the banking service. Please try again shortly."
       );
     } finally {
       setIsSubmitting(false);
@@ -848,8 +869,8 @@ const Loans = () => {
         `/loans/${selectedLoan.id}/emis/${selectedLoanNextPayableEmi.emiNumber}/pay`,
         {
           paymentAccountNumber:
-            selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
-          idempotencyKey: createLoanIdempotencyKey(),
+            selectedPaymentAccount?.accountNumber || selectedLoan.disbursementAccountNumber,
+          idempotencyKey: loanActionIdempotencyKeys.current.emi,
         }
       );
 
@@ -857,6 +878,7 @@ const Loans = () => {
         current.map((loan) => (loan.id === data.loan.id ? data.loan : loan))
       );
       setSelectedLoanId(data.loan.id);
+      loanActionIdempotencyKeys.current.emi = createLoanIdempotencyKey();
       toast.success(data.message || "EMI paid successfully.");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to pay EMI.");
@@ -891,6 +913,12 @@ const Loans = () => {
       toast.warning("Use foreclosure to clear the full outstanding principal.");
       return;
     }
+    if (amount > maxPartPaymentBeforeForeclosure) {
+      toast.warning(
+        `Use foreclosure when paying ${formatCurrency(Math.ceil(selectedOutstandingPrincipal * 0.9))} or more toward principal.`
+      );
+      return;
+    }
 
     loanActionLocks.current.partPayment = true;
     setIsPostingPartPayment(true);
@@ -900,8 +928,8 @@ const Loans = () => {
         amount,
         repaymentImpact: partPaymentImpact,
         paymentAccountNumber:
-          selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
-        idempotencyKey: createLoanIdempotencyKey(),
+          selectedPaymentAccount?.accountNumber || selectedLoan.disbursementAccountNumber,
+        idempotencyKey: loanActionIdempotencyKeys.current.partPayment,
       });
 
       setLoans((current) =>
@@ -909,6 +937,7 @@ const Loans = () => {
       );
       setSelectedLoanId(data.loan.id);
       setPartPaymentAmount("");
+      loanActionIdempotencyKeys.current.partPayment = createLoanIdempotencyKey();
       toast.success(data.message || "Part-payment posted successfully.");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to post part-payment.");
@@ -928,14 +957,15 @@ const Loans = () => {
     try {
       const { data } = await api.post(`/loans/${selectedLoan.id}/foreclose`, {
         paymentAccountNumber:
-          selectedLoan.disbursementAccountNumber || customerAccounts[0]?.accountNumber,
-        idempotencyKey: createLoanIdempotencyKey(),
+          selectedPaymentAccount?.accountNumber || selectedLoan.disbursementAccountNumber,
+        idempotencyKey: loanActionIdempotencyKeys.current.foreclosure,
       });
 
       setLoans((current) =>
         current.map((loan) => (loan.id === data.loan.id ? data.loan : loan))
       );
       setSelectedLoanId(data.loan.id);
+      loanActionIdempotencyKeys.current.foreclosure = createLoanIdempotencyKey();
       toast.success(data.message || "Loan foreclosed successfully.");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to foreclose loan.");
@@ -994,7 +1024,8 @@ const Loans = () => {
           />
         </div>
 
-        <div className="flex flex-wrap gap-2 rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
+        <div className="overflow-x-auto rounded-2xl border border-bank-card-border bg-white p-3 shadow-sm">
+          <div className="flex min-w-max gap-2">
             {loanPageTabs.map((tab) => {
               const isActive = activeLoanPageTab === tab.key;
 
@@ -1022,6 +1053,7 @@ const Loans = () => {
                 </button>
               );
             })}
+          </div>
         </div>
 
         <section className="grid grid-cols-1 gap-6">
@@ -1031,7 +1063,7 @@ const Loans = () => {
             subtitle="Estimate repayment before starting a loan application."
             icon={Calculator}
           >
-            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
               <div className="grid grid-cols-1 gap-4 rounded-xl border border-bank-card-border bg-white p-5 shadow-sm sm:grid-cols-2">
                 <label className="label-field sm:col-span-2">
                   <span>Loan Type</span>
@@ -1618,21 +1650,23 @@ const Loans = () => {
                   })}
                 </div>
 
-                <div className="mt-5 flex flex-wrap gap-2 border-t border-bank-card-border pt-4">
-                  {selectedLoanTabs.map((tab) => (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setSelectedLoanTab(tab.key)}
-                      className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
-                        selectedLoanTab === tab.key
-                          ? "bg-bank-accent text-white shadow-sm"
-                          : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
+                <div className="mt-5 overflow-x-auto border-t border-bank-card-border pt-4">
+                  <div className="flex min-w-max gap-2">
+                    {selectedLoanTabs.map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        onClick={() => setSelectedLoanTab(tab.key)}
+                        className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
+                          selectedLoanTab === tab.key
+                            ? "bg-bank-accent text-white shadow-sm"
+                            : "bg-bank-surface text-slate-600 hover:bg-white hover:text-bank-accent"
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1817,6 +1851,27 @@ const Loans = () => {
 
               {(canManageRepayment || isApprovedAwaitingDisbursal) && (
                 <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
+                  {canManageRepayment && (
+                    <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm xl:col-span-2">
+                      <label className="label-field">
+                        <span>Payment Source Account</span>
+                        <select
+                          value={effectivePaymentAccountNumber}
+                          onChange={(event) => setSelectedPaymentAccountNumber(event.target.value)}
+                          className="input-field"
+                        >
+                          {customerAccounts.map((account) => (
+                            <option key={account.accountNumber} value={account.accountNumber}>
+                              {account.accountType || "Account"} - {account.accountNumber} - {formatCurrency(account.walletBalance ?? account.balance ?? 0)}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="mt-1 text-xs font-semibold text-slate-500">
+                          EMI, part-payment, and foreclosure will debit this account.
+                        </span>
+                      </label>
+                    </div>
+                  )}
                   <div className="rounded-xl border border-bank-card-border bg-white p-4 shadow-sm">
                     <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
                       Part-Payment
@@ -1854,6 +1909,7 @@ const Loans = () => {
                     </div>
                     <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm font-semibold leading-6 text-blue-800">
                       <p>Minimum: {formatCurrency(minimumPartPayment)}</p>
+                      <p>Part-payment limit: up to {formatCurrency(Math.max(0, maxPartPaymentBeforeForeclosure))}</p>
                       <p>Charge: {Number(partPaymentPolicy.chargePercentage || 0)}%</p>
                       {isPartPaymentLocked && (
                         <p>Available after {partPaymentLockEndsAt.toLocaleDateString()}.</p>
@@ -2017,9 +2073,27 @@ const Loans = () => {
                     }`}>
                       EMI {selectedLoanNextScheduledEmi.emiNumber} is due on {formatDate(selectedLoanNextScheduledEmi.dueDate)}.
                       {selectedLoanNextPayableEmi
-                        ? " It can be paid from the disbursement account."
+                        ? " Choose the repayment account before paying."
                         : " It will become payable on the due date. Use part-payment for extra principal payment."}
                     </p>
+                    {selectedLoanNextPayableEmi && customerAccounts.length > 0 && (
+                      <label className="mt-3 block">
+                        <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                          Payment Source
+                        </span>
+                        <select
+                          value={effectivePaymentAccountNumber}
+                          onChange={(event) => setSelectedPaymentAccountNumber(event.target.value)}
+                          className="input-field mt-1"
+                        >
+                          {customerAccounts.map((account) => (
+                            <option key={account.accountNumber} value={account.accountNumber}>
+                              {account.accountType || "Account"} - {account.accountNumber} - {formatCurrency(account.walletBalance ?? account.balance ?? 0)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                   </div>
                   {selectedLoanNextPayableEmi ? (
                     <button

@@ -17,6 +17,9 @@ const createToken = (user) =>
   );
 
 const OTP_EXPIRY_MINUTES = 10;
+const MAX_OTP_ATTEMPTS = 5;
+const PASSWORD_RESET_OTP_SENT_MESSAGE =
+  'If the email is registered, an OTP has been sent.';
 
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 const hashOtp = (otp) => bcrypt.hash(otp, 10);
@@ -75,6 +78,7 @@ const serializeUser = (user) => ({
   account: user.account,
   accounts: user.accounts,
   permissions: user.permissions,
+  mustChangePassword: user.mustChangePassword,
 });
 
 const login = async (req, res) => {
@@ -119,7 +123,7 @@ const forgotPasswordSendOtp = async (req, res) => {
   );
 
   if (!user) {
-    return res.status(404).json({ message: 'Email not found. Please enter your registered email.' });
+    return res.json({ message: PASSWORD_RESET_OTP_SENT_MESSAGE });
   }
 
   const otp = generateOtp();
@@ -139,7 +143,7 @@ const forgotPasswordSendOtp = async (req, res) => {
     return res.status(500).json({ message: delivery?.message || 'Unable to send OTP email' });
   }
 
-  res.json({ message: 'OTP sent to your registered email.' });
+  res.json({ message: PASSWORD_RESET_OTP_SENT_MESSAGE });
 };
 
 const forgotPasswordReset = async (req, res) => {
@@ -167,7 +171,7 @@ const forgotPasswordReset = async (req, res) => {
     return res.status(400).json({ message: 'OTP is invalid or expired' });
   }
 
-  if (Number(user.passwordResetOtpAttempts || 0) >= 5) {
+  if (Number(user.passwordResetOtpAttempts || 0) >= MAX_OTP_ATTEMPTS) {
     return res.status(429).json({ message: 'Too many invalid OTP attempts. Request a new OTP.' });
   }
 
@@ -176,6 +180,11 @@ const forgotPasswordReset = async (req, res) => {
   if (!isValidOtp) {
     user.passwordResetOtpAttempts = Number(user.passwordResetOtpAttempts || 0) + 1;
     await user.save();
+
+    if (user.passwordResetOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({ message: 'Too many invalid OTP attempts. Request a new OTP.' });
+    }
+
     return res.status(400).json({ message: 'Invalid OTP' });
   }
 
@@ -183,6 +192,7 @@ const forgotPasswordReset = async (req, res) => {
   user.passwordResetOtpHash = undefined;
   user.passwordResetOtpExpiresAt = undefined;
   user.passwordResetOtpAttempts = 0;
+  user.mustChangePassword = false;
   await user.save();
 
   await sendEmail({
@@ -221,16 +231,21 @@ const changePasswordSendOtp = async (req, res) => {
   }
 
   const user = await User.findById(req.user._id).select(
-    '+password +passwordChangeOtpHash +passwordChangeOtpExpiresAt +pendingPasswordHash'
+    '+password +passwordChangeOtpHash +passwordChangeOtpExpiresAt +passwordChangeOtpAttempts +pendingPasswordHash'
   );
 
   if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
     return res.status(401).json({ message: 'Current password is incorrect' });
   }
 
+  if (await bcrypt.compare(newPassword, user.password)) {
+    return res.status(400).json({ message: 'New password must be different from the current password' });
+  }
+
   const otp = generateOtp();
   user.passwordChangeOtpHash = await hashOtp(otp);
   user.passwordChangeOtpExpiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000);
+  user.passwordChangeOtpAttempts = 0;
   user.pendingPasswordHash = await bcrypt.hash(newPassword, 10);
   await user.save();
 
@@ -256,7 +271,7 @@ const changePasswordVerifyOtp = async (req, res) => {
   }
 
   const user = await User.findById(req.user._id).select(
-    '+password +passwordChangeOtpHash +passwordChangeOtpExpiresAt +pendingPasswordHash'
+    '+password +passwordChangeOtpHash +passwordChangeOtpExpiresAt +passwordChangeOtpAttempts +pendingPasswordHash'
   );
 
   if (
@@ -268,16 +283,29 @@ const changePasswordVerifyOtp = async (req, res) => {
     return res.status(400).json({ message: 'OTP is invalid or expired' });
   }
 
+  if (Number(user.passwordChangeOtpAttempts || 0) >= MAX_OTP_ATTEMPTS) {
+    return res.status(429).json({ message: 'Too many invalid OTP attempts. Request a new OTP.' });
+  }
+
   const isValidOtp = await bcrypt.compare(otp, user.passwordChangeOtpHash);
 
   if (!isValidOtp) {
+    user.passwordChangeOtpAttempts = Number(user.passwordChangeOtpAttempts || 0) + 1;
+    await user.save();
+
+    if (user.passwordChangeOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({ message: 'Too many invalid OTP attempts. Request a new OTP.' });
+    }
+
     return res.status(400).json({ message: 'Invalid OTP' });
   }
 
   user.password = user.pendingPasswordHash;
   user.passwordChangeOtpHash = undefined;
   user.passwordChangeOtpExpiresAt = undefined;
+  user.passwordChangeOtpAttempts = 0;
   user.pendingPasswordHash = undefined;
+  user.mustChangePassword = false;
   await user.save();
 
   await sendEmail({
@@ -301,7 +329,7 @@ Adnate PayNest`,
     `,
   });
 
-  res.json({ message: 'Password changed successfully.' });
+  res.json({ message: 'Password changed successfully.', user: serializeUser(user) });
 };
 
 const me = async (req, res) => {

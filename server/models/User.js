@@ -226,12 +226,49 @@ const userSchema = new mongoose.Schema(
       type: Date,
       select: false,
     },
+    passwordChangeOtpAttempts: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
     pendingPasswordHash: {
       type: String,
       select: false,
     },
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
+    },
+    userCreationIdempotencyKey: {
+      type: String,
+      trim: true,
+      select: false,
+    },
+    userCreationIdempotencyActor: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      select: false,
+    },
+    userCreationEmailDelivery: {
+      type: mongoose.Schema.Types.Mixed,
+      select: false,
+    },
+    userCreationManagerReplacement: {
+      type: mongoose.Schema.Types.Mixed,
+      select: false,
+    },
   },
   { timestamps: true }
+);
+
+userSchema.index(
+  { userCreationIdempotencyActor: 1, userCreationIdempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      userCreationIdempotencyKey: { $type: 'string', $gt: '' },
+    },
+  }
 );
 
 module.exports = mongoose.model('User', userSchema);

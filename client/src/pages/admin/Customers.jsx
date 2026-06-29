@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -177,6 +177,14 @@ const activeValidationFieldsByRole = {
 };
 
 const inputClass = "input-field";
+
+const createUserIdempotencyKey = () => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
 const Field = ({ label, required = false, children }) => (
   <label className="label-field">
@@ -372,6 +380,8 @@ const Customers = ({ managementMode = "users" }) => {
   const [accountErrors, setAccountErrors] = useState({});
   const [fieldErrors, setFieldErrors] = useState({});
   const [formMessage, setFormMessage] = useState("");
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const createUserIdempotencyKeyRef = useRef(createUserIdempotencyKey());
   const [disableReview, setDisableReview] = useState(null);
   const [managerReplacementReview, setManagerReplacementReview] = useState(null);
   const [managerStatusReview, setManagerStatusReview] = useState(null);
@@ -555,6 +565,10 @@ const Customers = ({ managementMode = "users" }) => {
   const handleCreateUser = async (event, options = {}) => {
     event.preventDefault();
 
+    if (isCreatingUser) {
+      return;
+    }
+
     const normalizedEmail = userForm.email.trim().toLowerCase();
     const isCustomer = userForm.role === "customer";
     const selectedTier = userForm.classification;
@@ -699,6 +713,8 @@ const Customers = ({ managementMode = "users" }) => {
       return;
     }
 
+    setIsCreatingUser(true);
+
     const now = new Date().toISOString();
     const walletBalance = Number(userForm.walletBalance || 0);
     const nextUser = {
@@ -746,37 +762,45 @@ const Customers = ({ managementMode = "users" }) => {
     let emailDelivery;
 
     try {
-      const { data } = await api.post("/users", {
-        name: userForm.fullName,
-        email: normalizedEmail,
-        phone: normalizedPhone,
-        password: generatedPassword,
-        role: userForm.role,
-        status: "active",
-        classification: selectedTier,
-        accountType: userForm.accountType,
-        panNumber: userForm.panNumber,
-        aadhaarNumber: normalizedAadhaar,
-        dob: userForm.dob,
-        address: userForm.address,
-        assignedRegion: DEFAULT_ASSIGNED_REGION,
-        branchId: DEFAULT_BANK_IFSC,
-        branchName: DEFAULT_BRANCH_NAME,
-        branch: DEFAULT_BRANCH_NAME,
-        permissions: ["review-transactions", "approve-requests"],
-        createdBy: ADMIN_ID,
-        account: isCustomer
-          ? {
-            ifsc: userForm.bankIfsc,
-            bankName: userForm.bankName,
-            accountType: userForm.accountType,
-            balance: walletBalance,
-            overdraftLimit:
-              selectedCreateAccountRule?.odLimit || selectedPolicy.maxODLimit || selectedPolicy.limit,
-            accountStatus: userForm.accountStatus,
-          }
-          : undefined,
-      });
+      const { data } = await api.post(
+        "/users",
+        {
+          name: userForm.fullName,
+          email: normalizedEmail,
+          phone: normalizedPhone,
+          password: generatedPassword,
+          role: userForm.role,
+          status: "active",
+          classification: selectedTier,
+          accountType: userForm.accountType,
+          panNumber: userForm.panNumber,
+          aadhaarNumber: normalizedAadhaar,
+          dob: userForm.dob,
+          address: userForm.address,
+          assignedRegion: DEFAULT_ASSIGNED_REGION,
+          branchId: DEFAULT_BANK_IFSC,
+          branchName: DEFAULT_BRANCH_NAME,
+          branch: DEFAULT_BRANCH_NAME,
+          permissions: ["review-transactions", "approve-requests"],
+          createdBy: ADMIN_ID,
+          account: isCustomer
+            ? {
+              ifsc: userForm.bankIfsc,
+              bankName: userForm.bankName,
+              accountType: userForm.accountType,
+              balance: walletBalance,
+              overdraftLimit:
+                selectedCreateAccountRule?.odLimit || selectedPolicy.maxODLimit || selectedPolicy.limit,
+              accountStatus: userForm.accountStatus,
+            }
+            : undefined,
+        },
+        {
+          headers: {
+            "Idempotency-Key": createUserIdempotencyKeyRef.current,
+          },
+        }
+      );
 
       createdUser = data.user;
       emailDelivery = data.email;
@@ -787,6 +811,8 @@ const Customers = ({ managementMode = "users" }) => {
         "User was not created. Please try again.",
         "error"
       );
+      createUserIdempotencyKeyRef.current = createUserIdempotencyKey();
+      setIsCreatingUser(false);
       return;
     }
 
@@ -817,6 +843,8 @@ const Customers = ({ managementMode = "users" }) => {
 
     setUserForm(initialUserForm);
     setFieldErrors({});
+    createUserIdempotencyKeyRef.current = createUserIdempotencyKey();
+    setIsCreatingUser(false);
     if (isCustomer && emailDelivery?.sent === false) {
       showFormToast(
         `User created, but the welcome email was not sent. ${emailDelivery.message || ""}`.trim(),
@@ -1670,11 +1698,11 @@ const Customers = ({ managementMode = "users" }) => {
 
             <button
               type="submit"
-              disabled={hasValidationErrors}
+              disabled={hasValidationErrors || isCreatingUser}
               className="btn-primary mt-6 w-full"
             >
               <UserPlus size={18} />
-              Create User
+              {isCreatingUser ? "Creating user..." : "Create User"}
             </button>
           </form>
           )}
@@ -2464,6 +2492,7 @@ const Customers = ({ managementMode = "users" }) => {
                   <button
                     type="button"
                     onClick={() => setManagerReplacementReview(null)}
+                    disabled={isCreatingUser}
                     className="btn-secondary justify-center px-4 py-2"
                   >
                     Cancel
@@ -2477,9 +2506,10 @@ const Customers = ({ managementMode = "users" }) => {
                         { skipManagerReplacementReview: true }
                       );
                     }}
+                    disabled={isCreatingUser}
                     className="btn-primary justify-center px-4 py-2"
                   >
-                    Replace Manager
+                    {isCreatingUser ? "Creating user..." : "Replace Manager"}
                   </button>
                 </div>
               </div>

@@ -22,6 +22,18 @@ const protect = async (req, res, next) => {
       return res.status(403).json({ message: 'User is not active' });
     }
 
+    const canCompletePasswordChange =
+      req.originalUrl.startsWith('/api/auth/password/') ||
+      (req.method === 'GET' && req.originalUrl === '/api/users/me') ||
+      (req.method === 'GET' && req.originalUrl === '/api/auth/me');
+
+    if (user.mustChangePassword && !canCompletePasswordChange) {
+      return res.status(403).json({
+        message: 'Password change required before continuing',
+        code: 'PASSWORD_CHANGE_REQUIRED',
+      });
+    }
+
     req.user = user;
     next();
   } catch (error) {

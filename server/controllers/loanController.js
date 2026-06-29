@@ -32,12 +32,21 @@ const money = (value) => `₹ ${Math.round(toNumber(value)).toLocaleString('en-I
 const MISSED_EMI_FIXED_PENALTY = 500;
 const MISSED_EMI_PENALTY_RATE = 0.02;
 const FORECLOSURE_FEE_RATE = 0.02;
+const PART_PAYMENT_FORECLOSURE_THRESHOLD = 0.9;
 const ACTIVE_LOAN_STATUSES = ['approved', 'disbursed'];
 const EMI_GRACE_PERIOD_DAYS = 5;
 const SANCTION_LETTER_DIR = path.join(__dirname, '..', 'uploads', 'sanction-letters');
 const LOAN_AGREEMENT_DIR = path.join(__dirname, '..', 'uploads', 'loan-agreements');
 const REPAYMENT_SCHEDULE_DIR = path.join(__dirname, '..', 'uploads', 'repayment-schedules');
 const PART_PAYMENT_RECEIPT_DIR = path.join(__dirname, '..', 'uploads', 'part-payment-receipts');
+
+const cleanupUploadedFiles = (files = []) => {
+  files.forEach((file) => {
+    if (!file?.path) return;
+
+    fs.promises.unlink(file.path).catch(() => {});
+  });
+};
 
 const calculateMissedEmiPenalty = (emiAmount) =>
   Math.round(Math.max(MISSED_EMI_FIXED_PENALTY, toNumber(emiAmount) * MISSED_EMI_PENALTY_RATE));
@@ -1427,10 +1436,14 @@ const getLoans = async (req, res) => {
 };
 
 const createLoan = async (req, res) => {
+  const rejectLoanSubmission = (status, message) => {
+    cleanupUploadedFiles(req.files);
+    return res.status(status).json({ message });
+  };
   const customer = await User.findById(req.user._id);
 
   if (!customer || customer.role !== 'customer') {
-    return res.status(403).json({ message: 'Only customers can submit loan applications' });
+    return rejectLoanSubmission(403, 'Only customers can submit loan applications');
   }
 
   const applicationRulesAccepted =
@@ -1438,7 +1451,25 @@ const createLoan = async (req, res) => {
     String(req.body.applicationRulesAccepted || '').toLowerCase() === 'true';
 
   if (!applicationRulesAccepted) {
-    return res.status(400).json({ message: 'Please accept the loan application rules before submitting' });
+    return rejectLoanSubmission(400, 'Please accept the loan application rules before submitting');
+  }
+
+  const idempotencyKey = normalizeIdempotencyKey(req.body.idempotencyKey);
+
+  if (idempotencyKey) {
+    const existingLoan = await Loan.findOne({
+      customer: customer._id,
+      'applicationAcknowledgements.idempotencyKey': idempotencyKey,
+    }).populate('customer', 'name customerId');
+
+    if (existingLoan) {
+      cleanupUploadedFiles(req.files);
+      return res.status(200).json({
+        message: 'Loan application already submitted.',
+        duplicate: true,
+        loan: serializeLoan(existingLoan, await getActiveLoanCount(customer._id)),
+      });
+    }
   }
 
   const config = await getBusinessRuleConfig();
@@ -1447,7 +1478,7 @@ const createLoan = async (req, res) => {
   const typeRule = getLoanTypeRule(loanRules, loanType);
 
   if (!typeRule || typeRule.key !== loanType) {
-    return res.status(400).json({ message: 'Select a valid loan type' });
+    return rejectLoanSubmission(400, 'Select a valid loan type');
   }
 
   const effectiveInterestRate = Number(typeRule.annualInterestRate || 0);
@@ -1465,36 +1496,36 @@ const createLoan = async (req, res) => {
     accounts[0];
 
   if (!disbursementAccount?.accountNumber) {
-    return res.status(400).json({ message: 'Select a valid account for loan disbursement' });
+    return rejectLoanSubmission(400, 'Select a valid account for loan disbursement');
   }
 
   if (amount < typeRule.minAmount || amount > effectiveMaxAmount) {
-    return res.status(400).json({
-      message: `${typeRule.label} amount must be between ${money(typeRule.minAmount)} and ${money(effectiveMaxAmount)}`,
-    });
+    return rejectLoanSubmission(
+      400,
+      `${typeRule.label} amount must be between ${money(typeRule.minAmount)} and ${money(effectiveMaxAmount)}`
+    );
   }
 
   if (tenureMonths < typeRule.minTenureMonths || tenureMonths > typeRule.maxTenureMonths) {
-    return res.status(400).json({
-      message: `${typeRule.label} tenure must be between ${typeRule.minTenureMonths} and ${typeRule.maxTenureMonths} months`,
-    });
+    return rejectLoanSubmission(
+      400,
+      `${typeRule.label} tenure must be between ${typeRule.minTenureMonths} and ${typeRule.maxTenureMonths} months`
+    );
   }
 
   if (loanType === 'education' && employmentType !== 'student') {
-    return res.status(400).json({
-      message: 'Education loans are available only under the student category',
-    });
+    return rejectLoanSubmission(400, 'Education loans are available only under the student category');
   }
 
   const isStudentEducationLoan = loanType === 'education' && employmentType === 'student';
   const incomeLabel = isStudentEducationLoan ? 'Co-applicant monthly income' : 'Monthly income';
 
   if (monthlyIncome <= 0) {
-    return res.status(400).json({ message: `${incomeLabel} is required` });
+    return rejectLoanSubmission(400, `${incomeLabel} is required`);
   }
 
   if (existingMonthlyLiabilities < 0) {
-    return res.status(400).json({ message: 'Existing monthly liabilities cannot be negative' });
+    return rejectLoanSubmission(400, 'Existing monthly liabilities cannot be negative');
   }
 
   const minimumEmploymentDurationByType = {
@@ -1505,15 +1536,11 @@ const createLoan = async (req, res) => {
   const requiredEmploymentDuration = minimumEmploymentDurationByType[employmentType] || 0;
 
   if (requiredEmploymentDuration > 0 && employmentDurationMonths <= 0) {
-    return res.status(400).json({
-      message: 'Employment duration is required for this employment type',
-    });
+    return rejectLoanSubmission(400, 'Employment duration is required for this employment type');
   }
 
   if (requiredEmploymentDuration > 0 && employmentDurationMonths < requiredEmploymentDuration) {
-    return res.status(400).json({
-      message: `Minimum employment duration is ${requiredEmploymentDuration} months`,
-    });
+    return rejectLoanSubmission(400, `Minimum employment duration is ${requiredEmploymentDuration} months`);
   }
 
   let documentTypes = [];
@@ -1532,22 +1559,23 @@ const createLoan = async (req, res) => {
   }
 
   if (!documentTypes.includes('Bank Statement')) {
-    return res.status(400).json({ message: 'Bank Statement is required for loan review' });
+    return rejectLoanSubmission(400, 'Bank Statement is required for loan review');
   }
 
   if (
     employmentType === 'student' &&
     !documentTypes.includes('Co-applicant Income Proof')
   ) {
-    return res.status(400).json({
-      message: 'Co-applicant income proof is required when employment type is student',
-    });
+    return rejectLoanSubmission(
+      400,
+      'Co-applicant income proof is required when employment type is student'
+    );
   }
 
   const purpose = String(req.body.purpose || '').trim();
 
   if (purpose.length < 20) {
-    return res.status(400).json({ message: 'Purpose must be at least 20 characters' });
+    return rejectLoanSubmission(400, 'Purpose must be at least 20 characters');
   }
 
   if (
@@ -1555,7 +1583,7 @@ const createLoan = async (req, res) => {
     supportingDetails.admissionStatus &&
     !['Confirmed', 'Provisional', 'Awaiting Result'].includes(supportingDetails.admissionStatus)
   ) {
-    return res.status(400).json({ message: 'Select a valid admission status' });
+    return rejectLoanSubmission(400, 'Select a valid admission status');
   }
 
   if (loanType === 'education') {
@@ -1570,9 +1598,7 @@ const createLoan = async (req, res) => {
     );
 
     if (missingEducationDetail) {
-      return res.status(400).json({
-        message: `${missingEducationDetail[1]} is required for education loans`,
-      });
+      return rejectLoanSubmission(400, `${missingEducationDetail[1]} is required for education loans`);
     }
   }
 
@@ -1583,15 +1609,19 @@ const createLoan = async (req, res) => {
   });
 
   if (emiAmount > monthlyIncome * 0.5) {
-    return res.status(400).json({
-      message: 'EMI is above 50% of monthly income. Reduce amount or increase tenure.',
-    });
+    const emiRatio = Math.round((emiAmount / monthlyIncome) * 100);
+    return rejectLoanSubmission(
+      400,
+      `Estimated EMI is ${emiRatio}% of ${incomeLabel.toLowerCase()}; the allowed maximum is 50%.`
+    );
   }
 
   if (existingMonthlyLiabilities + emiAmount > monthlyIncome * 0.6) {
-    return res.status(400).json({
-      message: 'Existing liabilities plus EMI should stay within 60% of monthly income.',
-    });
+    const obligationRatio = Math.round(((existingMonthlyLiabilities + emiAmount) / monthlyIncome) * 100);
+    return rejectLoanSubmission(
+      400,
+      `Total monthly obligations are ${obligationRatio}% of ${incomeLabel.toLowerCase()}; the allowed maximum is 60%.`
+    );
   }
 
   const documents = (req.files || []).map((file, index) => {
@@ -1665,6 +1695,7 @@ const createLoan = async (req, res) => {
     },
     applicationAcknowledgements: {
       applicationRulesAccepted: true,
+      idempotencyKey,
       acceptedAt: new Date(),
       acceptedRules: [
         'My application details and uploaded documents are correct to the best of my knowledge.',
@@ -1726,6 +1757,20 @@ const reviewLoan = async (req, res) => {
   if (!loan) return res.status(404).json({ message: 'Loan application not found' });
   if (!['submitted', 'under_review'].includes(loan.status)) {
     return res.status(400).json({ message: 'Only submitted or under-review loans can be reviewed' });
+  }
+  if (String(loan.customer?._id || loan.customer) === String(req.user._id)) {
+    return res.status(403).json({ message: 'A reviewer cannot review their own loan application' });
+  }
+  if (
+    action === 'approve' &&
+    (loan.documents || []).some((document) =>
+      String(document.reviewedBy || '') === String(req.user._id) &&
+      ['verified', 'mismatch', 'rejected', 'additional_info_required'].includes(document.reviewStatus)
+    )
+  ) {
+    return res.status(403).json({
+      message: 'A different manager must approve a loan after document verification.',
+    });
   }
 
   const config = await getBusinessRuleConfig();
@@ -1829,6 +1874,9 @@ const reviewLoanDocument = async (req, res) => {
     .populate('reviewedBy', 'name');
 
   if (!loan) return res.status(404).json({ message: 'Loan application not found' });
+  if (String(loan.customer?._id || loan.customer) === String(req.user._id)) {
+    return res.status(403).json({ message: 'A reviewer cannot review their own loan documents' });
+  }
 
   const document = loan.documents.id(req.params.documentId);
 
@@ -2936,6 +2984,15 @@ const makePartPayment = async (req, res) => {
     if (amount >= outstandingPrincipal) {
       throw new Error('Use foreclosure to clear the full outstanding principal');
     }
+    const remainingPrincipalAfterPayment = Math.max(0, outstandingPrincipal - amount);
+    const minimumRemainingPrincipal = Math.ceil(
+      outstandingPrincipal * (1 - PART_PAYMENT_FORECLOSURE_THRESHOLD)
+    );
+    if (amount >= outstandingPrincipal * PART_PAYMENT_FORECLOSURE_THRESHOLD) {
+      throw new Error(
+        `Part-payment cannot reduce the outstanding principal below ${money(minimumRemainingPrincipal)}. Use foreclosure for near-closure payments.`
+      );
+    }
     const minimumPartPayment = Math.max(
       Math.round(toNumber(partPaymentPolicy.minimumAmount)),
       Math.ceil(outstandingPrincipal * toNumber(partPaymentPolicy.minimumPrincipalPercentage) / 100)
@@ -3003,7 +3060,7 @@ const makePartPayment = async (req, res) => {
     const futureRows = loan.amortizationSchedule.filter((row) => row.status !== 'paid');
     const nextDueDate =
       loan.amortizationSchedule.find((row) => row.status !== 'paid')?.dueDate || new Date();
-    const nextOutstandingPrincipal = Math.max(0, outstandingPrincipal - amount);
+    const nextOutstandingPrincipal = remainingPrincipalAfterPayment;
     const previousEmiAmount = toNumber(futureRows[0]?.emiAmount || loan.emiAmount);
     const previousRemainingTenure = futureRows.length;
     const previousFutureInterest = sumScheduleField(futureRows, 'interestComponent');

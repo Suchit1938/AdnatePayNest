@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "../context/AuthContext";
 import ProtectedRoutes from "./ProtectedRoutes";
 import Login from "../pages/auth/Login";
+import ForcePasswordChange from "../pages/auth/ForcePasswordChange";
 import AdminDashboard from "../pages/admin/Dashboard";
 import AdminCustomers from "../pages/admin/Customers";
 import AdminClassifications from "../pages/admin/Classifications";
@@ -37,12 +38,22 @@ const adminRoute = (element) => (
   </ProtectedRoutes>
 );
 
+const authenticatedRoute = (element) => (
+  <ProtectedRoutes allowedRoles={["customer", "admin", "manager"]}>
+    {element}
+  </ProtectedRoutes>
+);
+
 const AppRoutes = () => {
   return (
     <BrowserRouter>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route
+            path="/force-password-change"
+            element={authenticatedRoute(<ForcePasswordChange />)}
+          />
 
           <Route path="/customer" element={<Navigate to="/" replace />} />
 
