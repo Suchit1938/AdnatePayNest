@@ -10,7 +10,7 @@ const {
   normalizeDrawdowns,
 } = require('../utils/overdraftInterest');
 const { syncCustomerAccounts } = require('../utils/customerAccounts');
-const { writeSystemLog } = require('../utils/systemLog');
+const Idempotency = require('../models/Idempotency');
 const {
   SETTLEMENT_ACCOUNT_NAME,
   SETTLEMENT_ACCOUNT_NUMBER,

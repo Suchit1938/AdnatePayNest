@@ -12,7 +12,7 @@ const protect = async (req, res, next) => {
   try {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-password');
+    const user = await User.findById(decoded.id).select('-password +activeSessionId');
 
     if (!user) {
       return res.status(401).json({ message: 'Not authorized, user missing' });
@@ -22,7 +22,15 @@ const protect = async (req, res, next) => {
       return res.status(403).json({ message: 'User is not active' });
     }
 
+    if (!decoded.sessionId || decoded.sessionId !== user.activeSessionId) {
+      return res.status(401).json({
+        message: 'Session expired because this account signed in elsewhere',
+        code: 'SESSION_INVALIDATED',
+      });
+    }
+
     const canCompletePasswordChange =
+      req.originalUrl === '/api/auth/logout' ||
       req.originalUrl.startsWith('/api/auth/password/') ||
       (req.method === 'GET' && req.originalUrl === '/api/users/me') ||
       (req.method === 'GET' && req.originalUrl === '/api/auth/me');

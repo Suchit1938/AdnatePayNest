@@ -58,6 +58,19 @@ export const AuthProvider = ({ children }) => {
     };
   }, [token]);
 
+  useEffect(() => {
+    const clearAuth = () => {
+      setUser(null);
+      setToken(null);
+    };
+
+    window.addEventListener("adnate-auth-cleared", clearAuth);
+
+    return () => {
+      window.removeEventListener("adnate-auth-cleared", clearAuth);
+    };
+  }, []);
+
   const login = useCallback(async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
 
@@ -71,9 +84,29 @@ export const AuthProvider = ({ children }) => {
     setUser(nextUser);
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const currentToken = localStorage.getItem("adnate-token");
+
     setUser(null);
     setToken(null);
+
+    if (!currentToken) {
+      return;
+    }
+
+    try {
+      await api.post(
+        "/auth/logout",
+        null,
+        {
+          headers: {
+            Authorization: `Bearer ${currentToken}`,
+          },
+        }
+      );
+    } catch {
+      // The local session is already cleared; server logout is best-effort.
+    }
   }, []);
 
   const authValue = useMemo(

@@ -6,6 +6,7 @@ const {
   forgotPasswordReset,
   forgotPasswordSendOtp,
   login,
+  logout,
   me,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
@@ -13,6 +14,7 @@ const { protect } = require('../middleware/authMiddleware');
 const router = express.Router();
 
 router.post('/login', login);
+router.post('/logout', protect, logout);
 router.post('/forgot-password/send-otp', forgotPasswordSendOtp);
 router.post('/forgot-password/reset', forgotPasswordReset);
 router.get('/me', protect, me);

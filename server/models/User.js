@@ -151,6 +151,14 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    activeSessionId: {
+      type: String,
+      select: false,
+    },
+    sessionStartedAt: {
+      type: Date,
+      default: null,
+    },
     managerLevel: String,
     createdBy: String,
     classification: {

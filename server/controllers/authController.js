@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
 const User = require('../models/User');
@@ -11,6 +12,7 @@ const createToken = (user) =>
     {
       id: user._id,
       role: user.role,
+      sessionId: user.activeSessionId,
     },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
@@ -88,7 +90,9 @@ const login = async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required' });
   }
 
-  const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+  const user = await User.findOne({ email: email.toLowerCase() }).select(
+    '+password +activeSessionId'
+  );
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
     return res.status(401).json({ message: 'Invalid credentials' });
@@ -99,12 +103,23 @@ const login = async (req, res) => {
   }
 
   user.lastLogin = new Date();
+  user.activeSessionId = crypto.randomUUID();
+  user.sessionStartedAt = user.lastLogin;
   await syncCustomerAccounts(user);
+  await user.save();
 
   res.json({
     token: createToken(user),
     user: serializeUser(user),
   });
+};
+
+const logout = async (req, res) => {
+  req.user.activeSessionId = undefined;
+  req.user.sessionStartedAt = undefined;
+  await req.user.save();
+
+  res.json({ message: 'Logged out successfully' });
 };
 
 const forgotPasswordSendOtp = async (req, res) => {
@@ -193,6 +208,8 @@ const forgotPasswordReset = async (req, res) => {
   user.passwordResetOtpExpiresAt = undefined;
   user.passwordResetOtpAttempts = 0;
   user.mustChangePassword = false;
+  user.activeSessionId = undefined;
+  user.sessionStartedAt = undefined;
   await user.save();
 
   await sendEmail({
@@ -343,6 +360,7 @@ module.exports = {
   forgotPasswordReset,
   forgotPasswordSendOtp,
   login,
+  logout,
   me,
   serializeUser,
 };
