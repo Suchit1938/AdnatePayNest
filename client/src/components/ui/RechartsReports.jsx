@@ -40,6 +40,19 @@ const DefaultTooltip = ({ valueFormatter, labelFormatter }) => (
   />
 );
 
+const ChartFrame = ({ children, height }) => (
+  <div className="h-[270px] min-w-0 w-full overflow-hidden" style={{ height }}>
+    <ResponsiveContainer
+      width="100%"
+      height="100%"
+      minWidth={0}
+      initialDimension={{ width: 0, height }}
+    >
+      {children}
+    </ResponsiveContainer>
+  </div>
+);
+
 export const RechartsHorizontalBar = ({
   rows,
   valueFormatter,
@@ -56,30 +69,28 @@ export const RechartsHorizontalBar = ({
   }
 
   return (
-    <div className="h-[270px]" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 8, right: 20, bottom: 8, left: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-          <XAxis
-            type="number"
-            tick={{ fill: "#64748b", fontSize: 12, fontWeight: 700 }}
-            tickFormatter={valueFormatter}
-          />
-          <YAxis
-            type="category"
-            dataKey="label"
-            width={110}
-            tick={{ fill: "#334155", fontSize: 12, fontWeight: 700 }}
-          />
-          <DefaultTooltip valueFormatter={valueFormatter} />
-          <Bar dataKey="value" name="Value" radius={[0, 8, 8, 0]}>
-            {data.map((row, index) => (
-              <Cell key={row.label} fill={row.color || ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4]} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <ChartFrame height={height}>
+      <BarChart data={data} layout="vertical" margin={{ top: 8, right: 20, bottom: 8, left: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+        <XAxis
+          type="number"
+          tick={{ fill: "#64748b", fontSize: 12, fontWeight: 700 }}
+          tickFormatter={valueFormatter}
+        />
+        <YAxis
+          type="category"
+          dataKey="label"
+          width={110}
+          tick={{ fill: "#334155", fontSize: 12, fontWeight: 700 }}
+        />
+        <DefaultTooltip valueFormatter={valueFormatter} />
+        <Bar dataKey="value" name="Value" radius={[0, 8, 8, 0]}>
+          {data.map((row, index) => (
+            <Cell key={row.label} fill={row.color || ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4]} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ChartFrame>
   );
 };
 
@@ -99,29 +110,27 @@ export const RechartsColumn = ({
   }
 
   return (
-    <div className="h-[270px]" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 14, right: 12, bottom: 8, left: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-          <XAxis
-            dataKey="label"
-            tick={{ fill: "#64748b", fontSize: 12, fontWeight: 700 }}
-            interval={0}
-            tickMargin={10}
-          />
-          <YAxis
-            tick={{ fill: "#64748b", fontSize: 12, fontWeight: 700 }}
-            tickFormatter={valueFormatter}
-          />
-          <DefaultTooltip valueFormatter={valueFormatter} />
-          <Bar dataKey="value" name="Value" radius={[8, 8, 0, 0]}>
-            {data.map((row, index) => (
-              <Cell key={row.label} fill={row.color || ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4]} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <ChartFrame height={height}>
+      <BarChart data={data} margin={{ top: 14, right: 12, bottom: 8, left: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+        <XAxis
+          dataKey="label"
+          tick={{ fill: "#64748b", fontSize: 12, fontWeight: 700 }}
+          interval={0}
+          tickMargin={10}
+        />
+        <YAxis
+          tick={{ fill: "#64748b", fontSize: 12, fontWeight: 700 }}
+          tickFormatter={valueFormatter}
+        />
+        <DefaultTooltip valueFormatter={valueFormatter} />
+        <Bar dataKey="value" name="Value" radius={[8, 8, 0, 0]}>
+          {data.map((row, index) => (
+            <Cell key={row.label} fill={row.color || ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4]} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ChartFrame>
   );
 };
 
@@ -142,28 +151,26 @@ export const RechartsDonut = ({
   }
 
   return (
-    <div className="h-[270px]" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="value"
-            nameKey="label"
-            innerRadius="56%"
-            outerRadius="78%"
-            paddingAngle={2}
-          >
-            {data.map((row, index) => (
-              <Cell key={row.label} fill={row.color || ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4]} />
-            ))}
-          </Pie>
-          <DefaultTooltip />
-          <Legend
-            iconType="circle"
-            formatter={(value) => <span className="text-sm font-bold text-slate-700">{value}</span>}
-          />
-        </PieChart>
-      </ResponsiveContainer>
-    </div>
+    <ChartFrame height={height}>
+      <PieChart>
+        <Pie
+          data={data}
+          dataKey="value"
+          nameKey="label"
+          innerRadius="56%"
+          outerRadius="78%"
+          paddingAngle={2}
+        >
+          {data.map((row, index) => (
+            <Cell key={row.label} fill={row.color || ["#2563eb", "#0891b2", "#10b981", "#f59e0b"][index % 4]} />
+          ))}
+        </Pie>
+        <DefaultTooltip />
+        <Legend
+          iconType="circle"
+          formatter={(value) => <span className="text-sm font-bold text-slate-700">{value}</span>}
+        />
+      </PieChart>
+    </ChartFrame>
   );
 };

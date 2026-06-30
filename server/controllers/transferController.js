@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const PDFDocument = require('pdfkit');
 
@@ -216,7 +217,16 @@ const buildStatementPdf = ({
       const logoSize = 42;
 
       if (!drawLogo(doc, left, top, { width: logoSize, height: logoSize })) {
-        doc.circle(left + logoSize / 2, top + logoSize / 2, logoSize / 2).fill('#0f172a');
+        doc
+          .roundedRect(left, top, logoSize, logoSize, 10)
+          .fill('#0f172a')
+          .fillColor('#ffffff')
+          .font('Helvetica-Bold')
+          .fontSize(11)
+          .text('APN', left, top + 15, {
+            width: logoSize,
+            align: 'center',
+          });
       }
 
       doc
@@ -625,7 +635,7 @@ const emailStatement = async (req, res) => {
 const toWholeRupees = (value) => Math.round(Number(value || 0));
 const normalizeAccountNumber = (value) => String(value || '').trim();
 const normalizeIdempotencyKey = (value) => String(value || '').trim().slice(0, 128);
-const makeId = (prefix) => `${prefix}${Date.now()}${Math.floor(Math.random() * 1000)}`;
+const makeId = (prefix) => `${prefix}${Date.now()}${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
 const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
 const firstDefined = (...values) =>
   values.find((value) => value !== undefined && value !== null);
@@ -691,6 +701,16 @@ const syncUserAccountSnapshot = (user, bankAccount) => {
       : account
   );
 
+  if (!user.accounts.some((account) => account.accountNumber === bankAccount.accountNumber)) {
+    user.accounts = [...(user.accounts || []), nextSnapshot];
+  }
+
+  if (!user.account || user.account.accountNumber === bankAccount.accountNumber) {
+    user.account = {
+      ...(user.account?.toObject?.() || user.account || {}),
+      ...nextSnapshot,
+    };
+  }
 };
 
 const sendDuplicateTransferResponse = async (res, user, transaction) => {
@@ -1059,7 +1079,7 @@ const createTransfer = async (req, res) => {
     const transaction = await Transaction.create(
       [
         {
-          transactionId: `TXN${Date.now()}`,
+          transactionId: makeId('TXN'),
           sender: sender._id,
           receiver: receiver._id,
           senderName: sender.name,

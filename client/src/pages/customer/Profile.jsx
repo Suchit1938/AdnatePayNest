@@ -116,7 +116,7 @@ const Profile = () => {
   };
 
   const sendPasswordOtp = async (event) => {
-    event.preventDefault();
+    event?.preventDefault();
 
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
       toast.warning("New password and confirm password must match.");
@@ -132,12 +132,18 @@ const Profile = () => {
       });
 
       toast.success(data.message || "OTP sent to your registered email.");
+      updatePasswordForm("otp", "");
       setPasswordStep("otp");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to send OTP.");
     } finally {
       setPasswordLoading(false);
     }
+  };
+
+  const editPasswordDetails = () => {
+    setPasswordStep("details");
+    updatePasswordForm("otp", "");
   };
 
   const verifyPasswordOtp = async (event) => {
@@ -426,17 +432,27 @@ const Profile = () => {
                     </label>
                   </>
                 ) : (
-                  <label className="label-field">
-                    <span>Email OTP<RequiredMark /></span>
-                    <input
-                      value={passwordForm.otp}
-                      onChange={(event) => updatePasswordForm("otp", event.target.value)}
-                      className="input-field"
-                      maxLength={6}
-                      placeholder="6 digit OTP"
-                      required
-                    />
-                  </label>
+                  <>
+                    <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 md:col-span-2">
+                      <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+                        Password details locked
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-800">
+                        OTP was sent to your registered email.
+                      </p>
+                    </div>
+                    <label className="label-field">
+                      <span>Email OTP<RequiredMark /></span>
+                      <input
+                        value={passwordForm.otp}
+                        onChange={(event) => updatePasswordForm("otp", event.target.value)}
+                        className="input-field"
+                        maxLength={6}
+                        placeholder="6 digit OTP"
+                        required
+                      />
+                    </label>
+                  </>
                 )}
               </div>
             </section>
@@ -451,14 +467,24 @@ const Profile = () => {
                     : "Verify & Change Password"}
               </button>
               {passwordStep === "otp" && (
-                <button
-                  type="button"
-                  onClick={() => setPasswordStep("details")}
-                  className="btn-secondary"
-                  disabled={passwordLoading}
-                >
-                  Edit Password Details
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => sendPasswordOtp()}
+                    className="btn-secondary"
+                    disabled={passwordLoading}
+                  >
+                    Request New OTP
+                  </button>
+                  <button
+                    type="button"
+                    onClick={editPasswordDetails}
+                    className="btn-secondary"
+                    disabled={passwordLoading}
+                  >
+                    Edit Password Details
+                  </button>
+                </>
               )}
             </div>
           </form>

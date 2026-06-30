@@ -29,6 +29,16 @@ const getEmailError = (value) => {
   return normalizedEmail && !isValidEmail(normalizedEmail) ? emailErrorMessage : "";
 };
 
+const maskEmail = (value) => {
+  const [name = "", domain = ""] = String(value || "").split("@");
+
+  if (!name || !domain) {
+    return value;
+  }
+
+  return `${name.slice(0, 2)}***@${domain}`;
+};
+
 function Login() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -46,6 +56,7 @@ function Login() {
     newPassword: "",
     confirmPassword: "",
   });
+  const [forgotOtpEmail, setForgotOtpEmail] = useState("");
   const [forgotEmailError, setForgotEmailError] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState({
@@ -140,14 +151,16 @@ function Login() {
       newPassword: "",
       confirmPassword: "",
     });
+    setForgotOtpEmail("");
     setForgotEmailError(getEmailError(email));
   };
 
-  const sendForgotOtp = async (event) => {
-    event.preventDefault();
+  const sendForgotOtp = async (event, resendEmail) => {
+    event?.preventDefault();
 
-    const normalizedEmail = forgotForm.email.trim().toLowerCase();
-    const nextForgotEmailError = getEmailError(forgotForm.email);
+    const emailForOtp = resendEmail || forgotForm.email;
+    const normalizedEmail = emailForOtp.trim().toLowerCase();
+    const nextForgotEmailError = getEmailError(emailForOtp);
 
     if (nextForgotEmailError || !normalizedEmail) {
       const errorMessage = nextForgotEmailError || "Registered email is required.";
@@ -164,12 +177,24 @@ function Login() {
       });
       toast.success("OTP sent to your registered email.");
       updateForgotForm("email", normalizedEmail);
+      setForgotOtpEmail(normalizedEmail);
       setForgotStep("reset");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to send OTP.");
     } finally {
       setForgotLoading(false);
     }
+  };
+
+  const editForgotEmail = () => {
+    setForgotStep("email");
+    setForgotOtpEmail("");
+    setForgotForm((current) => ({
+      ...current,
+      otp: "",
+      newPassword: "",
+      confirmPassword: "",
+    }));
   };
 
   const resetForgotPassword = async (event) => {
@@ -184,15 +209,16 @@ function Login() {
 
     try {
       const { data } = await api.post("/auth/forgot-password/reset", {
-        email: forgotForm.email.trim().toLowerCase(),
+        email: forgotOtpEmail,
         otp: forgotForm.otp,
         newPassword: forgotForm.newPassword,
       });
 
       toast.success(data.message || "Password reset successfully.");
       setPassword("");
-      setEmail(forgotForm.email.trim().toLowerCase());
+      setEmail(forgotOtpEmail);
       setForgotOpen(false);
+      setForgotOtpEmail("");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to reset password.");
     } finally {
@@ -378,23 +404,34 @@ function Login() {
               onSubmit={forgotStep === "email" ? sendForgotOtp : resetForgotPassword}
               className="space-y-4 p-5"
             >
-              <label className="label-field">
-                <span>Registered Email<RequiredMark /></span>
-                <input
-                  type="email"
-                  value={forgotForm.email}
-                  onChange={(event) => updateForgotForm("email", event.target.value)}
-                  className={`input-field !rounded-xl !border-blue-100 !bg-slate-50/70 ${
-                    forgotEmailError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : ""
-                  }`}
-                  placeholder="customer@example.com"
-                  aria-invalid={Boolean(forgotEmailError)}
-                  required
-                />
-                {forgotEmailError && (
-                  <p className="mt-2 text-xs font-semibold text-red-600">{forgotEmailError}</p>
-                )}
-              </label>
+              {forgotStep === "email" ? (
+                <label className="label-field">
+                  <span>Registered Email<RequiredMark /></span>
+                  <input
+                    type="email"
+                    value={forgotForm.email}
+                    onChange={(event) => updateForgotForm("email", event.target.value)}
+                    className={`input-field !rounded-xl !border-blue-100 !bg-slate-50/70 ${
+                      forgotEmailError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : ""
+                    }`}
+                    placeholder="customer@example.com"
+                    aria-invalid={Boolean(forgotEmailError)}
+                    required
+                  />
+                  {forgotEmailError && (
+                    <p className="mt-2 text-xs font-semibold text-red-600">{forgotEmailError}</p>
+                  )}
+                </label>
+              ) : (
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+                    OTP sent to
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">
+                    {maskEmail(forgotOtpEmail)}
+                  </p>
+                </div>
+              )}
 
               {forgotStep === "reset" && (
                 <>
@@ -454,14 +491,36 @@ function Login() {
                 </>
               )}
 
-              <button type="submit" className="btn-primary w-full !rounded-xl !bg-gradient-to-r !from-[#0057b8] !to-[#00aeef] !py-3.5 !shadow-lg !shadow-cyan-500/25 hover:!from-[#004a9e] hover:!to-[#0095d1]" disabled={forgotLoading}>
-                <KeyRound size={18} />
-                {forgotLoading
-                  ? "Please wait..."
-                  : forgotStep === "email"
-                    ? "Send OTP"
-                    : "Reset Password"}
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button type="submit" className="btn-primary flex-1 !rounded-xl !bg-gradient-to-r !from-[#0057b8] !to-[#00aeef] !py-3.5 !shadow-lg !shadow-cyan-500/25 hover:!from-[#004a9e] hover:!to-[#0095d1]" disabled={forgotLoading}>
+                  <KeyRound size={18} />
+                  {forgotLoading
+                    ? "Please wait..."
+                    : forgotStep === "email"
+                      ? "Send OTP"
+                      : "Reset Password"}
+                </button>
+                {forgotStep === "reset" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => sendForgotOtp(null, forgotOtpEmail)}
+                      className="btn-secondary !rounded-xl"
+                      disabled={forgotLoading}
+                    >
+                      Request New OTP
+                    </button>
+                    <button
+                      type="button"
+                      onClick={editForgotEmail}
+                      className="btn-secondary !rounded-xl"
+                      disabled={forgotLoading}
+                    >
+                      Edit Email
+                    </button>
+                  </>
+                )}
+              </div>
             </form>
           </div>
         </div>

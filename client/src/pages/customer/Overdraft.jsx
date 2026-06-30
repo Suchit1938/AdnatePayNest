@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   AlertTriangle,
@@ -145,6 +145,18 @@ const calculateDrawdownInterest = (principal, interestRate, startedAt, drawdowns
 const getAccountRule = (policy, accountType) =>
   (policy?.accountTypeOdRules || []).find((rule) => rule.accountType === accountType);
 
+const normalizePayoffAmountInput = (value, maxPayoffAmount) => {
+  if (value === "") return "";
+
+  const amount = Number(value);
+  const maxAmount = Math.max(0, Number(maxPayoffAmount || 0));
+
+  if (!Number.isFinite(amount)) return "";
+  if (amount > maxAmount) return String(maxAmount);
+
+  return value;
+};
+
 const overdraftTabs = [
   { key: "overview", label: "Overview" },
   { key: "usage", label: "Repay OD" },
@@ -173,9 +185,16 @@ const Overdraft = () => {
   const [isPaying, setIsPaying] = useState(false);
   const [payoffAmount, setPayoffAmount] = useState("");
   const [tierPolicy, setTierPolicy] = useState(null);
-  const accounts = getCustomerAccounts(user);
+  const accounts = useMemo(() => getCustomerAccounts(user), [user]);
+  const odRepayAccounts = useMemo(
+    () =>
+      accounts
+        .filter((account) => Number(account.overdraftUsed || 0) > 0)
+        .sort((left, right) => Number(right.overdraftUsed || 0) - Number(left.overdraftUsed || 0)),
+    [accounts]
+  );
   const activeOdAccount =
-    accounts.find((account) => Number(account.overdraftUsed || 0) > 0) || accounts[0];
+    odRepayAccounts[0] || accounts[0];
   const [odAccountNumber, setOdAccountNumber] = useState(activeOdAccount?.accountNumber || "");
   const [paymentAccountNumber, setPaymentAccountNumber] = useState(
     activeOdAccount?.accountNumber || accounts[0]?.accountNumber || ""
@@ -192,7 +211,13 @@ const Overdraft = () => {
   }, [location]);
 
   const summary = getCustomerOverdraftSummary(user);
-  const effectiveOdAccountNumber = odAccountNumber || activeOdAccount?.accountNumber || "";
+  const selectedRepayOdAccount = odRepayAccounts.find(
+    (account) => account.accountNumber === odAccountNumber
+  );
+  const effectiveOdAccountNumber =
+    activeTab === "usage"
+      ? selectedRepayOdAccount?.accountNumber || activeOdAccount?.accountNumber || ""
+      : odAccountNumber || activeOdAccount?.accountNumber || "";
   const odAccount =
     accounts.find((account) => account.accountNumber === effectiveOdAccountNumber) || activeOdAccount;
   const effectivePaymentAccountNumber =
@@ -263,7 +288,10 @@ const Overdraft = () => {
     }
 
     if (hasInvalidPayoffAmount) {
-      const errorMessage = "Enter an amount within the due amount and selected account balance.";
+      const errorMessage =
+        effectivePayoffAmount > totalDueNow
+          ? "Payment amount cannot be more than the total payoff due."
+          : "Enter an amount within the due amount and selected account balance.";
       setError(errorMessage);
       toast.warning(errorMessage);
       return;
@@ -582,15 +610,41 @@ const Overdraft = () => {
         <section>
           <SectionCard
             title={`${odAccount?.accountType || "Selected"} Account Payoff`}
-            subtitle="Pay interest first, then reduce the selected account's OD principal"
+            subtitle="Choose the account type whose overdraft is being repaid"
             icon={CreditCard}
           >
-            <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold leading-6 text-blue-800">
-              You are repaying overdraft for{" "}
-              <span className="font-black">
-                {odAccount?.accountType || "Account"} / {maskAccountNumber(odAccount?.accountNumber)}
-              </span>
-              . Go back to Overview to choose a different OD account.
+            <div className="mb-5 rounded-xl border border-blue-100 bg-blue-50 p-4">
+              <label className="label-field">
+                <span>Repay OD For<RequiredMark /></span>
+                <select
+                  value={odAccount?.accountNumber || ""}
+                  onChange={(event) => {
+                    setOdAccountNumber(event.target.value);
+                    setPayoffAmount("");
+                    setMessage("");
+                    setError("");
+                  }}
+                  className="input-field bg-white"
+                  disabled={isPaying || odRepayAccounts.length === 0}
+                >
+                  {odRepayAccounts.length === 0 ? (
+                    <option value="">No active overdraft to repay</option>
+                  ) : (
+                    odRepayAccounts.map((account) => (
+                      <option key={account.accountNumber} value={account.accountNumber}>
+                        {account.accountType} - {maskAccountNumber(account.accountNumber)} | OD used{" "}
+                        {formatCurrency(account.overdraftUsed || 0)}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+              <p className="mt-3 text-sm font-semibold leading-6 text-blue-800">
+                Selected OD account:{" "}
+                <span className="font-black">
+                  {odAccount?.accountType || "Account"} / {maskAccountNumber(odAccount?.accountNumber)}
+                </span>
+              </p>
             </div>
             <div className="metric-grid">
               <MetricTile label="OD Limit" value={formatCurrency(accountLimit)} />
@@ -726,9 +780,15 @@ const Overdraft = () => {
                   max={totalDueNow || 0}
                   value={payoffAmount}
                   onChange={(event) => {
-                    setPayoffAmount(event.target.value);
+                    const nextAmount = normalizePayoffAmountInput(event.target.value, totalDueNow);
+
+                    setPayoffAmount(nextAmount);
                     setMessage("");
-                    setError("");
+                    setError(
+                      nextAmount !== event.target.value
+                        ? "Payment amount cannot be more than the total payoff due."
+                        : ""
+                    );
                   }}
                   placeholder={totalDueNow > 0 ? String(totalDueNow) : "0"}
                   className="input-field"

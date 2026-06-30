@@ -48,7 +48,7 @@ const ForcePasswordChange = () => {
   };
 
   const sendOtp = async (event) => {
-    event.preventDefault();
+    event?.preventDefault();
 
     if (form.newPassword !== form.confirmPassword) {
       toast.warning("New password and confirm password must match.");
@@ -64,12 +64,18 @@ const ForcePasswordChange = () => {
       });
 
       toast.success(data.message || "OTP sent to your registered email.");
+      updateForm("otp", "");
       setStep("otp");
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to send OTP.");
     } finally {
       setLoading(false);
     }
+  };
+
+  const editPasswordDetails = () => {
+    setStep("details");
+    updateForm("otp", "");
   };
 
   const verifyOtp = async (event) => {
@@ -190,17 +196,27 @@ const ForcePasswordChange = () => {
               </label>
             </>
           ) : (
-            <label className="label-field">
-              <span>Email OTP<RequiredMark /></span>
-              <input
-                value={form.otp}
-                onChange={(event) => updateForm("otp", event.target.value)}
-                className="input-field"
-                maxLength={6}
-                placeholder="6 digit OTP"
-                required
-              />
-            </label>
+            <>
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+                  Password details locked
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-800">
+                  OTP was sent to your registered email.
+                </p>
+              </div>
+              <label className="label-field">
+                <span>Email OTP<RequiredMark /></span>
+                <input
+                  value={form.otp}
+                  onChange={(event) => updateForm("otp", event.target.value)}
+                  className="input-field"
+                  maxLength={6}
+                  placeholder="6 digit OTP"
+                  required
+                />
+              </label>
+            </>
           )}
 
           <div className="flex flex-wrap gap-3">
@@ -209,14 +225,24 @@ const ForcePasswordChange = () => {
               {loading ? "Please wait..." : step === "details" ? "Send OTP" : "Verify & Continue"}
             </button>
             {step === "otp" && (
-              <button
-                type="button"
-                onClick={() => setStep("details")}
-                className="btn-secondary"
-                disabled={loading}
-              >
-                Edit Details
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => sendOtp()}
+                  className="btn-secondary"
+                  disabled={loading}
+                >
+                  Request New OTP
+                </button>
+                <button
+                  type="button"
+                  onClick={editPasswordDetails}
+                  className="btn-secondary"
+                  disabled={loading}
+                >
+                  Edit Details
+                </button>
+              </>
             )}
           </div>
         </form>

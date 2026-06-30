@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardList,
+  Download,
   FileText,
   Gauge,
   Landmark,
@@ -282,6 +283,7 @@ const Loans = () => {
   const [touchedFields, setTouchedFields] = useState({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [downloadingDocumentKey, setDownloadingDocumentKey] = useState("");
   const [payingEmiNumber, setPayingEmiNumber] = useState(null);
   const [partPaymentAmount, setPartPaymentAmount] = useState("");
   const [partPaymentImpact, setPartPaymentImpact] = useState("reduce_emi");
@@ -793,6 +795,39 @@ const Loans = () => {
       current.filter((document) => document.documentType !== documentType)
     );
     setTouchedFields((current) => ({ ...current, documents: true }));
+  };
+
+  const downloadLoanDocument = async (document) => {
+    if (!document?.fileUrl) {
+      toast.warning("Document file is not available yet.");
+      return;
+    }
+
+    setDownloadingDocumentKey(document.key);
+
+    try {
+      const response = await fetch(getUploadUrl(document.fileUrl));
+
+      if (!response.ok) {
+        throw new Error("Unable to download document");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+
+      link.href = url;
+      link.download = document.fileName || `${document.title}.pdf`;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`${document.title} downloaded.`);
+    } catch {
+      toast.error("Unable to download document. Please try again.");
+    } finally {
+      setDownloadingDocumentKey("");
+    }
   };
 
   const submitLoan = async (event) => {
@@ -1795,15 +1830,26 @@ const Loans = () => {
                             .
                           </p>
                         </div>
-                        <a
-                          href={getUploadUrl(document.fileUrl)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="btn-secondary justify-center px-4 py-2 text-sm"
-                        >
-                          <FileText size={16} />
-                          View PDF
-                        </a>
+                        <div className="flex flex-wrap gap-2 lg:justify-end">
+                          <a
+                            href={getUploadUrl(document.fileUrl)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn-secondary justify-center px-4 py-2 text-sm"
+                          >
+                            <FileText size={16} />
+                            View PDF
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => downloadLoanDocument(document)}
+                            className="btn-primary justify-center px-4 py-2 text-sm"
+                            disabled={downloadingDocumentKey === document.key}
+                          >
+                            <Download size={16} />
+                            {downloadingDocumentKey === document.key ? "Downloading..." : "Download"}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
