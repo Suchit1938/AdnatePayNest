@@ -2,7 +2,6 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const csrfProtection = require('./middleware/csrfProtection');
 const rateLimit = require('express-rate-limit');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -37,7 +36,6 @@ app.use(cors({
 }));
 
 // Apply CSRF protection globally
-app.use(csrfProtection);
 // Global rate limiter (optional) – can be refined per route
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
