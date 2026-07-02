@@ -163,6 +163,28 @@ const partPaymentPolicySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const emiPenaltyPolicySchema = new mongoose.Schema(
+  {
+    gracePeriodDays: {
+      type: Number,
+      default: 5,
+      min: 0,
+    },
+    fixedPenaltyAmount: {
+      type: Number,
+      default: 500,
+      min: 0,
+    },
+    penaltyRatePercentage: {
+      type: Number,
+      default: 2,
+      min: 0,
+      max: 100,
+    },
+  },
+  { _id: false }
+);
+
 const depositRateRuleSchema = new mongoose.Schema(
   {
     productType: {
@@ -226,6 +248,10 @@ const businessRuleConfigSchema = new mongoose.Schema(
       },
       partPaymentPolicy: {
         type: partPaymentPolicySchema,
+        default: () => ({}),
+      },
+      emiPenaltyPolicy: {
+        type: emiPenaltyPolicySchema,
         default: () => ({}),
       },
     },

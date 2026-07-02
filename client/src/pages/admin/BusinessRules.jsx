@@ -91,6 +91,11 @@ const defaultLoanRules = {
     lockInMonths: 0,
     chargePercentage: 0,
   },
+  emiPenaltyPolicy: {
+    gracePeriodDays: 5,
+    fixedPenaltyAmount: 500,
+    penaltyRatePercentage: 2,
+  },
 };
 
 const scoreModelFactors = [
@@ -228,6 +233,14 @@ const BusinessRules = () => {
               ...defaultLoanRules.decisionBands,
               ...(config.loanRules?.decisionBands || {}),
             },
+            partPaymentPolicy: {
+              ...defaultLoanRules.partPaymentPolicy,
+              ...(config.loanRules?.partPaymentPolicy || {}),
+            },
+            emiPenaltyPolicy: {
+              ...defaultLoanRules.emiPenaltyPolicy,
+              ...(config.loanRules?.emiPenaltyPolicy || {}),
+            },
           });
           setDepositRules(normalizeDepositRules(config.depositRules));
           setAuditLogs(rulesResult.value.data.auditLogs || []);
@@ -303,6 +316,14 @@ const BusinessRules = () => {
           ...defaultLoanRules.decisionBands,
           ...(data.config.loanRules?.decisionBands || {}),
         },
+        partPaymentPolicy: {
+          ...defaultLoanRules.partPaymentPolicy,
+          ...(data.config.loanRules?.partPaymentPolicy || {}),
+        },
+        emiPenaltyPolicy: {
+          ...defaultLoanRules.emiPenaltyPolicy,
+          ...(data.config.loanRules?.emiPenaltyPolicy || {}),
+        },
       });
       setDepositRules(normalizeDepositRules(data.config.depositRules));
       setUpdatedAt(data.config.updatedAt || "");
@@ -356,6 +377,16 @@ const BusinessRules = () => {
       ...current,
       partPaymentPolicy: {
         ...current.partPaymentPolicy,
+        [field]: value,
+      },
+    }));
+  };
+
+  const updateEmiPenaltyPolicy = (field, value) => {
+    setLoanRules((current) => ({
+      ...current,
+      emiPenaltyPolicy: {
+        ...current.emiPenaltyPolicy,
         [field]: value,
       },
     }));
@@ -719,6 +750,56 @@ const BusinessRules = () => {
                     className="input-field bg-white"
                   />
                 </label>
+              </div>
+            </div>
+            <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-950">EMI Penalty Policy</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Applied when an EMI remains unpaid after the grace period.
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600 ring-1 ring-bank-card-border">
+                  Higher value applies
+                </span>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <label className="label-field">
+                  Grace Period Days
+                  <input
+                    type="number"
+                    min="0"
+                    value={loanRules.emiPenaltyPolicy?.gracePeriodDays ?? 5}
+                    onChange={(event) => updateEmiPenaltyPolicy("gracePeriodDays", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+                <label className="label-field">
+                  Fixed Penalty Amount (Rs.)
+                  <input
+                    type="number"
+                    min="0"
+                    value={loanRules.emiPenaltyPolicy?.fixedPenaltyAmount ?? 500}
+                    onChange={(event) => updateEmiPenaltyPolicy("fixedPenaltyAmount", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+                <label className="label-field">
+                  Penalty Percentage of EMI (%)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={loanRules.emiPenaltyPolicy?.penaltyRatePercentage ?? 2}
+                    onChange={(event) => updateEmiPenaltyPolicy("penaltyRatePercentage", event.target.value)}
+                    className="input-field bg-white"
+                  />
+                </label>
+              </div>
+              <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm font-semibold leading-6 text-amber-800">
+                Customer penalty text: after {loanRules.emiPenaltyPolicy?.gracePeriodDays ?? 5} days, higher of Rs. {Number(loanRules.emiPenaltyPolicy?.fixedPenaltyAmount ?? 500).toLocaleString("en-IN")} or {loanRules.emiPenaltyPolicy?.penaltyRatePercentage ?? 2}% of EMI.
               </div>
             </div>
             <div className="rounded-xl border border-bank-card-border bg-bank-surface p-4">

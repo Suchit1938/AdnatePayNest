@@ -11,7 +11,7 @@ const DEFAULT_ASSIGNED_REGION = process.env.BANK_REGION || 'Jaipur';
 const systemUsers = [
   {
     name: 'Suchit Gupta',
-    email: 'suchitguta66@gmail.com',
+    email: 'suchitgupta66@gmail.com',
     password: 'admin123',
     role: 'admin',
     employeeId: 'ADMIN001',
@@ -45,6 +45,7 @@ const legacyDemoCustomerEmails = [
   'karan@gmail.com',
   'ananya@gmail.com',
 ];
+const legacyAdminEmail = 'suchitguta66@gmail.com';
 
 const seedDatabase = async () => {
   await seedTiers();
@@ -63,6 +64,15 @@ const seedDatabase = async () => {
     await User.deleteMany({ _id: { $in: legacyCustomerIds } });
   }
 
+  const existingAdmin = await User.findOne({ email: systemUsers[0].email }).select('_id');
+
+  if (!existingAdmin) {
+    await User.updateOne(
+      { email: legacyAdminEmail },
+      { $set: { email: systemUsers[0].email } }
+    );
+  }
+
   await Promise.all(
     systemUsers.map(async (user) => {
       const password = await bcrypt.hash(user.password, 10);
@@ -71,8 +81,8 @@ const seedDatabase = async () => {
       await User.updateOne(
         { email: user.email },
         {
-          $set: profile,
-          $setOnInsert: {
+          $set: {
+            ...profile,
             password,
             status: 'active',
           },

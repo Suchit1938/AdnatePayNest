@@ -60,6 +60,12 @@ const DEFAULT_PART_PAYMENT_POLICY = {
   chargePercentage: 0,
 };
 
+const DEFAULT_EMI_PENALTY_POLICY = {
+  gracePeriodDays: 5,
+  fixedPenaltyAmount: 500,
+  penaltyRatePercentage: 2,
+};
+
 const normalizeLoanRules = (loanRules = {}) => ({
   loanTypes:
     Array.isArray(loanRules.loanTypes) && loanRules.loanTypes.length
@@ -77,6 +83,10 @@ const normalizeLoanRules = (loanRules = {}) => ({
     ...DEFAULT_PART_PAYMENT_POLICY,
     ...(loanRules.partPaymentPolicy?.toObject?.() || loanRules.partPaymentPolicy || {}),
   },
+  emiPenaltyPolicy: {
+    ...DEFAULT_EMI_PENALTY_POLICY,
+    ...(loanRules.emiPenaltyPolicy?.toObject?.() || loanRules.emiPenaltyPolicy || {}),
+  },
 });
 
 const getLoanTypeRule = (loanRules, loanType) => {
@@ -88,6 +98,7 @@ const getLoanTypeRule = (loanRules, loanType) => {
 };
 
 module.exports = {
+  DEFAULT_EMI_PENALTY_POLICY,
   DEFAULT_LOAN_DECISION_BANDS,
   DEFAULT_LOAN_SCORE_WEIGHTS,
   DEFAULT_LOAN_TYPE_RULES,

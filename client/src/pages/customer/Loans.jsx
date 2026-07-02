@@ -175,6 +175,7 @@ const initialForm = {
   employmentDurationMonths: "",
   disbursementAccountNumber: "",
   purpose: "",
+  applicationRulesAccepted: false,
 };
 
 const initialCalculator = {
@@ -273,7 +274,14 @@ const Loans = () => {
   const toast = useToast();
   const { user } = useAuth();
   const [loans, setLoans] = useState([]);
-  const [loanRules, setLoanRules] = useState({ loanTypes: [] });
+  const [loanRules, setLoanRules] = useState({
+    loanTypes: [],
+    emiPenaltyPolicy: {
+      gracePeriodDays: 5,
+      fixedPenaltyAmount: 500,
+      penaltyRatePercentage: 2,
+    },
+  });
   const [form, setForm] = useState(initialForm);
   const [calculator, setCalculator] = useState(initialCalculator);
   const [isCalculatorAppliedToForm, setIsCalculatorAppliedToForm] = useState(false);
@@ -312,7 +320,15 @@ const Loans = () => {
   const loadLoans = useCallback(() =>
     api.get("/loans").then(({ data }) => {
       setLoans(data.loans || []);
-      setLoanRules(data.loanRules || { loanTypes: [] });
+      setLoanRules({
+        loanTypes: [],
+        emiPenaltyPolicy: {
+          gracePeriodDays: 5,
+          fixedPenaltyAmount: 500,
+          penaltyRatePercentage: 2,
+        },
+        ...(data.loanRules || {}),
+      });
       const firstRule = data.loanRules?.loanTypes?.[0];
 
       if (firstRule) {
@@ -492,6 +508,13 @@ const Loans = () => {
     lockInMonths: 0,
     chargePercentage: 0,
   };
+  const emiPenaltyPolicy = {
+    gracePeriodDays: 5,
+    fixedPenaltyAmount: 500,
+    penaltyRatePercentage: 2,
+    ...(loanRules.emiPenaltyPolicy || {}),
+  };
+  const emiPenaltyText = `after a ${emiPenaltyPolicy.gracePeriodDays}-day grace period: higher of ${formatCurrency(emiPenaltyPolicy.fixedPenaltyAmount)} or ${emiPenaltyPolicy.penaltyRatePercentage}% of the EMI`;
   const selectedOutstandingPrincipal = Number(
     selectedLoan?.outstandingPrincipal ?? selectedLoan?.amount ?? 0
   );
@@ -647,6 +670,10 @@ const Loans = () => {
       !documents.some((document) => document.documentType === "Co-applicant Income Proof")
     ) {
       errors.documents = "Co-applicant income proof is required when employment type is Student.";
+    }
+
+    if (!form.applicationRulesAccepted) {
+      errors.applicationRulesAccepted = "Please accept the loan application rules before submitting.";
     }
 
     return errors;
@@ -1527,6 +1554,22 @@ const Loans = () => {
                   </div>
                 </div>
               </div>
+              <label className="flex gap-3 rounded-xl border border-bank-card-border bg-white p-4 text-sm font-semibold leading-6 text-slate-600 md:col-span-2 xl:col-span-3">
+                <input
+                  type="checkbox"
+                  checked={form.applicationRulesAccepted}
+                  onChange={(event) => updateForm("applicationRulesAccepted", event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-bank-primary focus:ring-bank-primary"
+                />
+                <span>
+                  I confirm that my loan details and uploaded documents are correct, and I accept the bank&apos;s verification, EMI debit, final approval rules, and late or missed EMI penalty {emiPenaltyText}.
+                  {visibleErrors.applicationRulesAccepted && (
+                    <span className="mt-2 block text-xs font-semibold text-red-600">
+                      {visibleErrors.applicationRulesAccepted}
+                    </span>
+                  )}
+                </span>
+              </label>
               <button type="submit" disabled={isSubmitting} className="btn-primary md:col-span-2 xl:col-span-3">
                 <Send size={17} />
                 {isSubmitting ? "Submitting..." : "Submit To Manager"}

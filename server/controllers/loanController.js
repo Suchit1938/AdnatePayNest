@@ -29,12 +29,9 @@ const toNumber = (value) => Number(value || 0);
 const normalizeIdempotencyKey = (value) => String(value || '').trim().slice(0, 128);
 const pdfMoney = (value) => `INR ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
 const money = (value) => `₹ ${Math.round(toNumber(value)).toLocaleString('en-IN')}`;
-const MISSED_EMI_FIXED_PENALTY = 500;
-const MISSED_EMI_PENALTY_RATE = 0.02;
 const FORECLOSURE_FEE_RATE = 0.02;
 const PART_PAYMENT_FORECLOSURE_THRESHOLD = 0.9;
 const ACTIVE_LOAN_STATUSES = ['approved', 'disbursed'];
-const EMI_GRACE_PERIOD_DAYS = 5;
 const SANCTION_LETTER_DIR = path.join(__dirname, '..', 'uploads', 'sanction-letters');
 const LOAN_AGREEMENT_DIR = path.join(__dirname, '..', 'uploads', 'loan-agreements');
 const REPAYMENT_SCHEDULE_DIR = path.join(__dirname, '..', 'uploads', 'repayment-schedules');
@@ -48,8 +45,23 @@ const cleanupUploadedFiles = (files = []) => {
   });
 };
 
-const calculateMissedEmiPenalty = (emiAmount) =>
-  Math.round(Math.max(MISSED_EMI_FIXED_PENALTY, toNumber(emiAmount) * MISSED_EMI_PENALTY_RATE));
+const getEmiPenaltyPolicyFromLoanRules = (loanRules = {}) => normalizeLoanRules(loanRules).emiPenaltyPolicy;
+
+const getLoanPenaltyPolicy = (loan) =>
+  getEmiPenaltyPolicyFromLoanRules({
+    emiPenaltyPolicy: loan?.applicationAcknowledgements?.emiPenaltyPolicySnapshot,
+  });
+
+const formatPenaltyPolicy = (policy) =>
+  `higher of ${money(policy.fixedPenaltyAmount)} or ${Number(policy.penaltyRatePercentage || 0)}% of EMI`;
+
+const calculateMissedEmiPenalty = (emiAmount, policy) =>
+  Math.round(
+    Math.max(
+      toNumber(policy.fixedPenaltyAmount),
+      toNumber(emiAmount) * (toNumber(policy.penaltyRatePercentage) / 100)
+    )
+  );
 
 const calculateForeclosureFee = (outstandingPrincipal) =>
   Math.round(Math.max(0, toNumber(outstandingPrincipal) * FORECLOSURE_FEE_RATE));
@@ -66,8 +78,8 @@ const addMonths = (date, months) => {
   return next;
 };
 
-const isEmiGracePeriodActive = (emiRow, now = new Date()) =>
-  emiRow?.dueDate && now <= addDays(emiRow.dueDate, EMI_GRACE_PERIOD_DAYS);
+const isEmiGracePeriodActive = (emiRow, policy, now = new Date()) =>
+  emiRow?.dueDate && now <= addDays(emiRow.dueDate, toNumber(policy.gracePeriodDays));
 
 const formatDate = (date) =>
   date
@@ -369,6 +381,7 @@ const generateSanctionLetterPdf = (loan, manager) =>
     const issuedAt = new Date();
     const validUntil = addDays(issuedAt, 30);
     const customer = loan.customer || {};
+    const emiPenaltyPolicy = getLoanPenaltyPolicy(loan);
 
     stream.on('finish', () => {
       resolve({
@@ -436,8 +449,8 @@ const generateSanctionLetterPdf = (loan, manager) =>
     const conditions = [
       `The sanctioned amount will be disbursed after manager approval, document generation, and successful operational checks.`,
       `The first EMI will follow the repayment schedule generated at disbursement. EMI auto-pay will attempt debit from the selected repayment account.`,
-      `A grace period of ${EMI_GRACE_PERIOD_DAYS} days is available after each EMI due date. No late penalty is applied within this period.`,
-      `If an EMI remains unpaid after the grace period, the account may be marked missed and a penalty of the higher of ${money(MISSED_EMI_FIXED_PENALTY)} or ${MISSED_EMI_PENALTY_RATE * 100}% of EMI may apply.`,
+      `A grace period of ${emiPenaltyPolicy.gracePeriodDays} days is available after each EMI due date. No late penalty is applied within this period.`,
+      `If an EMI remains unpaid after the grace period, the account may be marked missed and a penalty of the ${formatPenaltyPolicy(emiPenaltyPolicy)} may apply.`,
       `Part-payment and foreclosure are subject to the outstanding principal, accrued interest, unpaid penalties, and foreclosure charges shown in the application.`,
       `The lender may withhold or cancel disbursement if submitted documents are found invalid, mismatched, or materially incomplete.`,
     ];
@@ -608,6 +621,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
     const generatedAt = new Date();
     const customer = loan.customer || {};
     const clauseWidth = 510;
+    const emiPenaltyPolicy = getLoanPenaltyPolicy(loan);
 
     stream.on('finish', () => {
       resolve({
@@ -690,7 +704,7 @@ const generateLoanAgreementPdf = (loan, manager) =>
     const clauses = [
       [
         'Grace Period and Late Payment',
-        `A ${EMI_GRACE_PERIOD_DAYS}-day grace period applies after each EMI due date. If the EMI remains unpaid after the grace period, penalty may be charged at the higher of ${money(MISSED_EMI_FIXED_PENALTY)} or ${MISSED_EMI_PENALTY_RATE * 100}% of EMI.`,
+        `A ${emiPenaltyPolicy.gracePeriodDays}-day grace period applies after each EMI due date. If the EMI remains unpaid after the grace period, penalty may be charged at the ${formatPenaltyPolicy(emiPenaltyPolicy)}.`,
       ],
       [
         'Part-Payment and Foreclosure',
@@ -1359,6 +1373,8 @@ const serializeLoan = (loan, activeLoanCount = loan.eligibilityDetails?.activeLo
   additionalInfoRequested: loan.additionalInfoRequested,
   managerNote: loan.managerNote,
   rejectionReason: loan.rejectionReason,
+  assignedManagerId: loan.assignedManager?._id || loan.assignedManager || '',
+  reviewedById: loan.reviewedBy?._id || loan.reviewedBy || '',
   reviewedBy: loan.reviewedBy?.name,
   reviewedAt: loan.reviewedAt,
   disbursedAt: loan.disbursedAt,
@@ -1378,6 +1394,7 @@ const serializeLoan = (loan, activeLoanCount = loan.eligibilityDetails?.activeLo
     dataUrl: document.dataUrl,
     reviewStatus: document.reviewStatus,
     managerNote: document.managerNote,
+    reviewedById: document.reviewedBy?._id || document.reviewedBy || '',
     reviewedBy: document.reviewedBy?.name,
     reviewedAt: document.reviewedAt,
     uploadedAt: document.uploadedAt,
@@ -1392,6 +1409,7 @@ const getLoans = async (req, res) => {
   const loans = await Loan.find(filter)
     .populate('customer', 'name customerId classification accounts account')
     .populate('reviewedBy', 'name')
+    .populate('documents.reviewedBy', 'name')
     .sort({ createdAt: -1 });
   const config = await getBusinessRuleConfig();
   const loanRules = normalizeLoanRules(config.loanRules);
@@ -1474,6 +1492,7 @@ const createLoan = async (req, res) => {
 
   const config = await getBusinessRuleConfig();
   const loanRules = normalizeLoanRules(config.loanRules);
+  const emiPenaltyPolicy = getEmiPenaltyPolicyFromLoanRules(loanRules);
   const loanType = String(req.body.loanType || '').trim();
   const typeRule = getLoanTypeRule(loanRules, loanType);
 
@@ -1697,11 +1716,12 @@ const createLoan = async (req, res) => {
       applicationRulesAccepted: true,
       idempotencyKey,
       acceptedAt: new Date(),
+      emiPenaltyPolicySnapshot: emiPenaltyPolicy,
       acceptedRules: [
         'My application details and uploaded documents are correct to the best of my knowledge.',
         'The bank may verify my documents and contact me if more information is required.',
         'If approved and disbursed, EMIs will be debited from my selected account on schedule.',
-        'Late or missed EMI payments may lead to penalties and may affect future loan eligibility.',
+        `Late or missed EMI payments after the ${emiPenaltyPolicy.gracePeriodDays}-day grace period may be charged at the ${formatPenaltyPolicy(emiPenaltyPolicy)} and may affect future loan eligibility.`,
         'Final approval, sanction documents, agreement, and disbursement are subject to bank review.',
       ],
     },
@@ -1761,16 +1781,22 @@ const reviewLoan = async (req, res) => {
   if (String(loan.customer?._id || loan.customer) === String(req.user._id)) {
     return res.status(403).json({ message: 'A reviewer cannot review their own loan application' });
   }
-  if (
-    action === 'approve' &&
-    (loan.documents || []).some((document) =>
-      String(document.reviewedBy || '') === String(req.user._id) &&
-      ['verified', 'mismatch', 'rejected', 'additional_info_required'].includes(document.reviewStatus)
-    )
-  ) {
-    return res.status(403).json({
-      message: 'A different manager must approve a loan after document verification.',
-    });
+  if (action === 'approve') {
+    const loanDocuments = loan.documents || [];
+    const hasDocuments = loanDocuments.length > 0;
+    const allDocumentsVerified =
+      hasDocuments && loanDocuments.every((document) => document.reviewStatus === 'verified');
+    if (!hasDocuments) {
+      return res.status(400).json({
+        message: 'At least one verified loan document is required before approval.',
+      });
+    }
+
+    if (!allDocumentsVerified) {
+      return res.status(400).json({
+        message: 'All submitted loan documents must be verified before approval.',
+      });
+    }
   }
 
   const config = await getBusinessRuleConfig();
@@ -1931,6 +1957,8 @@ const attemptLoanEmiDeduction = async ({
   idempotencyKey = '',
   session,
 }) => {
+  const config = await getBusinessRuleConfig();
+  const emiPenaltyPolicy = getEmiPenaltyPolicyFromLoanRules(config.loanRules);
   const emiRow = emiNumber
     ? loan.amortizationSchedule.find((row) => row.emiNumber === emiNumber)
     : loan.amortizationSchedule.find((row) => row.status !== 'paid' && row.status !== 'foreclosed');
@@ -1972,7 +2000,7 @@ const attemptLoanEmiDeduction = async ({
       throw new Error('Insufficient balance to pay this EMI');
     }
 
-    if (isEmiGracePeriodActive(emiRow, now)) {
+    if (isEmiGracePeriodActive(emiRow, emiPenaltyPolicy, now)) {
       emiRow.status = 'overdue';
 
       const [transaction] = await Transaction.create(
@@ -2007,7 +2035,7 @@ const attemptLoanEmiDeduction = async ({
         status: 'failed',
         transactionId: transaction.transactionId,
         accountNumber: paymentAccount.accountNumber,
-        remarks: `Insufficient balance. EMI is overdue but within ${EMI_GRACE_PERIOD_DAYS}-day grace period.`,
+        remarks: `Insufficient balance. EMI is overdue but within ${emiPenaltyPolicy.gracePeriodDays}-day grace period.`,
       });
 
       await loan.save({ session });
@@ -2024,7 +2052,7 @@ const attemptLoanEmiDeduction = async ({
             loanId: loan.loanId,
             emiNumber: emiRow.emiNumber,
             amount: amountDue,
-            gracePeriodDays: EMI_GRACE_PERIOD_DAYS,
+            gracePeriodDays: emiPenaltyPolicy.gracePeriodDays,
             transactionId: transaction.transactionId,
             paymentAccountNumber: paymentAccount.accountNumber,
           },
@@ -2035,8 +2063,8 @@ const attemptLoanEmiDeduction = async ({
       await sendLoanEmail({
         customer,
         subject: `EMI payment overdue for loan ${loan.loanId}`,
-        text: `Your EMI ${emiRow.emiNumber} payment could not be auto-paid due to insufficient balance. Please pay within ${EMI_GRACE_PERIOD_DAYS} days of the due date to avoid penalty.`,
-        html: `<p>Your EMI <strong>${emiRow.emiNumber}</strong> payment for loan <strong>${loan.loanId}</strong> could not be auto-paid due to insufficient balance.</p><p>Please pay within <strong>${EMI_GRACE_PERIOD_DAYS} days</strong> of the due date to avoid penalty.</p>`,
+        text: `Your EMI ${emiRow.emiNumber} payment could not be auto-paid due to insufficient balance. Please pay within ${emiPenaltyPolicy.gracePeriodDays} days of the due date to avoid penalty.`,
+        html: `<p>Your EMI <strong>${emiRow.emiNumber}</strong> payment for loan <strong>${loan.loanId}</strong> could not be auto-paid due to insufficient balance.</p><p>Please pay within <strong>${emiPenaltyPolicy.gracePeriodDays} days</strong> of the due date to avoid penalty.</p>`,
       });
 
       return {
@@ -2048,7 +2076,7 @@ const attemptLoanEmiDeduction = async ({
       };
     }
 
-    const penaltyAmount = toNumber(emiRow.penaltyAmount) || calculateMissedEmiPenalty(emiRow.emiAmount);
+    const penaltyAmount = toNumber(emiRow.penaltyAmount) || calculateMissedEmiPenalty(emiRow.emiAmount, emiPenaltyPolicy);
 
     emiRow.status = 'missed';
     emiRow.missedAt = emiRow.missedAt || now;

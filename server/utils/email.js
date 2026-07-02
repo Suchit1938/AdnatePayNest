@@ -1,5 +1,4 @@
 const fs = require('fs');
-const dns = require('dns');
 const net = require('net');
 const nodemailer = require('nodemailer');
 const { logoCid, logoPath } = require('./branding');
@@ -36,35 +35,48 @@ const hasSmtpConfig = () =>
   );
 
 const hasEmailConfig = () => hasResendConfig() || hasSmtpConfig();
+const isLocalEmailFallbackEnabled = () => {
+  const configuredValue = envValue('EMAIL_LOCAL_FALLBACK').toLowerCase();
 
-const resolveEmailHost = async () => {
+  if (configuredValue) {
+    return configuredValue === 'true';
+  }
+
+  return false;
+};
+
+const logLocalEmail = ({ to, subject, text, html }, reason) => {
+  console.warn('Email delivery fell back to local logging:', reason);
+  console.log(
+    [
+      '--- Local email preview ---',
+      `To: ${Array.isArray(to) ? to.join(', ') : to}`,
+      `Subject: ${subject}`,
+      text || html || '',
+      '--- End local email preview ---',
+    ].join('\n')
+  );
+
+  return {
+    sent: true,
+    fallback: true,
+    messageId: `local-${Date.now()}`,
+    message: 'Email was logged locally because provider delivery is unavailable.',
+  };
+};
+
+const resolveEmailHost = () => {
   const host = emailHost();
 
   if (net.isIP(host)) {
     return { host };
   }
 
-  try {
-    const [ipv4Address] = await dns.promises.resolve4(host);
-
-    if (ipv4Address) {
-      return {
-        host: ipv4Address,
-        servername: host,
-      };
-    }
-  } catch (error) {
-    console.warn('Email host IPv4 lookup failed, falling back to configured host:', {
-      host,
-      message: error.message,
-    });
-  }
-
   return { host, servername: host };
 };
 
 const createTransporter = async (overrides = {}) => {
-  const resolvedHost = await resolveEmailHost();
+  const resolvedHost = resolveEmailHost();
 
   return nodemailer.createTransport({
     host: resolvedHost.host,
@@ -218,7 +230,13 @@ const addLogoAttachment = (attachments = []) => {
 
 const sendEmail = async ({ to, subject, text, html, attachments }) => {
   if (!hasEmailConfig()) {
-    console.warn('Email skipped: RESEND_API_KEY + EMAIL_FROM or SMTP settings are missing.');
+    const message = 'RESEND_API_KEY + EMAIL_FROM or SMTP settings are missing.';
+
+    if (isLocalEmailFallbackEnabled()) {
+      return logLocalEmail({ to, subject, text, html }, message);
+    }
+
+    console.warn(`Email skipped: ${message}`);
     return {
       sent: false,
       skipped: true,
@@ -260,16 +278,22 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
       messageId: info.messageId,
     };
   } catch (error) {
+    const failureMessage = error.response || error.message || 'Email provider rejected the message.';
+
+    if (isLocalEmailFallbackEnabled()) {
+      return logLocalEmail({ to, subject, text, html }, failureMessage);
+    }
+
     console.warn('Email send failed:', {
       code: error.code,
       command: error.command,
       responseCode: error.responseCode,
-      message: error.response || error.message || 'Email provider rejected the message.',
+      message: failureMessage,
     });
 
     return {
       sent: false,
-      message: error.response || error.message || 'Email provider rejected the message.',
+      message: failureMessage,
       code: error.code,
     };
   }

@@ -4,6 +4,7 @@ const Tier = require('../models/Tier');
 const User = require('../models/User');
 const { sendEmail } = require('../utils/email');
 const {
+  DEFAULT_EMI_PENALTY_POLICY,
   DEFAULT_LOAN_DECISION_BANDS,
   DEFAULT_LOAN_SCORE_WEIGHTS,
   DEFAULT_LOAN_TYPE_RULES,
@@ -120,6 +121,7 @@ const getBusinessRuleConfig = async () => {
           scoreWeights: DEFAULT_LOAN_SCORE_WEIGHTS,
           decisionBands: DEFAULT_LOAN_DECISION_BANDS,
           partPaymentPolicy: DEFAULT_PART_PAYMENT_POLICY,
+          emiPenaltyPolicy: DEFAULT_EMI_PENALTY_POLICY,
         },
         depositRules: {
           rateCards: DEFAULT_DEPOSIT_RATE_CARDS,
@@ -250,6 +252,18 @@ const updateBusinessRules = async (req, res) => {
       incomingPartPaymentPolicy.chargePercentage ?? currentLoanRules.partPaymentPolicy.chargePercentage
     ))),
   };
+  const incomingEmiPenaltyPolicy = incomingLoanRules.emiPenaltyPolicy || {};
+  const nextEmiPenaltyPolicy = {
+    gracePeriodDays: Math.max(0, Math.round(Number(
+      incomingEmiPenaltyPolicy.gracePeriodDays ?? currentLoanRules.emiPenaltyPolicy.gracePeriodDays
+    ))),
+    fixedPenaltyAmount: Math.max(0, Number(
+      incomingEmiPenaltyPolicy.fixedPenaltyAmount ?? currentLoanRules.emiPenaltyPolicy.fixedPenaltyAmount
+    )),
+    penaltyRatePercentage: Math.min(100, Math.max(0, Number(
+      incomingEmiPenaltyPolicy.penaltyRatePercentage ?? currentLoanRules.emiPenaltyPolicy.penaltyRatePercentage
+    ))),
+  };
   const nextDepositRateCards = normalizeDepositRateCards(req.body.depositRules?.rateCards);
 
   const config = await BusinessRuleConfig.findOneAndUpdate(
@@ -262,6 +276,7 @@ const updateBusinessRules = async (req, res) => {
           scoreWeights: nextScoreWeights,
           decisionBands: nextDecisionBands,
           partPaymentPolicy: nextPartPaymentPolicy,
+          emiPenaltyPolicy: nextEmiPenaltyPolicy,
         },
         depositRules: {
           rateCards: nextDepositRateCards,
@@ -288,6 +303,7 @@ const updateBusinessRules = async (req, res) => {
         scoreWeights: nextScoreWeights,
         decisionBands: nextDecisionBands,
         partPaymentPolicy: nextPartPaymentPolicy,
+        emiPenaltyPolicy: nextEmiPenaltyPolicy,
       },
       depositRules: {
         rateCards: nextDepositRateCards,
